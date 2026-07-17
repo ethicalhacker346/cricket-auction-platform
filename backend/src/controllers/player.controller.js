@@ -1,0 +1,33 @@
+// VERIFIED against services/player.service.js — no changes needed.
+// PlayerService.updateProfile() now whitelists updatable fields internally
+// instead of Object.assign-ing the raw payload; the controller still just
+// forwards req.body as before, which is correct since filtering belongs at
+// the service boundary, not here.
+import { PlayerService } from '../services/player.service.js';
+
+export const playerController = {
+  create: async (req, res) => {
+    const player = await PlayerService.createProfile(req.user._id, req.body);
+    return res.status(201).json({ success: true, data: player });
+  },
+
+  me: async (req, res) => {
+    const player = await PlayerService.getMyProfile(req.user._id);
+    return res.json({ success: true, data: player });
+  },
+
+  updateMe: async (req, res) => {
+    const player = await PlayerService.updateProfile(req.user._id, req.body);
+    return res.json({ success: true, data: player });
+  },
+
+  getById: async (req, res) => {
+    const player = await PlayerService.getById(req.params.id);
+    return res.json({ success: true, data: player });
+  },
+
+  list: async (req, res) => {
+    const result = await PlayerService.list(req.query);
+    return res.json({ success: true, ...result });
+  },
+};

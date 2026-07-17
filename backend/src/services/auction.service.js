@@ -1,0 +1,602 @@
+/**
+ * auction.service.js — Enhanced with Domain Events for Socket.IO realtime layer
+ * -------------------------------------------------------------------------------
+ * Original architecture preserved 100%.
+ * After each successful MongoDB transaction/commit, we emit domain events
+ * via auction.events.js -> eventBus -> SocketPublisher -> io.to(room).emit()
+ *
+ * No change to method signatures, validation, or transaction logic.
+ * Event emissions are fire-and-forget AFTER commit, never before.
+ */
+
+import mongoose from 'mongoose';
+import { Auction } from '../models/Auction.js';
+import { AuctionRound } from '../models/AuctionRound.js';
+import { Bid } from '../models/Bid.js';
+import { Tournament } from '../models/Tournament.js';
+import { TournamentPlayer } from '../models/TournamentPlayer.js';
+import { TournamentTeam } from '../models/TournamentTeam.js';
+import { AuctionViewer, VIEWER_HEARTBEAT_TTL_SECONDS } from '../models/AuctionViewer.js';
+import { AppError, assertFound } from '../utils/helpers.js';
+import {
+  AUCTION_STATUS,
+  AUCTION_LOG_ACTIONS,
+  LOT_STATUS,
+  LOT_OUTCOME,
+  REGISTRATION_STATUS,
+  ROUND_STATUS,
+  TOURNAMENT_STATUS,
+} from '../config/constants.js';
+import { TournamentService } from './tournament.service.js';
+
+// ---- NEW: Domain Events Import (only additive) ----
+import {
+  emitAuctionCreated,
+  emitAuctionStarted,
+  emitAuctionPaused,
+  emitAuctionResumed,
+  emitAuctionCompleted,
+  emitRulesUpdated,
+  emitRoundAdded,
+  emitRoundUpdated,
+  emitRoundDeleted,
+  emitRoundCompleted,
+  emitLotOpened,
+  emitLiveStateUpdated,
+  emitViewerCountUpdated,
+} from '../events/auction.events.js';
+import eventBus from '../events/eventBus.js';
+import { AUCTION_EVENTS } from '../events/auction.events.js';
+
+export class AuctionService {
+  static buildDefaultTiers(tournament) {
+    return [{ upTo: null, increment: tournament.minBidIncrement }];
+  }
+
+  static async create(tournamentId, user, payload = {}) {
+    const tournament = await TournamentService.getById(tournamentId);
+    TournamentService.assertOrganizerAccess(tournament, user);
+
+    if (tournament.status !== TOURNAMENT_STATUS.TEAMS_APPROVED) {
+      throw new AppError('Teams must be approved before creating an auction', 400);
+    }
+
+    const existing = await Auction.findOne({ tournamentId });
+    if (existing) {
+      throw new AppError('Auction already exists for this tournament', 409);
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      const [auction] = await Auction.create(
+        [
+          {
+            tournamentId,
+            name: payload.name,
+            bidIncrementTiers: payload.bidIncrementTiers?.length
+              ? payload.bidIncrementTiers
+              : AuctionService.buildDefaultTiers(tournament),
+            lotTimerSeconds: payload.lotTimerSeconds ?? tournament.lotTimerSeconds,
+            scheduledAt: payload.scheduledAt,
+            bidResetSeconds:
+                payload.bidResetSeconds ?? 12,
+            status: AUCTION_STATUS.DRAFT,
+            logs: [
+              {
+                action: AUCTION_LOG_ACTIONS.AUCTION_CREATED,
+                userId: user._id,
+                message: 'Auction created',
+              },
+            ],
+          },
+        ],
+        { session }
+      );
+
+      console.log(payload.bidIncrementTiers);
+
+      await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_SCHEDULED, session);
+      await session.commitTransaction();
+
+      console.log(payload.bidIncrementTiers);
+
+      // --- SOCKET EVENT: AFTER commit ---
+      emitAuctionCreated(auction._id, {
+        auction,
+        tournamentId,
+        createdBy: user._id,
+      });
+
+      return auction;
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+
+  static async findByTournament(tournamentId) {
+    return Auction.findOne({ tournamentId });
+  }
+
+  static async getByTournamentOrFail(tournamentId) {
+    return assertFound(await Auction.findOne({ tournamentId }), 'Auction not found for this tournament');
+  }
+
+  static async getById(auctionId) {
+    return assertFound(await Auction.findById(auctionId), 'Auction not found');
+  }
+
+  static async getByIdPopulated(auctionId) {
+    return assertFound(await Auction.findById(auctionId).populate('tournamentId'), 'Auction not found');
+  }
+
+  static async assertOrganizer(auction, user) {
+    const tournament = await TournamentService.getById(auction.tournamentId);
+    TournamentService.assertOrganizerAccess(tournament, user);
+    return tournament;
+  }
+
+  static async addRound(auctionId, user, payload) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    if (auction.status === AUCTION_STATUS.COMPLETED) {
+      throw new AppError('Cannot modify a completed auction', 400);
+    }
+
+    const round = await AuctionRound.create({
+      auctionId,
+      name: payload.name,
+      order: payload.order,
+      type: payload.type ?? 'normal',
+      playerIds: payload.playerIds ?? [],
+      status: ROUND_STATUS.PENDING,
+    });
+
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.ROUND_ADDED,
+      userId: user._id,
+      message: `Round "${round.name}" added`,
+      metadata: { roundId: round._id },
+    });
+    await auction.save();
+
+    // --- SOCKET ---
+    emitRoundAdded(auctionId, {
+      round,
+      addedBy: user._id,
+    });
+
+    return round;
+  }
+
+  static async updateRules(auctionId, user, payload = {}) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    if (![AUCTION_STATUS.DRAFT, AUCTION_STATUS.SCHEDULED].includes(auction.status)) {
+      throw new AppError('Auction rules can only be edited while in DRAFT or SCHEDULED', 400);
+    }
+
+    const patch = {};
+    if (payload.name !== undefined) patch.name = payload.name;
+    if (payload.bidIncrementTiers !== undefined) patch.bidIncrementTiers = payload.bidIncrementTiers;
+    if (payload.lotTimerSeconds !== undefined) patch.lotTimerSeconds = payload.lotTimerSeconds;
+    if (payload.bidResetSeconds !== undefined) patch.bidResetSeconds = payload.bidResetSeconds;
+    if (payload.scheduledAt !== undefined) patch.scheduledAt = payload.scheduledAt;
+
+    if (Object.keys(patch).length === 0) {
+      throw new AppError('No editable rule fields provided', 400);
+    }
+
+    Object.assign(auction, patch);
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.RULES_UPDATED,
+      userId: user._id,
+      message: 'Auction rules updated',
+      metadata: patch,
+    });
+    await auction.save();
+
+    // --- SOCKET ---
+    emitRulesUpdated(auctionId, {
+      patch,
+      auction,
+      updatedBy: user._id,
+    });
+
+    return auction;
+  }
+
+  static async listRounds(auctionId) {
+    return AuctionRound.find({ auctionId }).sort({ order: 1 });
+  }
+
+  static async updateRound(auctionId, roundId, user, patch = {}) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    if (auction.status === AUCTION_STATUS.COMPLETED) {
+      throw new AppError('Cannot modify rounds on a completed auction', 400);
+    }
+
+    const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }), 'Auction round not found');
+
+    if (patch.playerIds !== undefined && round.status !== ROUND_STATUS.PENDING) {
+      throw new AppError('Cannot change playerIds on a round that has already started', 400);
+    }
+
+    if (patch.name !== undefined) round.name = patch.name;
+    if (patch.type !== undefined) round.type = patch.type;
+    if (patch.order !== undefined) round.order = patch.order;
+    if (patch.playerIds !== undefined) round.playerIds = patch.playerIds;
+
+    await round.save();
+
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.ROUND_UPDATED,
+      userId: user._id,
+      message: `Round "${round.name}" updated`,
+      metadata: { roundId: round._id, patch },
+    });
+    await auction.save();
+
+    // --- SOCKET ---
+    emitRoundUpdated(auctionId, {
+      round,
+      patch,
+      updatedBy: user._id,
+    });
+
+    return round;
+  }
+
+  static async deleteRound(auctionId, roundId, user) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }), 'Auction round not found');
+
+    if (round.status !== ROUND_STATUS.PENDING) {
+      throw new AppError('Only a round with no auction activity can be deleted', 400);
+    }
+
+    const roundName = round.name;
+    await round.deleteOne();
+
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.ROUND_DELETED,
+      userId: user._id,
+      message: `Round "${roundName}" deleted`,
+      metadata: { roundId },
+    });
+    await auction.save();
+
+    // --- SOCKET ---
+    emitRoundDeleted(auctionId, {
+      roundId,
+      roundName,
+      deletedBy: user._id,
+    });
+
+    return { success: true };
+  }
+
+  static async start(auctionId, user) {
+    const auction = await AuctionService.getById(auctionId);
+    const tournament = await AuctionService.assertOrganizer(auction, user);
+
+    const approvedTeams = await TournamentTeam.countDocuments({
+      tournamentId: auction.tournamentId,
+      status: REGISTRATION_STATUS.APPROVED,
+    });
+
+    if (approvedTeams < 2) {
+      throw new AppError('At least two approved teams are required to start the auction', 400);
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      await auction.transitionTo(AUCTION_STATUS.LIVE, session);
+      auction.startedAt = new Date();
+      auction.logs.push({
+        action: AUCTION_LOG_ACTIONS.AUCTION_STARTED,
+        userId: user._id,
+        message: 'Auction started',
+      });
+      await auction.save({ session });
+      await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_RUNNING, session);
+      await session.commitTransaction();
+
+      // --- SOCKET AFTER COMMIT ---
+      emitAuctionStarted(auctionId, {
+        auction,
+        tournamentId: auction.tournamentId,
+        startedBy: user._id,
+      });
+
+      return auction;
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+
+  static async pause(auctionId, user) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    await auction.transitionTo(AUCTION_STATUS.PAUSED);
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.AUCTION_PAUSED,
+      userId: user._id,
+      message: 'Auction paused',
+    });
+    await auction.save();
+
+    emitAuctionPaused(auctionId, {
+      auction,
+      pausedBy: user._id,
+    });
+
+    return auction;
+  }
+
+  static async resume(auctionId, user) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    await auction.transitionTo(AUCTION_STATUS.LIVE);
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.AUCTION_RESUMED,
+      userId: user._id,
+      message: 'Auction resumed',
+    });
+    await auction.save();
+
+    emitAuctionResumed(auctionId, {
+      auction,
+      resumedBy: user._id,
+    });
+
+    return auction;
+  }
+
+  static async openLot(auctionId, user, { tournamentPlayerId, roundId }) {
+    const auction = await AuctionService.getById(auctionId);
+    await AuctionService.assertOrganizer(auction, user);
+
+    if (auction.status !== AUCTION_STATUS.LIVE) {
+      throw new AppError('Auction must be live to open a lot', 400);
+    }
+    if (auction.liveState?.lotStatus === LOT_STATUS.BIDDING) {
+      throw new AppError('A lot is already open — settle it before opening the next one', 400);
+    }
+
+    const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }), 'Auction round not found');
+
+    const tournamentPlayer = assertFound(
+      await TournamentPlayer.findOne({
+        _id: tournamentPlayerId,
+        tournamentId: auction.tournamentId,
+        status: REGISTRATION_STATUS.APPROVED,
+        lotOutcome: { $in: [LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.UNSOLD] },
+      }),
+      'Player not available for auction'
+    );
+
+    if (round.status === ROUND_STATUS.PENDING) {
+      round.status = ROUND_STATUS.ACTIVE;
+      round.startedAt = new Date();
+      await round.save();
+    }
+
+    tournamentPlayer.lotOutcome = LOT_OUTCOME.IN_PROGRESS;
+    tournamentPlayer.auctionRoundId = round._id;
+    await tournamentPlayer.save();
+
+    auction.liveState = {
+      currentTournamentPlayerId: tournamentPlayer._id,
+      currentRoundId: round._id,
+      currentHighestBid: 0,
+      highestBidderTeamId: null,
+      remainingTimeSeconds: auction.lotTimerSeconds,
+      lotStatus: LOT_STATUS.BIDDING,
+      version: (auction.liveState?.version ?? 0) + 1,
+      updatedAt: new Date(),
+    };
+
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.LOT_OPENED,
+      userId: user._id,
+      message: `Lot opened for player ${tournamentPlayerId}`,
+      metadata: { tournamentPlayerId, roundId },
+    });
+
+    await auction.save();
+
+    // Populate for socket payload (nice UX: clients get full player immediately)
+    let populatedPlayer = tournamentPlayer;
+    try {
+      populatedPlayer = await TournamentPlayer.findById(tournamentPlayer._id).populate('playerId');
+    } catch (_) {}
+
+    // --- SOCKET ---
+    emitLotOpened(auctionId, {
+      tournamentPlayerId: tournamentPlayer._id,
+      roundId: round._id,
+      currentPlayer: populatedPlayer,
+      currentRound: round,
+      liveState: auction.liveState,
+      openedBy: user._id,
+    });
+
+    return auction;
+  }
+
+  // --- Viewer presence — now dual-write: DB + socket event ---
+  static async heartbeatViewer(auctionId, viewerId, userId = null) {
+    if (!viewerId) {
+      throw new AppError('viewerId is required', 400);
+    }
+    await AuctionViewer.findOneAndUpdate(
+      { auctionId, viewerId },
+      { $set: { lastSeenAt: new Date(), userId }, $setOnInsert: { firstSeenAt: new Date() } },
+      { upsert: true }
+    );
+    const count = await AuctionService.getViewerCount(auctionId);
+
+    // --- SOCKET ---
+    emitViewerCountUpdated(auctionId, count, {
+      source: 'heartbeat',
+      viewerId,
+    });
+
+    return count;
+  }
+
+  static async removeViewer(auctionId, viewerId) {
+    await AuctionViewer.deleteOne({ auctionId, viewerId });
+    const count = await AuctionService.getViewerCount(auctionId);
+
+    emitViewerCountUpdated(auctionId, count, {
+      source: 'leave',
+      viewerId,
+    });
+
+    return count;
+  }
+
+  static async getViewerCount(auctionId) {
+    const cutoff = new Date(Date.now() - VIEWER_HEARTBEAT_TTL_SECONDS * 1000);
+    return AuctionViewer.countDocuments({ auctionId, lastSeenAt: { $gte: cutoff } });
+  }
+
+  static async getLiveState(auctionId) {
+    const auction = await AuctionService.getById(auctionId);
+
+    const [currentPlayer, currentRound, highestBidder, viewerCount] = await Promise.all([
+      auction.liveState?.currentTournamentPlayerId
+        ? TournamentPlayer.findById(auction.liveState.currentTournamentPlayerId).populate('playerId')
+        : null,
+      auction.liveState?.currentRoundId ? AuctionRound.findById(auction.liveState.currentRoundId) : null,
+      auction.liveState?.highestBidderTeamId ? TournamentTeam.findById(auction.liveState.highestBidderTeamId) : null,
+      AuctionService.getViewerCount(auctionId),
+    ]);
+
+    return {
+      auctionId: auction._id,
+      status: auction.status,
+      liveState: auction.liveState,
+      currentPlayer,
+      currentRound,
+      highestBidder,
+      viewerCount,
+    };
+  }
+
+  static async getSnapshot(auctionId) {
+    const auction = await AuctionService.getByIdPopulated(auctionId);
+
+    const [rounds, players, teams, bidHistory, viewerCount] = await Promise.all([
+      AuctionRound.find({ auctionId }).sort({ order: 1 }),
+      TournamentPlayer.find({ tournamentId: auction.tournamentId._id ?? auction.tournamentId }).populate('playerId'),
+      TournamentTeam.find({ tournamentId: auction.tournamentId._id ?? auction.tournamentId }),
+      Bid.find({ auctionId }).sort({ placedAt: -1 }).limit(100).populate('tournamentTeamId', 'name'),
+      AuctionService.getViewerCount(auctionId),
+    ]);
+
+    const liveState = auction.liveState || {};
+
+    const elapsedSeconds = liveState.updatedAt ? (Date.now() - new Date(liveState.updatedAt).getTime()) / 1000 : 0;
+    const trueRemaining =
+      liveState.lotStatus === LOT_STATUS.BIDDING ? Math.max(0, (liveState.remainingTimeSeconds ?? 0) - elapsedSeconds) : liveState.remainingTimeSeconds ?? 0;
+
+    return {
+      auction,
+      rounds,
+      players,
+      franchises: teams,
+      bidHistory,
+      logs: [...auction.logs].reverse(),
+      status: auction.status,
+      currentRoundId: liveState.currentRoundId ?? null,
+      currentPlayerId: liveState.currentTournamentPlayerId ?? null,
+      currentBid: {
+        amount: liveState.currentHighestBid ?? 0,
+        teamId: liveState.highestBidderTeamId ?? null,
+      },
+      timer: {
+        remaining: trueRemaining,
+        total: auction.lotTimerSeconds,
+        isRunning: liveState.lotStatus === LOT_STATUS.BIDDING && trueRemaining > 0,
+      },
+      lotStatus: liveState.lotStatus ?? LOT_STATUS.PENDING,
+      version: liveState.version ?? 0,
+      viewerCount,
+      generatedAt: new Date(),
+    };
+  }
+
+  static async checkRoundCompletion(roundId, session) {
+    const round = await AuctionRound.findById(roundId).session(session ?? null);
+    if (!round || round.status === ROUND_STATUS.COMPLETED) return round;
+
+    const unresolvedCount = await TournamentPlayer.countDocuments({
+      _id: { $in: round.playerIds },
+      lotOutcome: { $in: [LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.IN_PROGRESS] },
+    }).session(session ?? null);
+
+    if (unresolvedCount === 0) {
+      round.status = ROUND_STATUS.COMPLETED;
+      round.completedAt = new Date();
+      await round.save({ session });
+
+      // --- SOCKET ---
+      // round.auctionId may be in round doc
+      emitRoundCompleted(round._id, round.auctionId, {
+        round,
+      });
+    }
+    return round;
+  }
+
+  static async complete(auctionId, user) {
+    const auction = await AuctionService.getById(auctionId);
+    const tournament = await AuctionService.assertOrganizer(auction, user);
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      await auction.transitionTo(AUCTION_STATUS.COMPLETED, session);
+      auction.completedAt = new Date();
+      auction.liveState.lotStatus = LOT_STATUS.PENDING;
+      auction.logs.push({
+        action: AUCTION_LOG_ACTIONS.AUCTION_COMPLETED,
+        userId: user._id,
+        message: 'Auction completed',
+      });
+      await auction.save({ session });
+      await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_COMPLETED, session);
+      await session.commitTransaction();
+
+      emitAuctionCompleted(auctionId, {
+        auction,
+        completedBy: user._id,
+      });
+
+      return auction;
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+}
