@@ -29,7 +29,21 @@ function configureMongoose() {
 
   mongoose.set('strictQuery', true);
   mongoose.set('runValidators', true);
-  mongoose.set('sanitizeFilter', true);
+  // NOTE: sanitizeFilter is intentionally NOT enabled globally.
+  // It wraps *any* nested object with a "$" key — including hardcoded,
+  // developer-written operators like `{ lotOutcome: { $in: [...] } }` or
+  // `{ lastSeenAt: { $gte: cutoff } }` — in `$eq`, because it can't tell
+  // those apart from an attacker-controlled `{ $ne: null }` coming out of
+  // req.body/req.query. That broke openLot, checkRoundCompletion, and
+  // getViewerCount in auction.service.js with CastErrors.
+  // Mongo/Mongoose injection protection belongs at the boundary instead:
+  // whitelist which req.query/req.body fields are allowed into a filter,
+  // and validate their values against the enums in config/constants.js
+  // before building the query. If a global net is still wanted, use
+  // express-mongo-sanitize as request middleware (strips "$"/"." keys from
+  // incoming req.body/req.query/req.params) rather than this mongoose-level
+  // setting, since that only touches untrusted input and leaves
+  // application-authored queries alone.
 
   isInitialized = true;
 }

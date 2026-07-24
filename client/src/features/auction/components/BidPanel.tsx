@@ -1,32 +1,33 @@
 import { useMemo } from "react";
 import { AlertCircle, Gavel, Loader2, Zap } from "lucide-react";
-import { useBid, useLiveAuction } from "@/features/auction/hooks/index.hook";
+import { useBid, useLiveAuction, useAuth } from "@/features/auction/hooks/index.hook";
 import { useRoleStore } from "@/features/auction/store/index.store";
 import { formatLakhs, getNextIncrement } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
 
 export function BidPanel({ teamId }: { teamId?: string }) {
   const userTeamId = useRoleStore((s) => s.userTeamId);
-  const activeTeamId = teamId ?? userTeamId;
+  const { user } = useAuth();
+  const activeTeamId = teamId ?? userTeamId ?? user?.teamId;
 
-  const { currentPlayer, currentBid, franchises, auction, status } = useLiveAuction();
-  const { placeBid, isPlacing, lastError, nextBidAmount } = useBid(activeTeamId);
+  const { currentPlayer, currentBid, franchises, auction, status, nextBidAmount: storeNextBid } = useLiveAuction();
+  const { placeBid, isPlacing, lastError } = useBid(activeTeamId!);
 
   const franchise = franchises.find((f) => f.id === activeTeamId);
   const isLeading = currentBid.teamId === activeTeamId;
-  const canBid = status === "live" && !!currentPlayer && !isLeading && !!franchise;
-  // Subtract reservedBudget too: if this franchise is already leading the
-  // current lot, that amount is locked against it (see TournamentTeam
-  // wallet invariant) and isn't available to raise its own bid with.
-  const remainingPurse = franchise ? franchise.purseTotal - franchise.spent - franchise.reservedBudget : 0;
+  const canBid = status === "live" && !!currentPlayer && !isLeading && !!franchise && !!activeTeamId;
+
+  const remainingPurse = franchise 
+    ? franchise.purseTotal - franchise.spent - (franchise.reservedBudget || 0) 
+    : 0;
 
   const increments = auction?.rules?.bidIncrements ?? [];
   const increment = getNextIncrement(currentBid.amount, increments);
 
   const quickJumps = useMemo(() => {
-    if (!currentPlayer || !increments.length) return [];
+    if (!currentPlayer || !increments.length || !activeTeamId) return [];
     return [1, 2, 5].map((mult) => currentBid.amount + increment * mult);
-  }, [currentBid.amount, increment, currentPlayer, increments.length]);
+  }, [currentBid.amount, increment, currentPlayer, increments.length, activeTeamId]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -44,7 +45,7 @@ export function BidPanel({ teamId }: { teamId?: string }) {
 
       <button
         onClick={() => placeBid()}
-        disabled={!canBid || isPlacing}
+        disabled={!canBid || isPlacing || !activeTeamId}
         className={cn(
           "flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-base font-bold transition disabled:cursor-not-allowed disabled:opacity-30",
           isLeading
@@ -57,7 +58,7 @@ export function BidPanel({ teamId }: { teamId?: string }) {
         ) : isLeading ? (
           "You're the highest bidder"
         ) : (
-          <>Bid {formatLakhs(nextBidAmount)}</>
+          <>Bid {formatLakhs(storeNextBid)}</>
         )}
       </button>
 
@@ -86,6 +87,9 @@ export function BidPanel({ teamId }: { teamId?: string }) {
       )}
       {!franchise && (
         <p className="mt-2.5 text-xs text-rose-400">No franchise assigned to this account.</p>
+      )}
+      {!activeTeamId && (
+        <p className="mt-2.5 text-xs text-rose-400">Team ID required for bidding.</p>
       )}
     </div>
   );

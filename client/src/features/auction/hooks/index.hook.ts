@@ -5,9 +5,21 @@ import { API_BASE_URL } from "@/features/auction/constants/index.constants";
 import { getAuctionEngine, useBidUiStore, useLiveAuctionStore, useRoleStore } from "@/features/auction/store/index.store";
 import { useAuthStore } from "@/store/authStore";
 import type { User } from "@/types/auth";
-import type { Auction, AuctionRound, Franchise } from "@/features/auction/types/index.types";
-import { computePermissions, formatSeconds, getNextBidAmount } from "@/features/auction/utils/index.utils";
-import { USER_ROLES } from "@/lib/constants/roles";
+import type { Auction, AuctionPermissions, AuctionRound, Franchise } from "@/features/auction/types/index.types";
+import {
+  formatSeconds,
+  getApiErrorMessage,
+  getNextBidAmount,
+  normalizeAuctionPermissions,
+  withLiveStateConstraints,
+} from "@/features/auction/utils/index.utils";
+import { useAuctionContextSafe } from "./useAuctionContextSafe";
+import { ResolveAuctionIdsOptions, useResolvedAuctionIds } from "./useResolvedAuctionIds";
+
+// Server-shaped "nothing allowed yet" default — reuses normalizeAuctionPermissions
+// so this can never drift from the real AuctionPermissions shape (new permission
+// keys added there show up here as `false` automatically, no manual sync needed).
+const emptyPermissions: AuctionPermissions = normalizeAuctionPermissions({});
 
 // ============================================================================
 // useAuth — convenience re-export with auction-relevant selectors
@@ -28,30 +40,77 @@ export function useAuth() {
 // REST polling (GET /auctions/:id/snapshot) every 10s if the socket fails.
 // The local countdown timer is still interpolated between server updates.
 // ============================================================================
-export function useAuctionSocket(auctionId?: string, tournamentId?: string) {
-  const bootstrap = useLiveAuctionStore((s) => s.bootstrap);
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
-  const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
-  const connection = useLiveAuctionStore((s) => s.connection);
-  const latency = useLiveAuctionStore((s) => s.serverLatencyMs);
+export function useAuctionSocket(
 
-  const effectiveAuctionId = auctionId || storeAuctionId;
-  const effectiveTournamentId = tournamentId || storeTournamentId;
+options?: ResolveAuctionIdsOptions,
 
-  useEffect(() => {
-    if (effectiveAuctionId && effectiveTournamentId) {
-      bootstrap(effectiveAuctionId, effectiveTournamentId);
-    }
-  }, [bootstrap, effectiveAuctionId, effectiveTournamentId]);
+) {
 
-  return { connection, latencyMs: latency, isConnected: connection === "connected" };
+    const {
+
+        auctionId,
+
+        tournamentId,
+
+    } = useResolvedAuctionIds(options);
+
+    const bootstrap =
+        useLiveAuctionStore(
+            s => s.bootstrap
+        );
+
+    const connection =
+        useLiveAuctionStore(
+            s => s.connection
+        );
+
+    const latency =
+        useLiveAuctionStore(
+            s => s.serverLatencyMs
+        );
+
+    useEffect(() => {
+
+        if (!auctionId || !tournamentId)
+            return;
+
+        bootstrap(
+            auctionId,
+            tournamentId,
+        );
+
+    }, [
+
+        bootstrap,
+
+        auctionId,
+
+        tournamentId,
+
+    ]);
+
+    return {
+
+        connection,
+
+        latencyMs: latency,
+
+        isConnected:
+            connection === "connected",
+
+    };
+
 }
 
 // ============================================================================
 // useLiveAuction
 // ============================================================================
-export function useLiveAuction(auctionId?: string, tournamentId?: string) {
-  useAuctionSocket(auctionId, tournamentId);
+export function useLiveAuction(
+
+options?: ResolveAuctionIdsOptions,
+
+){
+  useAuctionSocket(options);
   const snapshot = useLiveAuctionStore();
 
   const currentPlayer = useMemo(
@@ -80,6 +139,12 @@ export function useLiveAuction(auctionId?: string, tournamentId?: string) {
       .slice(0, 8);
   }, [snapshot.rounds, snapshot.players, snapshot.currentPlayerId]);
 
+  // Correction: the API layer normalizes the backend's raw
+  // auctionConfiguration.bidIncrementTiers into Auction.rules.bidIncrements
+  // before it reaches the store — that's the real, type-checked contract
+  // used everywhere else in this feature (index.utils.ts, AuctionModule,
+  // AuctionDashboardPage). `auctionConfiguration` isn't a field on the
+  // Auction type at all.
   const nextBidAmount = getNextBidAmount(
     snapshot.currentBid.amount,
     snapshot.auction?.rules?.bidIncrements || []
@@ -99,8 +164,13 @@ export function useLiveAuction(auctionId?: string, tournamentId?: string) {
 // ============================================================================
 // useAuctionTimer
 // ============================================================================
-export function useAuctionTimer(auctionId?: string, tournamentId?: string) {
-  useAuctionSocket(auctionId, tournamentId);
+export function useAuctionTimer(
+
+options?: ResolveAuctionIdsOptions,
+
+){
+
+  useAuctionSocket(options);
   const timer = useLiveAuctionStore((s) => s.timer);
   const progress = timer.total > 0 ? timer.remaining / timer.total : 0;
   return {
@@ -113,49 +183,72 @@ export function useAuctionTimer(auctionId?: string, tournamentId?: string) {
 }
 
 // ============================================================================
-// useAuctionPermissions — real auth + role override
+// useAuctionPermissions — server-authoritative, per the new auth model.
+//
+// The backend (AuctionAuthorizationService, via GET /auctions/:id/permissions)
+// is the sole source of truth for what a user may do — role/ownership/auction-
+// status checks all happen server-side. This hook does exactly two things:
+//   1. Fetch that decision from the server (never re-derive it from
+//      user.role client-side — see the @deprecated note on computePermissions
+//      in index.utils.ts).
+//   2. Layer on withLiveStateConstraints(), which is UI-only polish (e.g.
+//      hiding "Open Lot" while a lot is already active) and never widens
+//      what the server allowed.
 // ============================================================================
-export function useAuctionPermissions() {
-    const {
-        user,
-        isAuthenticated,
-        hasHydrated,
-    } = useAuth();
+export function useAuctionPermissions(auctionId?: string) {
+  const { isAuthenticated, hasHydrated } = useAuth();
+  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
+  const status = useLiveAuctionStore((s) => s.status);
+  const currentPlayerId = useLiveAuctionStore((s) => s.currentPlayerId);
 
-    const status = useLiveAuctionStore(s => s.status);
-    const currentPlayerId = useLiveAuctionStore(
-        s => s.currentPlayerId
-    );
+  const effectiveAuctionId = auctionId || storeAuctionId;
 
-    if (!hasHydrated) {
-        return {
-            loading: true
-        };
+  const [serverPermissions, setServerPermissions] = useState<AuctionPermissions | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    if (!effectiveAuctionId || !isAuthenticated) {
+      setServerPermissions(null);
+      setLoading(false);
+      return;
     }
+    setLoading(true);
+    auctionApi
+      .getPermissions(effectiveAuctionId)
+      .then((perms) => {
+        setServerPermissions(perms);
+        setError(null);
+      })
+      .catch((e) => setError(getApiErrorMessage(e)))
+      .finally(() => setLoading(false));
+  }, [effectiveAuctionId, isAuthenticated]);
 
-    if (!isAuthenticated || !user) {
-        return {
-            loading: false,
-            authenticated: false,
-            ...emptyPermissions
-        };
-    }
+  useEffect(() => {
+    if (!hasHydrated) return;
+    refresh();
+    // Re-check on auction status transitions (draft -> live -> paused -> ...):
+    // policy decisions like canStart/canPause/canComplete depend on
+    // auctionStatus server-side and aren't pushed over the socket, so a
+    // stale permission set would otherwise linger until something else
+    // happened to re-render this hook.
+  }, [refresh, hasHydrated, status]);
 
-    const role = user.role;
+  if (!hasHydrated || loading) {
+    return { loading: true, authenticated: isAuthenticated, error: null, refresh, ...emptyPermissions };
+  }
 
-    const isOrganizer =
-        role === USER_ROLES.ORGANIZER ||
-        role === USER_ROLES.ADMIN;
+  if (!isAuthenticated || !serverPermissions) {
+    return { loading: false, authenticated: false, error, refresh, ...emptyPermissions };
+  }
 
-    return {
-        loading: false,
-        authenticated: true,
-        ...computePermissions(
-            status,
-            !!currentPlayerId,
-            isOrganizer
-        )
-    };
+  return {
+    loading: false,
+    authenticated: true,
+    error,
+    refresh,
+    ...withLiveStateConstraints(serverPermissions, !!currentPlayerId),
+  };
 }
 
 // ============================================================================
@@ -447,6 +540,53 @@ export function useFranchises(tournamentId?: string) {
   }, [tournamentId]);
 
   return { franchises, loading };
+}
+
+// ============================================================================
+// useResolvedUserTeam — canonical team resolution for the authenticated user
+//
+// Priority (highest → lowest):
+//   1. permissions.tournamentTeamId  (server-authoritative for THIS auction)
+//   2. user?.teamId                  (auth profile global team)
+//   3. useRoleStore.userTeamId       (dev override / fallback)
+//
+// Also syncs the resolved ID back to useRoleStore so child components
+// (FranchisePanel, etc.) inherit the correct mapping without re-fetching.
+// ============================================================================
+export function useResolvedUserTeam(franchises: Franchise[]) {
+  const { user } = useAuth();
+  const permissions = useAuctionPermissions();
+  const userTeamId = useRoleStore((s) => s.userTeamId);
+  const setUserTeamId = useRoleStore((s) => s.setUserTeamId);
+
+  const resolvedId = useMemo(() => {
+    // 1. Server-authoritative team ID for this auction (most reliable)
+    if (permissions.tournamentTeamId) return permissions.tournamentTeamId;
+    // 2. Auth profile team ID
+    if (user?.teamId) return user.teamId;
+    // 3. Store fallback (dev/testing)
+    return userTeamId;
+  }, [permissions.tournamentTeamId, user?.teamId, userTeamId]);
+
+  // Sync back to global store so FranchisePanel, BidPanel, etc. stay aligned
+  useEffect(() => {
+    if (resolvedId && resolvedId !== userTeamId) {
+      setUserTeamId(resolvedId);
+    }
+  }, [resolvedId, userTeamId, setUserTeamId]);
+
+  const franchise = useMemo(
+    () => franchises.find((f) => f.id === resolvedId) ?? null,
+    [franchises, resolvedId]
+  );
+
+  return {
+    franchise,
+    resolvedId,
+    isLoading: permissions.loading || (!permissions.authenticated && !user),
+    isAssigned: !!franchise,
+    permissions,
+  };
 }
 
 // ============================================================================

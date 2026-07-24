@@ -21,6 +21,8 @@ import {
   leaveViewerSchema, // NEW — add to validators/schemas.js: same shape as heartbeatViewerSchema
 } from '../validators/schemas.js';
 import { USER_ROLES } from '../config/constants.js';
+import { requireAuctionPermission, loadAuctionAuthorization } from '../middleware/authorization.js';
+import { AUCTION_PERMISSIONS } from '../services/permission.engine.js';
 
 const tournamentAuctionRouter = Router({ mergeParams: true });
 
@@ -41,10 +43,19 @@ auctionRouter.get('/:auctionId', validate(auctionIdParamSchema, 'params'), async
 auctionRouter.patch(
   '/:auctionId',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.UPDATE_RULES),
+
   validate(updateAuctionRulesSchema),
   asyncHandler(auctionController.updateRules)
+);
+
+auctionRouter.get(
+  '/:auctionId/permissions',
+  authenticate,
+  validate(auctionIdParamSchema, 'params'),
+  loadAuctionAuthorization,
+  asyncHandler(auctionController.getPermissions)
 );
 
 auctionRouter.get('/:auctionId/live', validate(auctionIdParamSchema, 'params'), asyncHandler(auctionController.getLiveState));
@@ -95,8 +106,9 @@ auctionRouter.get('/:auctionId/bids', validate(auctionIdParamSchema, 'params'), 
 auctionRouter.post(
   '/:auctionId/rounds',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.MANAGE_ROUNDS),
+
   validate(createAuctionRoundSchema),
   asyncHandler(auctionController.addRound)
 );
@@ -112,8 +124,9 @@ auctionRouter.get(
 auctionRouter.patch(
   '/:auctionId/rounds/:roundId',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionRoundIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.MANAGE_ROUNDS),
+
   validate(updateAuctionRoundSchema),
   asyncHandler(auctionController.updateRound)
 );
@@ -121,48 +134,54 @@ auctionRouter.patch(
 auctionRouter.delete(
   '/:auctionId/rounds/:roundId',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionRoundIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.MANAGE_ROUNDS),
+
   asyncHandler(auctionController.deleteRound)
 );
 
 auctionRouter.post(
   '/:auctionId/start',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.START_AUCTION),
+
   asyncHandler(auctionController.start)
 );
 
 auctionRouter.post(
   '/:auctionId/pause',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.PAUSE_AUCTION),
+
   asyncHandler(auctionController.pause)
 );
 
 auctionRouter.post(
   '/:auctionId/resume',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.RESUME_AUCTION),
+
   asyncHandler(auctionController.resume)
 );
 
 auctionRouter.post(
   '/:auctionId/complete',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.COMPLETE_AUCTION),
+
   asyncHandler(auctionController.complete)
 );
 
 auctionRouter.post(
   '/:auctionId/lot/open',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.OPEN_LOT),
+
   validate(openLotSchema),
   asyncHandler(auctionController.openLot)
 );
@@ -170,25 +189,27 @@ auctionRouter.post(
 auctionRouter.post(
   '/:auctionId/lot/sold',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.SETTLE_LOT),
+
   asyncHandler(auctionController.settleLotSold)
 );
 
 auctionRouter.post(
   '/:auctionId/lot/unsold',
   authenticate,
-  authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN),
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.SETTLE_LOT),
+
   asyncHandler(auctionController.settleLotUnsold)
 );
 
 auctionRouter.post(
   '/:auctionId/bids',
   authenticate,
-  authorize(USER_ROLES.FRANCHISE_OWNER, USER_ROLES.ADMIN),
   bidRateLimiter,
   validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.PLACE_BID),
   validate(placeBidSchema),
   asyncHandler(auctionController.placeBid)
 );

@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { authenticate, authorize, optionalAuthenticate} from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { tournamentController } from '../controllers/tournament.controller.js';
+import { registrationController } from '../controllers/registration.controller.js';
 import {
   createTournamentSchema,
   updateTournamentSchema,
@@ -60,5 +61,25 @@ router.post('/:id/start-auction', authenticate, authorize(USER_ROLES.ORGANIZER, 
 router.post('/:id/complete-auction', authenticate, authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN), asyncHandler(tournamentController.completeAuction));
 router.post('/:id/complete-tournament', authenticate, authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN), asyncHandler(tournamentController.completeTournament));
 router.post('/:id/cancel', authenticate, authorize(USER_ROLES.ORGANIZER, USER_ROLES.ADMIN), asyncHandler(tournamentController.cancel));
+
+// ============================================================================
+// PLAYER POOL — Direct tournament-level access for auction round assignment UI
+// ============================================================================
+// This route serves the player pool that organizers browse when assigning
+// players to auction rounds. It delegates to the registration controller
+// because TournamentPlayer is the source of truth for "who is in this
+// tournament", but the path is tournament-scoped (not nested under
+// /registrations) because the auction UI treats players as a tournament
+// resource, not a registration workflow resource.
+//
+// optionalAuthenticate: spectators can browse the player pool; only the
+// assignment actions (PATCH round) require organizer permissions.
+// ============================================================================
+router.get(
+  '/:id/players',
+  optionalAuthenticate,
+  validate(idParamSchema, 'params'),
+  asyncHandler(registrationController.listPlayers)
+);
 
 export default router;

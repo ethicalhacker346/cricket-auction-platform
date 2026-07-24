@@ -85,6 +85,8 @@ const bidIncrementTierSchema = new mongoose.Schema(
 );
 
 const auctionSchema = new mongoose.Schema(
+
+  
   {
     tournamentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -137,6 +139,21 @@ const auctionSchema = new mongoose.Schema(
           'bidIncrementTiers must be sorted ascending, have no duplicate boundaries, and contain exactly one open-ended (upTo: null) tier as the last entry',
       },
     },
+    auctionConfiguration: {
+      pursePerTeam: { type: Number, min: 0 },
+      squadSize: { type: Number, min: 1 },
+      maxTeams: { type: Number, min: 2 },
+      currency: { type: String, trim: true, uppercase: true, minlength: 3, maxlength: 3 },
+      lotTimerSeconds: { type: Number, min: 5, max: 600 },
+      bidResetSeconds: { type: Number, min: 3, max: 120 },
+      minimumBidIncrement: { type: Number, min: 1 },
+      bidIncrementTiers: {
+        type: [bidIncrementTierSchema],
+        default: [],
+      },
+      registrationDeadline: Date,
+      copiedAt: Date,
+    },
     lotTimerSeconds: {
       type: Number,
       required: true,
@@ -184,6 +201,8 @@ const auctionSchema = new mongoose.Schema(
       },
     },
   }
+
+  
 );
 
 auctionSchema.path('completedAt').validate(function validateCompletedAfterStarted(v) {

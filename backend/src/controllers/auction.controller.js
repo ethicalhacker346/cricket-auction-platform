@@ -1,5 +1,6 @@
 import { AuctionService } from '../services/auction.service.js';
 import { BidService } from '../services/bid.service.js';
+import { AuctionAuthorizationService } from '../services/auction-authorization.service.js';
 
 export const auctionController = {
   create: async (req, res) => {
@@ -34,12 +35,12 @@ export const auctionController = {
   },
 
   updateRules: async (req, res) => {
-    const auction = await AuctionService.updateRules(req.params.auctionId, req.user, req.body);
+    const auction = await AuctionService.updateRules(req.params.auctionId, req.user, req.body, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   addRound: async (req, res) => {
-    const round = await AuctionService.addRound(req.params.auctionId, req.user, req.body);
+    const round = await AuctionService.addRound(req.params.auctionId, req.user, req.body, req.authorization);
     return res.status(201).json({ success: true, data: round });
   },
 
@@ -49,43 +50,61 @@ export const auctionController = {
   },
 
   updateRound: async (req, res) => {
-    const round = await AuctionService.updateRound(req.params.auctionId, req.params.roundId, req.user, req.body);
+    const round = await AuctionService.updateRound(req.params.auctionId, req.params.roundId, req.user, req.body, req.authorization);
     return res.json({ success: true, data: round });
   },
 
   deleteRound: async (req, res) => {
-    const result = await AuctionService.deleteRound(req.params.auctionId, req.params.roundId, req.user);
+    const result = await AuctionService.deleteRound(req.params.auctionId, req.params.roundId, req.user, req.authorization);
     return res.json({ success: true, data: result });
   },
 
   start: async (req, res) => {
-    const auction = await AuctionService.start(req.params.auctionId, req.user);
+    const auction = await AuctionService.start(req.params.auctionId, req.user, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   pause: async (req, res) => {
-    const auction = await AuctionService.pause(req.params.auctionId, req.user);
+    const auction = await AuctionService.pause(req.params.auctionId, req.user, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   resume: async (req, res) => {
-    const auction = await AuctionService.resume(req.params.auctionId, req.user);
+    const auction = await AuctionService.resume(req.params.auctionId, req.user, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   openLot: async (req, res) => {
-    const auction = await AuctionService.openLot(req.params.auctionId, req.user, req.body);
+    const auction = await AuctionService.openLot(req.params.auctionId, req.user, req.body, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   settleLotSold: async (req, res) => {
-    const auction = await BidService.settleLot(req.params.auctionId, req.user, true);
+    const auction = await BidService.settleLot(req.params.auctionId, req.user, true, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   settleLotUnsold: async (req, res) => {
-    const auction = await BidService.settleLot(req.params.auctionId, req.user, false);
+    const auction = await BidService.settleLot(req.params.auctionId, req.user, false, req.authorization);
     return res.json({ success: true, data: auction });
+  },
+
+  getPermissions: async (req, res) => {
+    const context = req.authorization || await AuctionAuthorizationService.buildContext({
+      auctionId: req.params.auctionId,
+      user: req.user,
+    });
+    const data = AuctionAuthorizationService.toPublicPermissions(context);
+    const aliases = {
+      canManageAuction: data.permissions.MANAGE_AUCTION,
+      canStart: data.permissions.START_AUCTION,
+      canPause: data.permissions.PAUSE_AUCTION,
+      canResume: data.permissions.RESUME_AUCTION,
+      canOpenLot: data.permissions.OPEN_LOT,
+      canForceSold: data.permissions.SETTLE_LOT,
+      canBid: data.permissions.PLACE_BID,
+    };
+    return res.json({ success: true, data: { ...aliases, ...data } });
   },
 
   getLiveState: async (req, res) => {
@@ -124,12 +143,12 @@ export const auctionController = {
   },
 
   complete: async (req, res) => {
-    const auction = await AuctionService.complete(req.params.auctionId, req.user);
+    const auction = await AuctionService.complete(req.params.auctionId, req.user, req.authorization);
     return res.json({ success: true, data: auction });
   },
 
   placeBid: async (req, res) => {
-    const bid = await BidService.placeBid(req.params.auctionId, req.user, req.body);
+    const bid = await BidService.placeBid(req.params.auctionId, req.user, req.body, req.authorization);
     return res.status(201).json({ success: true, data: bid });
   },
 

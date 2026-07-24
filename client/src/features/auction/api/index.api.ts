@@ -1,22 +1,23 @@
 import { useAuthStore } from "@/store/authStore";
 import type {
-  Auction,
-  AuctionRound,
-  Bid,
-  Franchise,
-  Player,
-  BidIncrementTier,
+  Auction, AuctionPermissions, AuctionRound, Bid, Franchise, Player,
+  BidIncrementTier, AuctionSnapshot,
 } from "@/features/auction/types/index.types";
+import { normalizeAuctionPermissions } from "@/features/auction/utils/index.utils";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
 
-// ---------------------------------------------------------------------------
-// HTTP client with automatic Bearer injection from authStore
-// ---------------------------------------------------------------------------
+export class AuctionApiError extends Error {
+  status: number;
+  code?: string;
+  details?: unknown;
+  constructor(message: string, status: number, code?: string, details?: unknown) {
+    super(message); this.name = "AuctionApiError"; this.status = status; this.code = code; this.details = details;
+  }
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = useAuthStore.getState().accessToken;
-  const url = `${API_BASE_URL}${endpoint}`;
-
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -24,98 +25,138 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       ...options.headers,
     },
   });
-
-  const data = await res.json().catch(() => ({
-    success: false,
-    message: res.statusText || `HTTP ${res.status}`,
-  }));
-
-  if (!res.ok) {
-    throw new Error(data.message || `Request failed: ${res.status}`);
-  }
-
+  const data: any = await res.json().catch(() => ({ success: false, message: res.statusText || `HTTP ${res.status}` }));
+  if (!res.ok) throw new AuctionApiError(data.message || `Request failed: ${res.status}`, res.status, data.code, data.details);
   return data as T;
 }
 
-// ---------------------------------------------------------------------------
-// Mappers: backend Mongoose shape → frontend types
-// (now exported so AuctionEngine.ts can reuse them for Socket.IO payloads)
-// ---------------------------------------------------------------------------
+const stringId = (value: any): string => value?.toString?.() || value || "";
+
 export function mapPlayer(tp: any): Player {
+  const playerDoc = tp.playerId;
+  
   return {
-    id: tp._id?.toString?.() || tp.id,
-    name: tp.playerId?.name || tp.name,
+    id: stringId(tp._id || tp.id),
+    name: playerDoc?.fullName || tp.fullName || tp.name || "Unknown Player",
+    fullName: playerDoc?.fullName || tp.fullName,
     role: tp.primaryRole || tp.role,
-    country: tp.playerId?.country || tp.country,
-    overseas: tp.playerId?.overseas ?? tp.overseas,
-    age: tp.playerId?.age ?? tp.age,
-    basePrice: tp.basePrice,
+    country: playerDoc?.nationality || tp.country || "",
+    overseas: playerDoc?.overseas ?? tp.overseas ?? false,
+    age: playerDoc?.age ?? tp.age ?? computeAge(playerDoc?.dateOfBirth) ?? 0,
+    basePrice: tp.basePrice ?? 0,
     soldPrice: tp.soldPrice,
-    teamId: tp.soldToTeamId?.toString?.() || tp.soldToTeamId || tp.teamId,
-    status: mapLotOutcome(tp.lotOutcome) || tp.status,
-    stats: tp.playerId?.stats || tp.stats,
+    teamId: stringId(tp.soldToTeamId || tp.teamId) || undefined,
+    status: mapLotOutcome(tp.lotOutcome) || tp.status || "pending",
+    stats: playerDoc?.stats || tp.stats || { matches: 0, runs: 0, wickets: 0, average: 0, strikeRate: 0 },
     tag: tp.tag,
-    avatarSeed: tp.avatarSeed || tp.playerId?.name || tp.name,
+    avatarSeed: tp.avatarSeed || playerDoc?.fullName || tp.name || stringId(tp._id),
+    profileImage: playerDoc?.profileImage || tp.profileImage || undefined,
+    battingStyle: playerDoc?.battingStyle || tp.battingStyle || undefined,
+    bowlingStyle: playerDoc?.bowlingStyle || tp.bowlingStyle || undefined,
+    bio: playerDoc?.bio || tp.bio || undefined,
+    category: tp.category || undefined,
+    soldAt: tp.soldAt ? new Date(tp.soldAt).toISOString() : undefined,
+    soldToTeamName: tp.soldToTeamId?.name || tp.soldToTeamName || undefined,
   };
 }
 
+function computeAge(dob?: string | Date): number | undefined {
+  if (!dob) return undefined;
+  const birth = new Date(dob);
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const m = now.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age--;
+  return age > 0 ? age : undefined;
+}
+
 function mapLotOutcome(outcome?: string): Player["status"] {
-  switch (outcome) {
-    case "NOT_LISTED":
-      return "pending";
-    case "IN_PROGRESS":
-      return "current";
-    case "SOLD":
-      return "sold";
-    case "UNSOLD":
-      return "unsold";
-    default:
-      return "pending";
-  }
+  return ({ NOT_LISTED: "pending", IN_PROGRESS: "current", SOLD: "sold", UNSOLD: "unsold" } as const)[outcome as any] || "pending";
 }
 
 export function mapFranchise(team: any): Franchise {
-  const roster: string[] = (team.roster || []).map((r: any) =>
-    typeof r === "string" ? r : r.tournamentPlayerId?.toString?.() || r.tournamentPlayerId
+  // ── FIX: Detect whether franchiseId is populated (object) or raw ObjectId (string) ──
+  const franchiseDoc = team.franchiseId && typeof team.franchiseId === 'object' 
+    ? team.franchiseId 
+    : null;
+  
+  // ── FIX: Detect whether ownerId is populated ──
+  const ownerDoc = team.ownerId && typeof team.ownerId === 'object' 
+    ? team.ownerId 
+    : null;
+
+  const roster = (team.roster || []).map((r: any) =>
+    typeof r === "string" ? r : stringId(r.tournamentPlayerId)
   );
   const spent = (team.roster || []).reduce(
     (sum: number, r: any) => sum + (r.boughtPrice || 0),
     0
   );
+
+  // Stable derived hue when no explicit brand colors are set
+  const seed = franchiseDoc?.slug || franchiseDoc?.name || team.name || stringId(team._id);
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  const derivedFrom = `hsl(${hue} 70% 50%)`;
+  const derivedTo = `hsl(${(hue + 55) % 360} 70% 40%)`;
+
   return {
-    id: team._id?.toString?.() || team.id,
-    name: team.name,
-    shortName: team.shortName || team.name?.slice(0, 3).toUpperCase(),
-    owner: team.ownerId?.name || team.owner || "Unknown",
-    colorFrom: team.colorFrom || "#3b82f6",
-    colorTo: team.colorTo || "#8b5cf6",
-    purseTotal: team.wallet?.initialBudget ?? team.initialBudget ?? team.purseTotal ?? 10000,
+    id: stringId(team._id || team.id),
+    name: team.name || franchiseDoc?.name || "",
+    shortName:
+      team.shortName ||
+      franchiseDoc?.shortName ||
+      team.name?.slice(0, 3).toUpperCase() ||
+      "TEAM",
+    owner:
+      ownerDoc?.name ||
+      franchiseDoc?.ownerId?.name ||
+      team.owner ||
+      "Unknown",
+    ownerId: stringId(team.ownerId?._id || team.ownerId),
+    franchiseId: stringId(team.franchiseId?._id || team.franchiseId),
+    colorFrom: franchiseDoc?.colorFrom || team.colorFrom || derivedFrom,
+    colorTo: franchiseDoc?.colorTo || team.colorTo || derivedTo,
+    purseTotal:
+      team.wallet?.initialBudget ??
+      team.initialBudget ??
+      team.purseTotal ??
+      10000,
     spent: team.wallet?.spentBudget ?? team.spent ?? spent,
-    maxSquadSize: team.squadSize || team.maxSquadSize || 25,
-    maxOverseas: team.maxOverseas || 8,
+    reservedBudget: team.wallet?.reservedBudget ?? team.reservedBudget ?? 0,
+    // ── NOTE: maxSquadSize / maxOverseas are patched by getSnapshot below ──
+    maxSquadSize: 25,
+    maxOverseas: 8,
     squad: roster,
+    logo: franchiseDoc?.logo || team.logo || undefined,
+    city: franchiseDoc?.city || team.city || undefined,
+    description: franchiseDoc?.description || team.description || undefined,
   };
 }
 
 export function mapBid(b: any): Bid {
   return {
-    id: b._id?.toString?.() || b.id,
-    playerId: b.tournamentPlayerId?.toString?.() || b.tournamentPlayerId || b.playerId,
-    teamId: b.tournamentTeamId?._id?.toString?.() || b.tournamentTeamId?.toString?.() || b.tournamentTeamId || b.teamId,
-    amount: b.amount,
+    id: stringId(b._id || b.id),
+    playerId: stringId(b.tournamentPlayerId || b.playerId),
+    teamId: stringId(b.tournamentTeamId?._id || b.tournamentTeamId || b.teamId),
+    amount: b.amount ?? 0,
     timestamp: new Date(b.placedAt || b.timestamp).getTime(),
-    roundId: b.roundId?.toString?.() || b.roundId,
+    roundId: stringId(b.roundId),
     isUser: b.isUser ?? false,
   };
 }
 
 export function mapAuction(a: any): Auction {
+  const config = a.auctionConfiguration || {};
   const tiers: BidIncrementTier[] = a.bidIncrementTiers?.length
     ? a.bidIncrementTiers
+    : config.bidIncrementTiers?.length
+    ? config.bidIncrementTiers
     : [{ upTo: null, increment: a.tournamentId?.minBidIncrement ?? 5 }];
-
+  
   return {
-    id: a._id?.toString?.() || a.id,
+    id: stringId(a._id || a.id),
     name: a.name || "Auction",
     tournamentName: a.tournamentId?.name || a.tournamentName || "Tournament",
     organizer: a.tournamentId?.organizer?.name || a.organizer || "Organizer",
@@ -124,41 +165,38 @@ export function mapAuction(a: any): Auction {
     season: a.season || new Date().getFullYear().toString(),
     rules: {
       bidIncrements: tiers,
-      lotTimerSeconds: a.lotTimerSeconds || 30,
-      bidResetSeconds: a.bidResetSeconds ?? 12,
-      pursePerTeam: a.tournamentId?.defaultPurse || a.pursePerTeam || 10000,
-      maxSquadSize: a.tournamentId?.squadSize || a.maxSquadSize || 25,
+      lotTimerSeconds: config.lotTimerSeconds ?? a.lotTimerSeconds ?? 30,
+      bidResetSeconds: config.bidResetSeconds ?? a.bidResetSeconds ?? 12,
+      pursePerTeam: config.pursePerTeam ?? a.tournamentId?.defaultPurse ?? a.pursePerTeam ?? 10000,
+      maxSquadSize: config.squadSize ?? a.tournamentId?.squadSize ?? a.maxSquadSize ?? 25,
       maxOverseas: a.maxOverseas || 8,
     },
     createdAt: a.createdAt,
-    tournamentId: a.tournamentId?._id?.toString?.() || a.tournamentId,
+    tournamentId: stringId(a.tournamentId?._id || a.tournamentId) || undefined,
   };
 }
 
 export function mapRound(r: any): AuctionRound {
   return {
-    id: r._id?.toString?.() || r.id,
-    auctionId: r.auctionId?.toString?.() || r.auctionId,
+    id: stringId(r._id || r.id),
+    auctionId: stringId(r.auctionId),
     name: r.name,
     type: r.type || "normal",
     order: r.order,
     status: r.status?.toLowerCase?.() || r.status,
-    playerIds: (r.playerIds || []).map((p: any) => p.toString?.() || p),
+    playerIds: (r.playerIds || []).map(stringId),
   };
 }
 
 export function mapLog(l: any): import("@/features/auction/types/index.types").AuctionLog {
   return {
-    id: l._id || `${Date.now()}_${Math.random()}`,
+    id: stringId(l._id || l.id) || `${Date.now()}_${Math.random()}`,
     type: (l.action || l.type)?.toLowerCase(),
     message: l.message,
     timestamp: new Date(l.timestamp || l.createdAt).getTime(),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Wire payload for create/update — deliberately NOT `Partial<Auction>`.
-// ---------------------------------------------------------------------------
 export interface AuctionSavePayload {
   name?: string;
   scheduledAt?: string;
@@ -169,86 +207,68 @@ export interface AuctionSavePayload {
 
 function toBackendPayload(payload: AuctionSavePayload): Record<string, unknown> {
   const body: Record<string, unknown> = {};
-  if (payload.name !== undefined) body.name = payload.name;
-  if (payload.scheduledAt !== undefined) body.scheduledAt = payload.scheduledAt;
-  if (payload.lotTimerSeconds !== undefined) body.lotTimerSeconds = payload.lotTimerSeconds;
-  if (payload.bidResetSeconds !== undefined) body.bidResetSeconds = payload.bidResetSeconds;
-  if (payload.bidIncrementTiers !== undefined) body.bidIncrementTiers = payload.bidIncrementTiers;
+  for (const key of ["name", "scheduledAt", "lotTimerSeconds", "bidResetSeconds", "bidIncrementTiers"] as const) {
+    if (payload[key] !== undefined) body[key] = payload[key];
+  }
   return body;
 }
 
-// ---------------------------------------------------------------------------
-// auctionApi
-// ---------------------------------------------------------------------------
+const dataOf = (res: any) => res?.data ?? res;
+
 export const auctionApi = {
   getAuction: async (tournamentId: string) => {
     const res = await request<any>(`/tournaments/${tournamentId}/auction`);
-    if (!res.data) return null;
-    return mapAuction(res.data);
+    return res.data ? mapAuction(res.data) : null;
   },
-
-  getById: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}`);
-    return mapAuction(res.data ?? res);
-  },
-
-  createAuction: async (tournamentId: string, payload: AuctionSavePayload) => {
-    const res = await request<any>(`/tournaments/${tournamentId}/auction`, {
+  getById: async (auctionId: string) => mapAuction(dataOf(await request<any>(`/auctions/${auctionId}`))),
+  getPermissions: async (auctionId: string): Promise<AuctionPermissions> =>
+    normalizeAuctionPermissions(dataOf(await request<any>(`/auctions/${auctionId}/permissions`))),
+  createAuction: async (tournamentId: string, payload: AuctionSavePayload) =>
+    mapAuction(dataOf(await request<any>(`/tournaments/${tournamentId}/auction`, {
       method: "POST",
       body: JSON.stringify(toBackendPayload(payload)),
-    });
-    return mapAuction(res.data ?? res);
-  },
-
-  updateRules: async (auctionId: string, payload: AuctionSavePayload) => {
-    const res = await request<any>(`/auctions/${auctionId}`, {
+    }))),
+  updateRules: async (auctionId: string, payload: AuctionSavePayload) =>
+    mapAuction(dataOf(await request<any>(`/auctions/${auctionId}`, {
       method: "PATCH",
       body: JSON.stringify(toBackendPayload(payload)),
-    });
-    return mapAuction(res.data ?? res);
-  },
+    }))),
+  startAuction: async (auctionId: string) =>
+    mapAuction(dataOf(await request<any>(`/auctions/${auctionId}/start`, { method: "POST" }))),
+  pauseAuction: async (auctionId: string) =>
+    mapAuction(dataOf(await request<any>(`/auctions/${auctionId}/pause`, { method: "POST" }))),
+  resumeAuction: async (auctionId: string) =>
+    mapAuction(dataOf(await request<any>(`/auctions/${auctionId}/resume`, { method: "POST" }))),
+  completeAuction: async (auctionId: string) =>
+    mapAuction(dataOf(await request<any>(`/auctions/${auctionId}/complete`, { method: "POST" }))),
+  getLiveState: async (auctionId: string) => dataOf(await request<any>(`/auctions/${auctionId}/live`)),
+  
+  // ── FIX: Normalize maxSquadSize / maxOverseas from auction rules onto every franchise ──
+  getSnapshot: async (auctionId: string): Promise<AuctionSnapshot> => {
+    const d = dataOf(await request<any>(`/auctions/${auctionId}/snapshot`));
+    const auction = mapAuction(d.auction);
+    
+    const rawFranchises = (d.franchises || []).map(mapFranchise);
+    // Patch squad limits from auction rules (single source of truth)
+    const franchises = rawFranchises.map((f) => ({
+      ...f,
+      maxSquadSize: auction.rules.maxSquadSize,
+      maxOverseas: auction.rules.maxOverseas,
+    }));
 
-  startAuction: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/start`, { method: "POST" });
-    return mapAuction(res.data ?? res);
-  },
-
-  pauseAuction: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/pause`, { method: "POST" });
-    return mapAuction(res.data ?? res);
-  },
-
-  resumeAuction: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/resume`, { method: "POST" });
-    return mapAuction(res.data ?? res);
-  },
-
-  completeAuction: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/complete`, { method: "POST" });
-    return mapAuction(res.data ?? res);
-  },
-
-  getLiveState: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/live`);
-    return res.data ?? res;
-  },
-
-  getSnapshot: async (auctionId: string): Promise<import("@/features/auction/types").AuctionSnapshot> => {
-    const res = await request<any>(`/auctions/${auctionId}/snapshot`);
-    const d = res.data ?? res;
     return {
-      auction: mapAuction(d.auction),
+      auction,
       rounds: (d.rounds || []).map(mapRound),
       players: (d.players || []).map(mapPlayer),
-      franchises: (d.franchises || []).map(mapFranchise),
+      franchises,
       bidHistory: (d.bidHistory || []).map(mapBid),
       logs: (d.logs || []).map(mapLog),
       status: d.status?.toLowerCase?.() || d.status,
-      currentRoundId: d.currentRoundId?.toString?.() || d.currentRoundId || null,
-      currentPlayerId: d.currentPlayerId?.toString?.() || d.currentPlayerId || null,
+      currentRoundId: stringId(d.currentRoundId) || null,
+      currentPlayerId: stringId(d.currentPlayerId) || null,
       currentBid: {
         amount: d.currentBid?.amount ?? 0,
-        teamId: d.currentBid?.teamId?.toString?.() || d.currentBid?.teamId || null,
+        teamId: stringId(d.currentBid?.teamId) || null,
       },
       timer: d.timer,
       lotStatus: d.lotStatus,
@@ -257,148 +277,87 @@ export const auctionApi = {
       viewerCount: d.viewerCount ?? 0,
     };
   },
-
-  heartbeatViewer: async (auctionId: string, viewerId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/viewers/heartbeat`, {
+  
+  heartbeatViewer: async (auctionId: string, viewerId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/viewers/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ viewerId }),
-    });
-    return (res.data ?? res) as { viewerCount: number };
-  },
-
-  leaveViewer: async (auctionId: string, viewerId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/viewers/leave`, {
+    })) as { viewerCount: number },
+  leaveViewer: async (auctionId: string, viewerId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/viewers/leave`, {
       method: "POST",
       body: JSON.stringify({ viewerId }),
-    });
-    return (res.data ?? res) as { viewerCount: number };
-  },
-
-  getViewerCount: async (auctionId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/viewers/count`);
-    return (res.data ?? res) as { viewerCount: number };
-  },
+    })) as { viewerCount: number },
+  getViewerCount: async (auctionId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/viewers/count`)) as { viewerCount: number },
 };
 
-// ---------------------------------------------------------------------------
-// auctionRoundApi
-// ---------------------------------------------------------------------------
 export const auctionRoundApi = {
-  listRounds: async (auctionId: string) => {
-    const res = await request<any[]>(`/auctions/${auctionId}/rounds`);
-    return (res.data ?? res).map(mapRound);
-  },
-
-  addRound: async (auctionId: string, round: Omit<AuctionRound, "id" | "auctionId">) => {
-    const res = await request<any>(`/auctions/${auctionId}/rounds`, {
+  listRounds: async (auctionId: string) =>
+    (dataOf(await request<any>(`/auctions/${auctionId}/rounds`)) || []).map(mapRound),
+  addRound: async (auctionId: string, round: Omit<AuctionRound, "id" | "auctionId">) =>
+    mapRound(dataOf(await request<any>(`/auctions/${auctionId}/rounds`, {
       method: "POST",
       body: JSON.stringify(round),
-    });
-    return mapRound(res.data ?? res);
-  },
-
-  updateRound: async (auctionId: string, id: string, patch: Partial<AuctionRound>) => {
-    const res = await request<any>(`/auctions/${auctionId}/rounds/${id}`, {
+    }))),
+  updateRound: async (auctionId: string, id: string, patch: Partial<AuctionRound>) =>
+    mapRound(dataOf(await request<any>(`/auctions/${auctionId}/rounds/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
-    });
-    return mapRound(res.data ?? res);
-  },
-
+    }))),
   deleteRound: async (auctionId: string, id: string) => {
     await request<any>(`/auctions/${auctionId}/rounds/${id}`, { method: "DELETE" });
     return { success: true };
   },
 };
 
-// ---------------------------------------------------------------------------
-// playerApi
-// ---------------------------------------------------------------------------
 export const playerApi = {
-  listPlayers: async (tournamentId: string) => {
-    const res = await request<any[]>(`/tournaments/${tournamentId}/players`);
-    return (res.data ?? res).map(mapPlayer);
-  },
-
-  getPlayersByRound: async (roundId: string) => {
-    const res = await request<any[]>(`/auction-rounds/${roundId}/players`);
-    return (res.data ?? res).map(mapPlayer);
-  },
-
-  updatePlayer: async (id: string, patch: Partial<Player>) => {
-    const res = await request<any>(`/players/${id}`, {
+  listPlayers: async (tournamentId: string) =>
+    (dataOf(await request<any>(`/tournaments/${tournamentId}/players`)) || []).map(mapPlayer),
+  getPlayersByRound: async (roundId: string) =>
+    (dataOf(await request<any>(`/auction-rounds/${roundId}/players`)) || []).map(mapPlayer),
+  updatePlayer: async (id: string, patch: Partial<Player>) =>
+    mapPlayer(dataOf(await request<any>(`/players/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
-    });
-    return mapPlayer(res.data ?? res);
-  },
+    }))),
 };
 
-// ---------------------------------------------------------------------------
-// franchiseApi
-// ---------------------------------------------------------------------------
 export const franchiseApi = {
-  listFranchises: async (tournamentId: string) => {
-    const res = await request<any[]>(`/tournaments/${tournamentId}/teams`);
-    return (res.data ?? res).map(mapFranchise);
-  },
-
-  updateFranchise: async (id: string, patch: Partial<Franchise>) => {
-    const res = await request<any>(`/teams/${id}`, {
+  listFranchises: async (tournamentId: string) =>
+    (dataOf(await request<any>(`/tournaments/${tournamentId}/teams`)) || []).map(mapFranchise),
+  updateFranchise: async (id: string, patch: Partial<Franchise>) =>
+    mapFranchise(dataOf(await request<any>(`/teams/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
-    });
-    return mapFranchise(res.data ?? res);
-  },
+    }))),
 };
 
-// ---------------------------------------------------------------------------
-// liveAuctionApi
-// ---------------------------------------------------------------------------
 export const liveAuctionApi = {
-  getLiveState: async (auctionId: string) => auctionApi.getLiveState(auctionId),
-
-  openLot: async (auctionId: string, playerId: string, roundId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/lot/open`, {
+  getLiveState: (auctionId: string) => auctionApi.getLiveState(auctionId),
+  openLot: async (auctionId: string, playerId: string, roundId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/lot/open`, {
       method: "POST",
       body: JSON.stringify({ tournamentPlayerId: playerId, roundId }),
-    });
-    return res.data ?? res;
-  },
-
-  markSold: async (auctionId: string, _playerId: string, _teamId: string, _amount: number) => {
-    const res = await request<any>(`/auctions/${auctionId}/lot/sold`, { method: "POST" });
-    return res.data ?? res;
-  },
-
-  markUnsold: async (auctionId: string, _playerId: string) => {
-    const res = await request<any>(`/auctions/${auctionId}/lot/unsold`, { method: "POST" });
-    return res.data ?? res;
-  },
+    })),
+  markSold: async (auctionId: string, _playerId: string, _teamId: string, _amount: number) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/lot/sold`, { method: "POST" })),
+  markUnsold: async (auctionId: string, _playerId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/lot/unsold`, { method: "POST" })),
 };
 
-// ---------------------------------------------------------------------------
-// bidApi
-// ---------------------------------------------------------------------------
 export const bidApi = {
-  placeBid: async (auctionId: string, bid: { amount?: number; playerId?: string; teamId?: string }) => {
-    const res = await request<any>(`/auctions/${auctionId}/bids`, {
+  placeBid: async (auctionId: string, bid: { amount?: number; playerId?: string; teamId?: string }) =>
+    mapBid(dataOf(await request<any>(`/auctions/${auctionId}/bids`, {
       method: "POST",
       body: JSON.stringify({ amount: bid.amount }),
-    });
-    return mapBid(res.data ?? res);
-  },
-
-  listBids: async (auctionId: string, playerId?: string) => {
-    const query = playerId ? `?tournamentPlayerId=${playerId}` : "";
-    const res = await request<any[]>(`/auctions/${auctionId}/bids${query}`);
-    return (res.data ?? res).map(mapBid);
-  },
+    }))),
+  listBids: async (auctionId: string, playerId?: string) =>
+    (dataOf(await request<any>(
+      `/auctions/${auctionId}/bids${playerId ? `?tournamentPlayerId=${encodeURIComponent(playerId)}` : ""}`
+    )) || []).map(mapBid),
 };
 
-// ---------------------------------------------------------------------------
-// Seed snapshot builder (now async against real backend)
-// ---------------------------------------------------------------------------
 export async function getSeedSnapshot(tournamentId: string, auctionId?: string) {
   const [auction, rounds, players, franchises] = await Promise.all([
     auctionId ? auctionApi.getById(auctionId) : auctionApi.getAuction(tournamentId),
@@ -406,6 +365,5 @@ export async function getSeedSnapshot(tournamentId: string, auctionId?: string) 
     playerApi.listPlayers(tournamentId),
     franchiseApi.listFranchises(tournamentId),
   ]);
-
   return { auction, rounds, players, franchises };
 }

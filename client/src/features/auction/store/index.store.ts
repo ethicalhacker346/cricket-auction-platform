@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { AuctionEngine } from "@/features/auction/engine/AuctionEngine";
-import type { LiveAuctionSnapshot } from "@/features/auction/types";
-import { useAuthStore } from "@/store/authStore";
+import type { LiveAuctionSnapshot } from "@/features/auction/types/index.types";
 
 // ============================================================================
 // Singleton engine — lazily created so we can inject real IDs at bootstrap
@@ -151,12 +150,14 @@ interface RoleState {
   role: AuctionRole;
   userTeamId: string;
   setRole: (role: AuctionRole) => void;
+  setUserTeamId: (id: string) => void; // ← NEW
 }
 
 export const useRoleStore = create<RoleState>((set) => ({
   role: "team",
   userTeamId: "team_user", // TODO: replace with real user team mapping from auth/profile
   setRole: (role) => set({ role }),
+  setUserTeamId: (userTeamId) => set({ userTeamId }), // ← NEW
 }));
 
 // ---------------------------------------------------------------------------

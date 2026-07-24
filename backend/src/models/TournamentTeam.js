@@ -156,9 +156,23 @@ tournamentTeamSchema.methods.commitSpend = function commitSpend(amount) {
   this.wallet.spentBudget += amount;
 };
 
-tournamentTeamSchema.virtual('budgetUtilization').get(function budgetUtilization() {
-  if (!this.wallet.initialBudget) return 0;
-  return Number((this.wallet.spentBudget / this.wallet.initialBudget).toFixed(4));
+tournamentTeamSchema.virtual("budgetUtilization").get(function () {
+
+    console.log("TEAM:", this._id);
+
+    console.log("WALLET:", this.wallet);
+
+    if (!this.wallet) {
+        console.log("BROKEN DOCUMENT");
+        return 0;
+    }
+
+    return Number(
+        (
+            this.wallet.spentBudget /
+            this.wallet.initialBudget
+        ).toFixed(4)
+    );
 });
 
 export const TournamentTeam = mongoose.model('TournamentTeam', tournamentTeamSchema);

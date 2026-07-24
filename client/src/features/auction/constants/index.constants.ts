@@ -29,42 +29,42 @@ export const ROUTES = {
 
 export const NAV_ITEMS = [
     {
-        to: ".",
+        segment: "dashboard",
         label: "Dashboard",
         icon: "LayoutDashboard",
     },
     {
-        to: "create",
+        segment: "configuration",
         label: "Configuration",
         icon: "Settings2",
     },
     {
-        to: "rounds",
+        segment: "rounds",
         label: "Rounds",
         icon: "ListOrdered",
     },
     {
-        to: "live",
+        segment: "live",
         label: "Live Auction",
         icon: "Gavel",
     },
     {
-        to: "team",
+        segment: "team",
         label: "Team Console",
         icon: "Users",
     },
     {
-        to: "history",
+        segment: "history",
         label: "Bid History",
         icon: "History",
     },
     {
-        to: "analytics",
+        segment: "analytics",
         label: "Analytics",
         icon: "BarChart3",
     },
     {
-        to: "result",
+        segment: "results",
         label: "Results",
         icon: "Trophy",
     },

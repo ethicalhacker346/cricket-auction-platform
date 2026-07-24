@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, GripVertical, Loader2, Plus, Save, ShieldAlert, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -8,11 +8,13 @@ import {
   useAuctionRounds,
   useAuctionPermissions,
 } from "@/features/auction/hooks/index.hook";
-import { useLiveAuctionStore } from "@/features/auction/store/index.store";
 import { playerApi } from "@/features/auction/api/index.api";
 import type { Player, RoundType } from "@/features/auction/types/index.types";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
+import { useAuctionContext } from "../hooks/useAuctionContext";
+import { resolveAuctionRoute } from "../routes/auction.navigation";
+import { AuctionSegments } from "../routes/auction.routes";
 
 const TYPES: RoundType[] = ["marquee", "capped", "uncapped", "overseas", "accelerated"];
 
@@ -20,10 +22,16 @@ export default function RoundEditorPage() {
   const { roundId } = useParams();
   const navigate = useNavigate();
   const { isAuthenticated, hasHydrated } = useAuth();
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
+  const { tournamentId, auctionId } = useAuctionContext();
 
-  const { rounds, actions, loading: roundsLoading } = useAuctionRounds(storeAuctionId || undefined);
-  const permissions = useAuctionPermissions();
+  const roundsRoute = resolveAuctionRoute(
+    AuctionSegments.rounds,
+    tournamentId,
+    auctionId,
+  );
+
+  const { rounds, actions, loading: roundsLoading } = useAuctionRounds(auctionId);
+  const permissions = useAuctionPermissions(auctionId);
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [playersLoading, setPlayersLoading] = useState(true);
@@ -39,25 +47,28 @@ export default function RoundEditorPage() {
 
   // Load players from real backend
   useEffect(() => {
+    if (!tournamentId) {
+      setPlayers([]);
+      setPlayersLoading(false);
+      return;
+    }
+    let cancelled = false;
     const loadPlayers = async () => {
       try {
         setPlayersLoading(true);
-        // Need tournamentId for real API — fallback to empty if not set
-        const tournamentId = useLiveAuctionStore.getState().tournamentId;
-        if (!tournamentId) {
-          setPlayers([]);
-          return;
-        }
         const list = await playerApi.listPlayers(tournamentId);
-        setPlayers(list);
+        if (!cancelled) setPlayers(list);
       } catch (e: any) {
-        setSaveError(e.message || "Failed to load players");
+        if (!cancelled) setSaveError(e.message || "Failed to load players");
       } finally {
-        setPlayersLoading(false);
+        if (!cancelled) setPlayersLoading(false);
       }
     };
     loadPlayers();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [tournamentId]);
 
   // Seed form from round data
   useEffect(() => {
@@ -95,7 +106,7 @@ export default function RoundEditorPage() {
     );
   }
 
-  if (!permissions.canStart && !permissions.canPause) {
+  if (!permissions.ownsAuction && !permissions.canManageAuction && !permissions.canManageRounds) {
     return (
       <div className="mx-auto flex max-w-5xl flex-col items-center justify-center gap-4 py-32 text-center">
         <ShieldAlert className="h-12 w-12 text-rose-400" />
@@ -104,7 +115,7 @@ export default function RoundEditorPage() {
           Only organizers can edit auction rounds.
         </p>
         <Link
-          to="/live"
+          to={resolveAuctionRoute(AuctionSegments.live, tournamentId, auctionId)}
           className="rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/20"
         >
           Go to Live Auction
@@ -126,7 +137,7 @@ export default function RoundEditorPage() {
       <div className="mx-auto max-w-5xl space-y-4">
         <p className="text-sm text-slate-500">Round not found.</p>
         <button
-          onClick={() => navigate("/rounds")}
+          onClick={() => navigate(roundsRoute)}
           className="text-sm text-amber-400 underline transition hover:text-amber-300"
         >
           Back to rounds
@@ -158,7 +169,7 @@ export default function RoundEditorPage() {
     setSaveError(null);
     try {
       await actions.update(round.id, { name, type, playerIds });
-      navigate("/rounds");
+      navigate(roundsRoute);
     } catch (e: any) {
       setSaveError(e.message || "Failed to save round");
       setSaving(false);
@@ -174,7 +185,7 @@ export default function RoundEditorPage() {
       className="mx-auto max-w-5xl space-y-6"
     >
       <button
-        onClick={() => navigate("/rounds")}
+        onClick={() => navigate(roundsRoute)}
         className="flex items-center gap-1.5 text-sm text-slate-400 transition hover:text-white"
       >
         <ArrowLeft className="h-4 w-4" /> Back to rounds

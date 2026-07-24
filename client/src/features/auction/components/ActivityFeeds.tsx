@@ -1,11 +1,18 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Activity, History } from "lucide-react";
-import { useAuctionLogs, useBidHistory } from "@/features/auction/hooks/index.hook";
+import { useAuctionLogs, useBidHistory, useAuth } from "@/features/auction/hooks/index.hook";
 import { LOG_ICON } from "@/features/auction/constants/index.constants";
 import { formatLakhs, initials, timeAgo } from "@/features/auction/utils/index.utils";
 
 export function BidHistoryPanel({ playerId, limit = 12 }: { playerId?: string; limit?: number }) {
   const bids = useBidHistory(playerId, limit);
+  const { user } = useAuth();
+
+  // Compute isUser for better alignment with new auth model if not already in bid data
+  const enhancedBids = bids.map((bid) => ({
+    ...bid,
+    isUser: bid.isUser ?? (user && bid.teamId === user.teamId),
+  }));
 
   return (
     <div className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -14,7 +21,7 @@ export function BidHistoryPanel({ playerId, limit = 12 }: { playerId?: string; l
       </p>
       <div className="flex-1 space-y-1.5 overflow-y-auto pr-1">
         <AnimatePresence initial={false}>
-          {bids.length === 0 && (
+          {enhancedBids.length === 0 && (
             <motion.p
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -23,7 +30,7 @@ export function BidHistoryPanel({ playerId, limit = 12 }: { playerId?: string; l
               No bids placed yet
             </motion.p>
           )}
-          {bids.map((bid) => (
+          {enhancedBids.map((bid) => (
             <motion.div
               key={bid.id}
               initial={{ opacity: 0, x: -12 }}
@@ -47,7 +54,7 @@ export function BidHistoryPanel({ playerId, limit = 12 }: { playerId?: string; l
                     {bid.franchise?.shortName ?? "Unknown"}
                     {bid.isUser && <span className="ml-1 text-sky-400">(You)</span>}
                   </p>
-                  <p className="truncate text-[10px] text-slate-500">{bid.player?.name}</p>
+                  <p className="truncate text-[10px] text-slate-500">{bid.player?.name ?? "Unknown Player"}</p>
                 </div>
               </div>
               <div className="text-right">

@@ -77,7 +77,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <Button type="submit" isLoading={login.isPending}>
+        <Button type="submit" isLoading={login.isPending} loadingText="Signing in…">
           Sign in
         </Button>
 

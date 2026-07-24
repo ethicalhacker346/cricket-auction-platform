@@ -568,7 +568,7 @@ function NoFranchiseState({
 
               <button
                 onClick={() =>
-                  navigate("/franchises/create", { state: { from: location.pathname } })
+                  navigate("/create-franchise", { state: { from: location.pathname } })
                 }
                 className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl font-semibold text-sm bg-slate-900 text-white hover:bg-slate-800 active:scale-[0.98] transition-all shadow-lg shadow-slate-900/20 hover:shadow-xl hover:shadow-slate-900/30"
               >
@@ -981,7 +981,7 @@ export function RegisterTeamPage() {
                   {/* Create new franchise CTA */}
                   <div className="pt-4 border-t border-slate-100">
                     <button
-                      onClick={() => navigate("/franchises/create")}
+                      onClick={() => navigate("/create-franchise")}
                       className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-slate-200 text-sm font-medium text-slate-500 hover:text-violet-600 hover:border-violet-300 hover:bg-violet-50/50 transition-all"
                     >
                       <Plus className="w-4 h-4" />
@@ -1267,7 +1267,7 @@ export function RegisterTeamPage() {
                         Create a new franchise to get started.
                       </p>
                       <button
-                        onClick={() => navigate("/franchises/create")}
+                        onClick={() => navigate("/create-franchise")}
                         className="inline-flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-xl text-sm font-semibold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20 active:scale-[0.98]"
                       >
                         <Plus className="w-4 h-4" />

@@ -1,27 +1,79 @@
-// ============================================================================
 // Auction Feature — Type Definitions
-// Now aligned with backend Mongoose schema (_id → id mapping happens in API)
-// ============================================================================
+// Backend authorization is authoritative. UI capability names are API aliases;
+// canonical policy keys remain the source of truth internally.
 
-export type AuctionStatus =
-  | "draft"
-  | "scheduled"
-  | "live"
-  | "paused"
-  | "completed";
+import strict from "assert/strict";
 
+export type AuctionStatus = "draft" | "scheduled" | "live" | "paused" | "completed";
 export type RoundStatus = "pending" | "active" | "completed";
-
-export type RoundType =
-  | "marquee"
-  | "capped"
-  | "uncapped"
-  | "overseas"
-  | "accelerated";
-
+export type RoundType = "marquee" | "capped" | "uncapped" | "overseas" | "accelerated";
 export type PlayerRole = "Batter" | "Bowler" | "All-Rounder" | "Wicket-Keeper";
-
 export type PlayerStatus = "pending" | "current" | "sold" | "unsold";
+
+export type AuctionPermission =
+  | "MANAGE_AUCTION"
+  | "UPDATE_RULES"
+  | "MANAGE_ROUNDS"
+  | "START_AUCTION"
+  | "PAUSE_AUCTION"
+  | "RESUME_AUCTION"
+  | "COMPLETE_AUCTION"
+  | "OPEN_LOT"
+  | "SETTLE_LOT"
+  | "PLACE_BID";
+
+export type UserRole = "ADMIN" | "ORGANIZER" | "FRANCHISE_OWNER" | "PLAYER" | string;
+
+export type PermissionReason =
+  | "ALLOWED"
+  | "USER_INACTIVE"
+  | "ROLE_LACKS_CAPABILITY"
+  | "NOT_RESOURCE_OWNER"
+  | "AUCTION_COMPLETED"
+  | "AUCTION_NOT_DRAFT_OR_SCHEDULED"
+  | "AUCTION_NOT_LIVE"
+  | "AUCTION_NOT_PAUSED"
+  | string;
+
+export interface AuctionPermissionDecision {
+  allowed: boolean;
+  reason: PermissionReason;
+}
+
+/** Exact policy payload returned by GET /auctions/:id/permissions. */
+export interface AuctionPermissions {
+  policyVersion: number;
+  permissions: Record<AuctionPermission, boolean>;
+  reasons: Record<AuctionPermission, PermissionReason>;
+  ownsAuction: boolean;
+  ownsTournament: boolean;
+  role: UserRole;
+  auctionStatus: Uppercase<AuctionStatus> | string;
+
+  
+  canManageRounds: boolean;
+  canUpdateRules: boolean;
+
+  // API-boundary aliases. These are convenience fields, never policy inputs.
+  canManageAuction: boolean;
+  canStart: boolean;
+  canPause: boolean;
+  canResume: boolean;
+  canOpenLot: boolean;
+  canComplete: boolean;
+  canBid: boolean;
+  canMarkSold: boolean;
+  canMarkUnsold: boolean;
+  canAccessRoundManagement: boolean;
+  canAccessAuctionControls: boolean;
+  canAccessRulesEditor: boolean;
+
+  ownsTournamentTeam: boolean;
+
+  tournamentTeamApproved: boolean;
+
+  tournamentTeamId: string | null;
+}
 
 export interface PlayerStats {
   matches: number;
@@ -31,31 +83,44 @@ export interface PlayerStats {
   strikeRate: number;
 }
 
+// Add these fields to the Player interface
 export interface Player {
   id: string;
   name: string;
+  fullName?: string;           // ← NEW: raw from Player.js
   role: PlayerRole;
   country: string;
   overseas: boolean;
   age: number;
-  basePrice: number; // in lakhs
-  soldPrice?: number; // in lakhs
+  basePrice: number;
+  soldPrice?: number;
   teamId?: string;
   status: PlayerStatus;
   stats: PlayerStats;
   tag?: "marquee" | "star" | "uncapped";
   avatarSeed: string;
+  profileImage?: string;
+  
+  // ── NEW FIELDS ──
+  battingStyle?: string;        // ← "Right-hand Bat", "Left-hand Bat", etc.
+  bowlingStyle?: string;      // ← "Right-arm Fast", "Left-arm Spin", etc.
+  bio?: string;                // ← Player biography (max 1000 chars)
+  category?: string;           // ← Tournament category
+  soldAt?: string;             // ← ISO timestamp when sold
+  soldToTeamName?: string;     // ← Populated team name for sold state
 }
+
+// Add role icon mapping for Wicket-Keeper
+// In your constants file, ensure ROLE_ICONS covers:
+// "Batter" → "🏏"
+// "Bowler" → "🎾" or "🏐"  
+// "All-Rounder" → "⭐"
+// "Wicket-Keeper" → "🧤"
 
 export interface AuctionRound {
   id: string;
   auctionId: string;
   name: string;
-  // Backend AuctionRound.js stores `type` as free text (default: "normal",
-  // maxlength 40) with no enum constraint — RoundType only documents the
-  // values the UI has copy/styling for via RoundTypeBadge. Widened so
-  // "normal" and any other organizer-entered label round-trips without
-  // lying to the type checker.
   type: RoundType | (string & {});
   order: number;
   status: RoundStatus;
@@ -67,37 +132,41 @@ export interface Franchise {
   name: string;
   shortName: string;
   owner: string;
+  ownerId: string;
+  franchiseId:string;
   colorFrom: string;
   colorTo: string;
-  purseTotal: number; // in lakhs
-  spent: number; // in lakhs
+  purseTotal: number;
+  spent: number;
+  /** Money locked by this team's own currently-leading bid(s) — already
+   *  subtracted from wallet.remainingBudget server-side (see
+   *  TournamentTeam.js `reserve`/`releaseReservation`). Must be subtracted
+   *  again here too when computing "remaining", or the UI overstates what
+   *  the team can still spend. */
+  reservedBudget: number;
   maxSquadSize: number;
   maxOverseas: number;
-  squad: string[]; // player ids
+  squad: string[];
+  /** Absolute URL, mirrors Franchise.js's `logo` validator (http(s) only).
+   *  Often unset — always render with a fallback. */
+  logo?: string;
+  city?: string;           // ← NEW
+  description?: string;  
 }
 
 export interface Bid {
   id: string;
   playerId: string;
   teamId: string;
-  amount: number; // in lakhs
+  amount: number;
   timestamp: number;
   roundId: string;
   isUser?: boolean;
 }
 
 export type AuctionLogType =
-  | "start"
-  | "pause"
-  | "resume"
-  | "lot_open"
-  | "bid"
-  | "sold"
-  | "unsold"
-  | "round_complete"
-  | "complete"
-  | "connect"
-  | "disconnect";
+  | "start" | "pause" | "resume" | "lot_open" | "bid" | "sold"
+  | "unsold" | "round_complete" | "complete" | "connect" | "disconnect";
 
 export interface AuctionLog {
   id: string;
@@ -107,8 +176,8 @@ export interface AuctionLog {
 }
 
 export interface BidIncrementTier {
-  upTo: number | null; // lakhs, null = infinity
-  increment: number; // lakhs
+  upTo: number | null;
+  increment: number;
 }
 
 export interface AuctionRules {
@@ -133,18 +202,9 @@ export interface Auction {
   tournamentId?: string;
 }
 
-export interface TimerState {
-  remaining: number;
-  total: number;
-  isRunning: boolean;
-}
+export interface TimerState { remaining: number; total: number; isRunning: boolean; }
+export interface CurrentBidState { amount: number; teamId: string | null; }
 
-export interface CurrentBidState {
-  amount: number;
-  teamId: string | null;
-}
-
-/** Full snapshot broadcast by the live-auction engine on every mutation. */
 export interface LiveAuctionSnapshot {
   auction: Auction;
   rounds: AuctionRound[];
@@ -164,13 +224,9 @@ export interface LiveAuctionSnapshot {
   playersSoldCount: number;
   playersUnsoldCount: number;
   totalMoneySpent: number;
-  viewerCount: number; // NEW: pushed via Socket.IO in real-time
+  viewerCount: number;
 }
 
-/**
- * Shape returned by GET /auctions/:id/snapshot (see auctionApi.getSnapshot).
- * This is the REST-poll equivalent of LiveAuctionSnapshot.
- */
 export interface AuctionSnapshot {
   auction: Auction;
   rounds: AuctionRound[];
@@ -189,28 +245,5 @@ export interface AuctionSnapshot {
   viewerCount: number;
 }
 
-export interface AuctionPermissions {
-  canStart: boolean;
-  canPause: boolean;
-  canResume: boolean;
-  canOpenLot: boolean;
-  canComplete: boolean;
-  canBid: boolean;
-  canMarkSold: boolean;
-  canMarkUnsold: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// API contract types (backend returns these wrappers)
-// ---------------------------------------------------------------------------
-export interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  message?: string;
-}
-
-export interface ApiError {
-  success: false;
-  message: string;
-  code?: string;
-}
+export interface ApiResponse<T> { success: boolean; data: T; message?: string; }
+export interface ApiError { success: false; message: string; code?: string; }

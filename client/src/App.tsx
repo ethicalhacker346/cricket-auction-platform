@@ -1,10 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
+import { useState } from "react";
+import { AnimatePresence } from "framer-motion";
 
 import { useAuthStore } from "@/store/authStore";
 import { ProtectedRoute } from "@/routes/ProtectedRoutes";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoutes";
+import OpeningLandingPage from "@/features/landing/OpeningLandingPage";
 
 import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
@@ -47,9 +50,18 @@ function RootRedirect() {
 }
 
 export default function App() {
+  const [showOpening, setShowOpening] = useState(true);
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <AnimatePresence mode="wait">
+          {showOpening && (
+            <OpeningLandingPage
+              duration={5200}
+              onComplete={() => setShowOpening(false)}
+            />
+          )}
+        </AnimatePresence>
         <Toaster
           position="top-right"
           toastOptions={{
@@ -186,25 +198,47 @@ export default function App() {
             }
           />
 
+          <Route
+            path="/tournaments/:tournamentId/auction/create"
+            element={
+              <ProtectedRoute>
+                <CreateAuctionPage />
+              </ProtectedRoute>
+            }
+          />
+
           {/* === AUCTION ROUTES (Nested under /auctions) === */}
           <Route
-            path="/auctions/*"
+            path="/tournaments/:tournamentId/auction/:auctionId"
             element={
               <ProtectedRoute>
                 <AuctionShell />
               </ProtectedRoute>
             }
           >
-            <Route index element={<AuctionDashboardPage />} />
-            <Route path="create" element={<CreateAuctionPage />} />
+            <Route
+              index
+              element={
+               <Navigate
+                 to="dashboard"
+                 replace
+               />
+              } 
+            />
+
+            <Route
+              path="dashboard"
+              element={<AuctionDashboardPage/>}
+            />
+            <Route path="configuration" element={<CreateAuctionPage />} />
             <Route path="rounds" element={<AuctionRoundsPage />} />
             <Route path="rounds/:roundId" element={<RoundEditorPage />} />
             <Route path="live" element={<LiveAuctionPage />} />
             <Route path="team" element={<FranchiseAuctionPage />} />
             <Route path="history" element={<AuctionHistoryPage />} />
             <Route path="analytics" element={<AuctionAnalyticsPage />} />
-            <Route path="result" element={<AuctionResultPage />} />
-            <Route path="*" element={<Navigate to="/auctions" replace />} />
+            <Route path="results" element={<AuctionResultPage />} />
+            <Route path="*" element={<Navigate to="../dashboard" replace />} />
           </Route>
 
           {/* 404 */}

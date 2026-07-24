@@ -10,8 +10,14 @@ import { RegistrationService } from '../services/registration.service.js';
  * We fall back to parsing req.originalUrl which is immutable.
  */
 function getTournamentId(req) {
+  // 1. Direct param from registration router (mergeParams: true)
   if (req.params.tournamentId) return req.params.tournamentId;
-  const match = req.originalUrl?.match(/\/tournaments\/([^/]+)\/registrations/);
+
+  // 2. Direct param from tournament router (/:id/players)
+  if (req.params.id) return req.params.id;
+
+  // 3. Fallback: parse from URL — handles both /registrations/ and /players/
+  const match = req.originalUrl?.match(/\/tournaments\/([^/]+)\/(?:registrations|players)/);
   return match?.[1];
 }
 

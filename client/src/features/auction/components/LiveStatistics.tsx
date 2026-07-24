@@ -29,15 +29,15 @@ function StatTile({
 export function LiveStatistics() {
   const { players, playersSoldCount, playersUnsoldCount, totalMoneySpent } = useLiveAuction();
   const total = players.length;
-  const remaining = total - playersSoldCount - playersUnsoldCount;
-  const avgPrice = playersSoldCount > 0 ? totalMoneySpent / playersSoldCount : 0;
+  const remaining = total - (playersSoldCount ?? 0) - (playersUnsoldCount ?? 0);
+  const avgPrice = playersSoldCount && playersSoldCount > 0 ? totalMoneySpent / playersSoldCount : 0;
 
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
       <StatTile
         icon={Trophy}
         label="Players Sold"
-        value={`${playersSoldCount}`}
+        value={`${playersSoldCount ?? 0}`}
         accent="bg-emerald-500/15 text-emerald-300"
       />
       <StatTile
@@ -49,7 +49,7 @@ export function LiveStatistics() {
       <StatTile
         icon={Coins}
         label="Total Spent"
-        value={formatLakhs(totalMoneySpent)}
+        value={formatLakhs(totalMoneySpent ?? 0)}
         accent="bg-amber-500/15 text-amber-300"
       />
       <StatTile

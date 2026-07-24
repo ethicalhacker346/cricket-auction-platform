@@ -9,15 +9,18 @@
  * Event emissions are fire-and-forget AFTER commit, never before.
  */
 
-import mongoose from 'mongoose';
-import { Auction } from '../models/Auction.js';
-import { AuctionRound } from '../models/AuctionRound.js';
-import { Bid } from '../models/Bid.js';
-import { Tournament } from '../models/Tournament.js';
-import { TournamentPlayer } from '../models/TournamentPlayer.js';
-import { TournamentTeam } from '../models/TournamentTeam.js';
-import { AuctionViewer, VIEWER_HEARTBEAT_TTL_SECONDS } from '../models/AuctionViewer.js';
-import { AppError, assertFound } from '../utils/helpers.js';
+import mongoose from "mongoose";
+import { Auction } from "../models/Auction.js";
+import { AuctionRound } from "../models/AuctionRound.js";
+import { Bid } from "../models/Bid.js";
+import { Tournament } from "../models/Tournament.js";
+import { TournamentPlayer } from "../models/TournamentPlayer.js";
+import { TournamentTeam } from "../models/TournamentTeam.js";
+import {
+  AuctionViewer,
+  VIEWER_HEARTBEAT_TTL_SECONDS,
+} from "../models/AuctionViewer.js";
+import { AppError, assertFound } from "../utils/helpers.js";
 import {
   AUCTION_STATUS,
   AUCTION_LOG_ACTIONS,
@@ -26,8 +29,10 @@ import {
   REGISTRATION_STATUS,
   ROUND_STATUS,
   TOURNAMENT_STATUS,
-} from '../config/constants.js';
-import { TournamentService } from './tournament.service.js';
+} from "../config/constants.js";
+import { TournamentService } from "./tournament.service.js";
+import { AuctionAuthorizationService } from "./auction-authorization.service.js";
+import { AUCTION_PERMISSIONS } from "./permission.engine.js";
 
 // ---- NEW: Domain Events Import (only additive) ----
 import {
@@ -44,9 +49,9 @@ import {
   emitLotOpened,
   emitLiveStateUpdated,
   emitViewerCountUpdated,
-} from '../events/auction.events.js';
-import eventBus from '../events/eventBus.js';
-import { AUCTION_EVENTS } from '../events/auction.events.js';
+} from "../events/auction.events.js";
+import eventBus from "../events/eventBus.js";
+import { AUCTION_EVENTS } from "../events/auction.events.js";
 
 export class AuctionService {
   static buildDefaultTiers(tournament) {
@@ -58,45 +63,67 @@ export class AuctionService {
     TournamentService.assertOrganizerAccess(tournament, user);
 
     if (tournament.status !== TOURNAMENT_STATUS.TEAMS_APPROVED) {
-      throw new AppError('Teams must be approved before creating an auction', 400);
+      throw new AppError(
+        "Teams must be approved before creating an auction",
+        400,
+      );
     }
 
     const existing = await Auction.findOne({ tournamentId });
     if (existing) {
-      throw new AppError('Auction already exists for this tournament', 409);
+      throw new AppError("Auction already exists for this tournament", 409);
     }
 
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
+      const auctionConfiguration = {
+        pursePerTeam: tournament.defaultPurse,
+        squadSize: tournament.squadSize,
+        maxTeams: tournament.maxTeams,
+        currency: tournament.currency,
+        lotTimerSeconds: payload.lotTimerSeconds ?? tournament.lotTimerSeconds,
+        bidResetSeconds: payload.bidResetSeconds ?? 12,
+        minimumBidIncrement: tournament.minBidIncrement,
+        bidIncrementTiers: payload.bidIncrementTiers?.length
+          ? payload.bidIncrementTiers
+          : AuctionService.buildDefaultTiers(tournament),
+        registrationDeadline:
+          tournament.registrationDeadline ??
+          payload.registrationDeadline ??
+          null,
+        copiedAt: new Date(),
+      };
+
       const [auction] = await Auction.create(
         [
           {
             tournamentId,
             name: payload.name,
-            bidIncrementTiers: payload.bidIncrementTiers?.length
-              ? payload.bidIncrementTiers
-              : AuctionService.buildDefaultTiers(tournament),
-            lotTimerSeconds: payload.lotTimerSeconds ?? tournament.lotTimerSeconds,
+            auctionConfiguration,
+            bidIncrementTiers: auctionConfiguration.bidIncrementTiers,
+            lotTimerSeconds: auctionConfiguration.lotTimerSeconds,
+            bidResetSeconds: auctionConfiguration.bidResetSeconds,
             scheduledAt: payload.scheduledAt,
-            bidResetSeconds:
-                payload.bidResetSeconds ?? 12,
             status: AUCTION_STATUS.DRAFT,
             logs: [
               {
                 action: AUCTION_LOG_ACTIONS.AUCTION_CREATED,
                 userId: user._id,
-                message: 'Auction created',
+                message: "Auction created",
               },
             ],
           },
         ],
-        { session }
+        { session },
       );
 
       console.log(payload.bidIncrementTiers);
 
-      await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_SCHEDULED, session);
+      await tournament.transitionTo(
+        TOURNAMENT_STATUS.AUCTION_SCHEDULED,
+        session,
+      );
       await session.commitTransaction();
 
       console.log(payload.bidIncrementTiers);
@@ -122,36 +149,58 @@ export class AuctionService {
   }
 
   static async getByTournamentOrFail(tournamentId) {
-    return assertFound(await Auction.findOne({ tournamentId }), 'Auction not found for this tournament');
+    return assertFound(
+      await Auction.findOne({ tournamentId }),
+      "Auction not found for this tournament",
+    );
   }
 
   static async getById(auctionId) {
-    return assertFound(await Auction.findById(auctionId), 'Auction not found');
+    return assertFound(await Auction.findById(auctionId), "Auction not found");
   }
 
   static async getByIdPopulated(auctionId) {
-    return assertFound(await Auction.findById(auctionId).populate('tournamentId'), 'Auction not found');
+    return assertFound(
+      await Auction.findById(auctionId).populate("tournamentId"),
+      "Auction not found",
+    );
   }
 
-  static async assertOrganizer(auction, user) {
-    const tournament = await TournamentService.getById(auction.tournamentId);
-    TournamentService.assertOrganizerAccess(tournament, user);
-    return tournament;
+  // Backwards-compatible service boundary. All authorization now flows through
+  // the domain authorization service; no role-only check remains here.
+  static async assertOrganizer(
+    auction,
+    user,
+    permission = AUCTION_PERMISSIONS.MANAGE_AUCTION,
+    authorization = null,
+  ) {
+    const context = await AuctionAuthorizationService.assertPermission({
+      auctionId: auction._id,
+      user,
+      permission,
+      existingContext: authorization,
+    });
+    return context.tournament;
   }
 
-  static async addRound(auctionId, user, payload) {
+  static async addRound(auctionId, user, payload, authorization = null) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.MANAGE_ROUNDS,
+      existingContext: authorization,
+    });
 
     if (auction.status === AUCTION_STATUS.COMPLETED) {
-      throw new AppError('Cannot modify a completed auction', 400);
+      throw new AppError("Cannot modify a completed auction", 400);
     }
 
     const round = await AuctionRound.create({
       auctionId,
       name: payload.name,
       order: payload.order,
-      type: payload.type ?? 'normal',
+      type: payload.type ?? "normal",
       playerIds: payload.playerIds ?? [],
       status: ROUND_STATUS.PENDING,
     });
@@ -173,30 +222,89 @@ export class AuctionService {
     return round;
   }
 
-  static async updateRules(auctionId, user, payload = {}) {
+  static async updateRules(
+    auctionId,
+    user,
+    payload = {},
+    authorization = null,
+  ) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.UPDATE_RULES,
+      existingContext: authorization,
+    });
 
-    if (![AUCTION_STATUS.DRAFT, AUCTION_STATUS.SCHEDULED].includes(auction.status)) {
-      throw new AppError('Auction rules can only be edited while in DRAFT or SCHEDULED', 400);
+    if (
+      ![AUCTION_STATUS.DRAFT, AUCTION_STATUS.SCHEDULED].includes(auction.status)
+    ) {
+      throw new AppError(
+        "Auction rules can only be edited while in DRAFT or SCHEDULED",
+        400,
+      );
     }
 
     const patch = {};
-    if (payload.name !== undefined) patch.name = payload.name;
-    if (payload.bidIncrementTiers !== undefined) patch.bidIncrementTiers = payload.bidIncrementTiers;
-    if (payload.lotTimerSeconds !== undefined) patch.lotTimerSeconds = payload.lotTimerSeconds;
-    if (payload.bidResetSeconds !== undefined) patch.bidResetSeconds = payload.bidResetSeconds;
-    if (payload.scheduledAt !== undefined) patch.scheduledAt = payload.scheduledAt;
-
-    if (Object.keys(patch).length === 0) {
-      throw new AppError('No editable rule fields provided', 400);
+    if (payload.name !== undefined) {
+      patch.name = payload.name;
+      auction.name = payload.name;
+    }
+    if (payload.pursePerTeam !== undefined) {
+      auction.auctionConfiguration.pursePerTeam = payload.pursePerTeam;
+      patch.pursePerTeam = payload.pursePerTeam;
+    }
+    if (payload.squadSize !== undefined) {
+      auction.auctionConfiguration.squadSize = payload.squadSize;
+      patch.squadSize = payload.squadSize;
+    }
+    if (payload.maxTeams !== undefined) {
+      auction.auctionConfiguration.maxTeams = payload.maxTeams;
+      patch.maxTeams = payload.maxTeams;
+    }
+    if (payload.currency !== undefined) {
+      auction.auctionConfiguration.currency = payload.currency;
+      patch.currency = payload.currency;
+    }
+    if (payload.lotTimerSeconds !== undefined) {
+      auction.auctionConfiguration.lotTimerSeconds = payload.lotTimerSeconds;
+      patch.lotTimerSeconds = payload.lotTimerSeconds;
+      auction.lotTimerSeconds = payload.lotTimerSeconds;
+    }
+    if (payload.bidResetSeconds !== undefined) {
+      auction.auctionConfiguration.bidResetSeconds = payload.bidResetSeconds;
+      patch.bidResetSeconds = payload.bidResetSeconds;
+      auction.bidResetSeconds = payload.bidResetSeconds;
+    }
+    if (payload.minimumBidIncrement !== undefined) {
+      auction.auctionConfiguration.minimumBidIncrement =
+        payload.minimumBidIncrement;
+      patch.minimumBidIncrement = payload.minimumBidIncrement;
+    }
+    if (payload.bidIncrementTiers !== undefined) {
+      auction.auctionConfiguration.bidIncrementTiers =
+        payload.bidIncrementTiers;
+      patch.bidIncrementTiers = payload.bidIncrementTiers;
+      auction.bidIncrementTiers = payload.bidIncrementTiers;
+    }
+    if (payload.registrationDeadline !== undefined) {
+      auction.auctionConfiguration.registrationDeadline =
+        payload.registrationDeadline;
+      patch.registrationDeadline = payload.registrationDeadline;
+    }
+    if (payload.scheduledAt !== undefined) {
+      patch.scheduledAt = payload.scheduledAt;
+      auction.scheduledAt = payload.scheduledAt;
     }
 
-    Object.assign(auction, patch);
+    if (Object.keys(patch).length === 0) {
+      throw new AppError("No editable rule fields provided", 400);
+    }
+
     auction.logs.push({
       action: AUCTION_LOG_ACTIONS.RULES_UPDATED,
       userId: user._id,
-      message: 'Auction rules updated',
+      message: "Auction rules updated",
       metadata: patch,
     });
     await auction.save();
@@ -215,18 +323,38 @@ export class AuctionService {
     return AuctionRound.find({ auctionId }).sort({ order: 1 });
   }
 
-  static async updateRound(auctionId, roundId, user, patch = {}) {
+  static async updateRound(
+    auctionId,
+    roundId,
+    user,
+    patch = {},
+    authorization = null,
+  ) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.MANAGE_ROUNDS,
+      existingContext: authorization,
+    });
 
     if (auction.status === AUCTION_STATUS.COMPLETED) {
-      throw new AppError('Cannot modify rounds on a completed auction', 400);
+      throw new AppError("Cannot modify rounds on a completed auction", 400);
     }
 
-    const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }), 'Auction round not found');
+    const round = assertFound(
+      await AuctionRound.findOne({ _id: roundId, auctionId }),
+      "Auction round not found",
+    );
 
-    if (patch.playerIds !== undefined && round.status !== ROUND_STATUS.PENDING) {
-      throw new AppError('Cannot change playerIds on a round that has already started', 400);
+    if (
+      patch.playerIds !== undefined &&
+      round.status !== ROUND_STATUS.PENDING
+    ) {
+      throw new AppError(
+        "Cannot change playerIds on a round that has already started",
+        400,
+      );
     }
 
     if (patch.name !== undefined) round.name = patch.name;
@@ -254,14 +382,25 @@ export class AuctionService {
     return round;
   }
 
-  static async deleteRound(auctionId, roundId, user) {
+  static async deleteRound(auctionId, roundId, user, authorization = null) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.MANAGE_ROUNDS,
+      existingContext: authorization,
+    });
 
-    const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }), 'Auction round not found');
+    const round = assertFound(
+      await AuctionRound.findOne({ _id: roundId, auctionId }),
+      "Auction round not found",
+    );
 
     if (round.status !== ROUND_STATUS.PENDING) {
-      throw new AppError('Only a round with no auction activity can be deleted', 400);
+      throw new AppError(
+        "Only a round with no auction activity can be deleted",
+        400,
+      );
     }
 
     const roundName = round.name;
@@ -285,9 +424,16 @@ export class AuctionService {
     return { success: true };
   }
 
-  static async start(auctionId, user) {
+  static async start(auctionId, user, authorization = null) {
     const auction = await AuctionService.getById(auctionId);
-    const tournament = await AuctionService.assertOrganizer(auction, user);
+    const authorizationContext =
+      await AuctionAuthorizationService.assertPermission({
+        auctionId,
+        user,
+        permission: AUCTION_PERMISSIONS.START_AUCTION,
+        existingContext: authorization,
+      });
+    const tournament = authorizationContext.tournament;
 
     const approvedTeams = await TournamentTeam.countDocuments({
       tournamentId: auction.tournamentId,
@@ -295,7 +441,10 @@ export class AuctionService {
     });
 
     if (approvedTeams < 2) {
-      throw new AppError('At least two approved teams are required to start the auction', 400);
+      throw new AppError(
+        "At least two approved teams are required to start the auction",
+        400,
+      );
     }
 
     const session = await mongoose.startSession();
@@ -306,7 +455,7 @@ export class AuctionService {
       auction.logs.push({
         action: AUCTION_LOG_ACTIONS.AUCTION_STARTED,
         userId: user._id,
-        message: 'Auction started',
+        message: "Auction started",
       });
       await auction.save({ session });
       await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_RUNNING, session);
@@ -328,15 +477,20 @@ export class AuctionService {
     }
   }
 
-  static async pause(auctionId, user) {
+  static async pause(auctionId, user, authorization = null) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.PAUSE_AUCTION,
+      existingContext: authorization,
+    });
 
     await auction.transitionTo(AUCTION_STATUS.PAUSED);
     auction.logs.push({
       action: AUCTION_LOG_ACTIONS.AUCTION_PAUSED,
       userId: user._id,
-      message: 'Auction paused',
+      message: "Auction paused",
     });
     await auction.save();
 
@@ -348,15 +502,20 @@ export class AuctionService {
     return auction;
   }
 
-  static async resume(auctionId, user) {
+  static async resume(auctionId, user, authorization = null) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.RESUME_AUCTION,
+      existingContext: authorization,
+    });
 
     await auction.transitionTo(AUCTION_STATUS.LIVE);
     auction.logs.push({
       action: AUCTION_LOG_ACTIONS.AUCTION_RESUMED,
       userId: user._id,
-      message: 'Auction resumed',
+      message: "Auction resumed",
     });
     await auction.save();
 
@@ -368,19 +527,36 @@ export class AuctionService {
     return auction;
   }
 
-  static async openLot(auctionId, user, { tournamentPlayerId, roundId }) {
+  static async openLot(
+    auctionId,
+    user,
+    { tournamentPlayerId, roundId },
+    authorization = null,
+  ) {
     const auction = await AuctionService.getById(auctionId);
-    await AuctionService.assertOrganizer(auction, user);
+    await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.OPEN_LOT,
+      existingContext: authorization,
+    });
 
     if (auction.status !== AUCTION_STATUS.LIVE) {
-      throw new AppError('Auction must be live to open a lot', 400);
+      throw new AppError("Auction must be live to open a lot", 400);
     }
     if (auction.liveState?.lotStatus === LOT_STATUS.BIDDING) {
-      throw new AppError('A lot is already open — settle it before opening the next one', 400);
+      throw new AppError(
+        "A lot is already open — settle it before opening the next one",
+        400,
+      );
     }
 
-    const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }), 'Auction round not found');
+    const round = assertFound(
+      await AuctionRound.findOne({ _id: roundId, auctionId }),
+      "Auction round not found",
+    );
 
+    // Proper query with constants
     const tournamentPlayer = assertFound(
       await TournamentPlayer.findOne({
         _id: tournamentPlayerId,
@@ -388,73 +564,92 @@ export class AuctionService {
         status: REGISTRATION_STATUS.APPROVED,
         lotOutcome: { $in: [LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.UNSOLD] },
       }),
-      'Player not available for auction'
+      "Player not available for auction (must be APPROVED and not currently listed/sold)",
     );
 
-    if (round.status === ROUND_STATUS.PENDING) {
-      round.status = ROUND_STATUS.ACTIVE;
-      round.startedAt = new Date();
-      await round.save();
-    }
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    tournamentPlayer.lotOutcome = LOT_OUTCOME.IN_PROGRESS;
-    tournamentPlayer.auctionRoundId = round._id;
-    await tournamentPlayer.save();
-
-    auction.liveState = {
-      currentTournamentPlayerId: tournamentPlayer._id,
-      currentRoundId: round._id,
-      currentHighestBid: 0,
-      highestBidderTeamId: null,
-      remainingTimeSeconds: auction.lotTimerSeconds,
-      lotStatus: LOT_STATUS.BIDDING,
-      version: (auction.liveState?.version ?? 0) + 1,
-      updatedAt: new Date(),
-    };
-
-    auction.logs.push({
-      action: AUCTION_LOG_ACTIONS.LOT_OPENED,
-      userId: user._id,
-      message: `Lot opened for player ${tournamentPlayerId}`,
-      metadata: { tournamentPlayerId, roundId },
-    });
-
-    await auction.save();
-
-    // Populate for socket payload (nice UX: clients get full player immediately)
-    let populatedPlayer = tournamentPlayer;
     try {
-      populatedPlayer = await TournamentPlayer.findById(tournamentPlayer._id).populate('playerId');
-    } catch (_) {}
+      // Activate round if first lot
+      if (round.status === ROUND_STATUS.PENDING) {
+        round.status = ROUND_STATUS.ACTIVE;
+        round.startedAt = new Date();
+        await round.save({ session });
+      }
 
-    // --- SOCKET ---
-    emitLotOpened(auctionId, {
-      tournamentPlayerId: tournamentPlayer._id,
-      roundId: round._id,
-      currentPlayer: populatedPlayer,
-      currentRound: round,
-      liveState: auction.liveState,
-      openedBy: user._id,
-    });
+      // Update player
+      tournamentPlayer.lotOutcome = LOT_OUTCOME.IN_PROGRESS;
+      tournamentPlayer.auctionRoundId = round._id;
+      await tournamentPlayer.save({ session });
 
-    return auction;
+      // Update live state (optimistic concurrency via version)
+      auction.liveState = {
+        currentTournamentPlayerId: tournamentPlayer._id,
+        currentRoundId: round._id,
+        currentHighestBid: 0,
+        highestBidderTeamId: null,
+        remainingTimeSeconds: auction.lotTimerSeconds,
+        lotStatus: LOT_STATUS.BIDDING,
+        version: (auction.liveState?.version ?? 0) + 1,
+        updatedAt: new Date(),
+      };
+
+      auction.logs.push({
+        action: AUCTION_LOG_ACTIONS.LOT_OPENED,
+        userId: user._id,
+        message: `Lot opened for player ${tournamentPlayerId}`,
+        metadata: { tournamentPlayerId, roundId },
+      });
+
+      await auction.save({ session });
+
+      await session.commitTransaction();
+
+      // Populate for rich socket payload
+      const populatedPlayer = await TournamentPlayer.findById(
+        tournamentPlayer._id,
+      )
+        .populate("playerId")
+        .lean(); // or .exec()
+
+      // --- SOCKET EVENT ---
+      emitLotOpened(auctionId, {
+        tournamentPlayerId: tournamentPlayer._id,
+        roundId: round._id,
+        currentPlayer: populatedPlayer,
+        currentRound: round,
+        liveState: auction.liveState,
+        openedBy: user._id,
+      });
+
+      return auction;
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 
   // --- Viewer presence — now dual-write: DB + socket event ---
   static async heartbeatViewer(auctionId, viewerId, userId = null) {
     if (!viewerId) {
-      throw new AppError('viewerId is required', 400);
+      throw new AppError("viewerId is required", 400);
     }
     await AuctionViewer.findOneAndUpdate(
       { auctionId, viewerId },
-      { $set: { lastSeenAt: new Date(), userId }, $setOnInsert: { firstSeenAt: new Date() } },
-      { upsert: true }
+      {
+        $set: { lastSeenAt: new Date(), userId },
+        $setOnInsert: { firstSeenAt: new Date() },
+      },
+      { upsert: true },
     );
     const count = await AuctionService.getViewerCount(auctionId);
 
     // --- SOCKET ---
     emitViewerCountUpdated(auctionId, count, {
-      source: 'heartbeat',
+      source: "heartbeat",
       viewerId,
     });
 
@@ -466,7 +661,7 @@ export class AuctionService {
     const count = await AuctionService.getViewerCount(auctionId);
 
     emitViewerCountUpdated(auctionId, count, {
-      source: 'leave',
+      source: "leave",
       viewerId,
     });
 
@@ -475,20 +670,30 @@ export class AuctionService {
 
   static async getViewerCount(auctionId) {
     const cutoff = new Date(Date.now() - VIEWER_HEARTBEAT_TTL_SECONDS * 1000);
-    return AuctionViewer.countDocuments({ auctionId, lastSeenAt: { $gte: cutoff } });
+    return AuctionViewer.countDocuments({
+      auctionId,
+      lastSeenAt: { $gte: cutoff },
+    });
   }
 
   static async getLiveState(auctionId) {
     const auction = await AuctionService.getById(auctionId);
 
-    const [currentPlayer, currentRound, highestBidder, viewerCount] = await Promise.all([
-      auction.liveState?.currentTournamentPlayerId
-        ? TournamentPlayer.findById(auction.liveState.currentTournamentPlayerId).populate('playerId')
-        : null,
-      auction.liveState?.currentRoundId ? AuctionRound.findById(auction.liveState.currentRoundId) : null,
-      auction.liveState?.highestBidderTeamId ? TournamentTeam.findById(auction.liveState.highestBidderTeamId) : null,
-      AuctionService.getViewerCount(auctionId),
-    ]);
+    const [currentPlayer, currentRound, highestBidder, viewerCount] =
+      await Promise.all([
+        auction.liveState?.currentTournamentPlayerId
+          ? TournamentPlayer.findById(
+              auction.liveState.currentTournamentPlayerId,
+            ).populate("playerId")
+          : null,
+        auction.liveState?.currentRoundId
+          ? AuctionRound.findById(auction.liveState.currentRoundId)
+          : null,
+        auction.liveState?.highestBidderTeamId
+          ? TournamentTeam.findById(auction.liveState.highestBidderTeamId)
+          : null,
+        AuctionService.getViewerCount(auctionId),
+      ]);
 
     return {
       auctionId: auction._id,
@@ -504,22 +709,45 @@ export class AuctionService {
   static async getSnapshot(auctionId) {
     const auction = await AuctionService.getByIdPopulated(auctionId);
 
-    const [rounds, players, teams, bidHistory, viewerCount] = await Promise.all([
-      AuctionRound.find({ auctionId }).sort({ order: 1 }),
-      TournamentPlayer.find({ tournamentId: auction.tournamentId._id ?? auction.tournamentId }).populate('playerId'),
-      TournamentTeam.find({ tournamentId: auction.tournamentId._id ?? auction.tournamentId }),
-      Bid.find({ auctionId }).sort({ placedAt: -1 }).limit(100).populate('tournamentTeamId', 'name'),
-      AuctionService.getViewerCount(auctionId),
-    ]);
+    const [rounds, players, teams, bidHistory, viewerCount] = await Promise.all(
+      [
+        AuctionRound.find({ auctionId }).sort({ order: 1 }),
+        TournamentPlayer.find({
+          tournamentId: auction.tournamentId._id ?? auction.tournamentId,
+        }).populate("playerId"),
+        TournamentTeam.find({
+          tournamentId: auction.tournamentId._id ?? auction.tournamentId,
+        })
+          .populate("franchiseId")
+          .populate("ownerId", "name"),
+        Bid.find({ auctionId })
+          .sort({ placedAt: -1 })
+          .limit(100)
+          .populate("tournamentTeamId", "name"),
+        AuctionService.getViewerCount(auctionId),
+      ],
+    );
 
     const liveState = auction.liveState || {};
 
-    const elapsedSeconds = liveState.updatedAt ? (Date.now() - new Date(liveState.updatedAt).getTime()) / 1000 : 0;
+    const elapsedSeconds = liveState.updatedAt
+      ? (Date.now() - new Date(liveState.updatedAt).getTime()) / 1000
+      : 0;
     const trueRemaining =
-      liveState.lotStatus === LOT_STATUS.BIDDING ? Math.max(0, (liveState.remainingTimeSeconds ?? 0) - elapsedSeconds) : liveState.remainingTimeSeconds ?? 0;
+      liveState.lotStatus === LOT_STATUS.BIDDING
+        ? Math.max(0, (liveState.remainingTimeSeconds ?? 0) - elapsedSeconds)
+        : (liveState.remainingTimeSeconds ?? 0);
+
+    for (const team of teams) {
+      console.log({
+        id: team._id.toString(),
+        wallet: team.wallet,
+      });
+    }
 
     return {
       auction,
+      auctionConfiguration: auction.auctionConfiguration ?? null,
       rounds,
       players,
       franchises: teams,
@@ -534,8 +762,11 @@ export class AuctionService {
       },
       timer: {
         remaining: trueRemaining,
-        total: auction.lotTimerSeconds,
-        isRunning: liveState.lotStatus === LOT_STATUS.BIDDING && trueRemaining > 0,
+        total:
+          auction.auctionConfiguration?.lotTimerSeconds ??
+          auction.lotTimerSeconds,
+        isRunning:
+          liveState.lotStatus === LOT_STATUS.BIDDING && trueRemaining > 0,
       },
       lotStatus: liveState.lotStatus ?? LOT_STATUS.PENDING,
       version: liveState.version ?? 0,
@@ -567,9 +798,16 @@ export class AuctionService {
     return round;
   }
 
-  static async complete(auctionId, user) {
+  static async complete(auctionId, user, authorization = null) {
     const auction = await AuctionService.getById(auctionId);
-    const tournament = await AuctionService.assertOrganizer(auction, user);
+    const authorizationContext =
+      await AuctionAuthorizationService.assertPermission({
+        auctionId,
+        user,
+        permission: AUCTION_PERMISSIONS.COMPLETE_AUCTION,
+        existingContext: authorization,
+      });
+    const tournament = authorizationContext.tournament;
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -580,10 +818,13 @@ export class AuctionService {
       auction.logs.push({
         action: AUCTION_LOG_ACTIONS.AUCTION_COMPLETED,
         userId: user._id,
-        message: 'Auction completed',
+        message: "Auction completed",
       });
       await auction.save({ session });
-      await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_COMPLETED, session);
+      await tournament.transitionTo(
+        TOURNAMENT_STATUS.AUCTION_COMPLETED,
+        session,
+      );
       await session.commitTransaction();
 
       emitAuctionCompleted(auctionId, {

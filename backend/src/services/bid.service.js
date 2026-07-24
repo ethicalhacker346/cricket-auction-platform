@@ -1,18 +1,3 @@
-/**
- * bid.service.js — Enhanced with Domain Events for realtime bidding
- * -------------------------------------------------------------------
- * Preserves all existing transaction logic.
- * Adds post-commit event emissions for socket layer.
- *
- * Event flow:
- *  REST POST /auctions/:id/bids
- *    -> BidService.placeBid (TX)
- *    -> TX commit
- *    -> emitBidPlaced -> eventBus -> SocketPublisher -> io.to(room).emit('auction:bid:placed')
- *
- * Same for settleLot (SOLD/UNSOLD)
- */
-
 import mongoose from 'mongoose';
 import { Bid } from '../models/Bid.js';
 import { Auction } from '../models/Auction.js';
@@ -31,12 +16,30 @@ import {
 } from '../config/constants.js';
 import { AuctionService } from './auction.service.js';
 import { NotificationService } from './notification.service.js';
-
-// NEW: domain events
+import { AuctionAuthorizationService } from './auction-authorization.service.js';
+import { AUCTION_PERMISSIONS } from './permission.engine.js';
 import { emitBidPlaced, emitLotSold, emitLotUnsold } from '../events/auction.events.js';
 
 export class BidService {
-  static async placeBid(auctionId, user, { amount }) {
+  static async placeBid(auctionId, user, { amount }, authorization = null) {
+    // assertPermission returns the context it evaluated against — capture
+    // it, don't re-derive ownership from scratch below.
+    const context = await AuctionAuthorizationService.assertPermission({
+      auctionId,
+      user,
+      permission: AUCTION_PERMISSIONS.PLACE_BID,
+      existingContext: authorization,
+    });
+
+    const actingTeamId = context.ownership?.team?.id;
+    if (!actingTeamId) {
+      // Unreachable in practice — PermissionEngine already denies PLACE_BID
+      // with NOT_TOURNAMENT_TEAM_OWNER when there's no owned team — but
+      // never assume a context object handed in from outside this method
+      // (req.authorization, built by middleware) can't be stale or wrong.
+      throw new AppError('No approved tournament team found for this owner', 403);
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -63,8 +66,16 @@ export class BidService {
       previousHighestTeamId = liveState.highestBidderTeamId;
       roundId = liveState.currentRoundId;
 
+      // Re-resolved INSIDE the transaction, by _id — never by client input,
+      // and never by trusting the authorization context alone. ownerId and
+      // tournamentId are kept as belt-and-suspenders filters even though
+      // _id already pins the document: if actingTeamId were ever wrong,
+      // these stop it from touching someone else's team. status is
+      // re-checked here specifically to close the gap where a team is
+      // suspended/rejected between context build and transaction commit.
       const team = assertFound(
         await TournamentTeam.findOne({
+          _id: actingTeamId,
           tournamentId: auction.tournamentId,
           ownerId: user._id,
           status: REGISTRATION_STATUS.APPROVED,
@@ -80,7 +91,7 @@ export class BidService {
       const tournamentPlayer = await TournamentPlayer.findById(liveState.currentTournamentPlayerId).session(session);
 
       const effectiveMin =
-        liveState.currentHighestBid === 0 ? tournamentPlayer.basePrice : liveState.currentHighestBid + auction.bidIncrement;
+        liveState.currentHighestBid === 0 ? tournamentPlayer.basePrice : liveState.currentHighestBid + auction.getBidIncrement(liveState.currentHighestBid);
 
       if (amount < effectiveMin) {
         throw new AppError(`Bid must be at least ${effectiveMin}`, 400);
@@ -148,7 +159,6 @@ export class BidService {
       await auction.save({ session });
       await session.commitTransaction();
 
-      // Capture for post-commit emission
       finalBid = bid[0];
       finalLiveState = { ...auction.liveState.toObject?.() || auction.liveState };
       finalTeam = team;
@@ -161,12 +171,11 @@ export class BidService {
         data: { auctionId, bidId: bid[0]._id },
       });
 
-      // ---- SOCKET EVENT AFTER COMMIT (non-blocking) ----
       try {
         emitBidPlaced(auctionId, {
           bid: finalBid,
           tournamentPlayerId: liveState.currentTournamentPlayerId,
-          roundId: roundId,
+          roundId,
           amount,
           teamId: team._id,
           teamName: team.name,
@@ -188,7 +197,11 @@ export class BidService {
     }
   }
 
-  static async settleLot(auctionId, user, sold = true) {
+  // settleLot / listBids unchanged — SETTLE_LOT stays organizer-owner-gated,
+  // which was never in question.
+
+
+  static async settleLot(auctionId, user, sold = true, authorization = null) {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -201,7 +214,12 @@ export class BidService {
     try {
       const auction = assertFound(await Auction.findById(auctionId).session(session), 'Auction not found');
 
-      await AuctionService.assertOrganizer(auction, user);
+      await AuctionAuthorizationService.assertPermission({
+        auctionId,
+        user,
+        permission: AUCTION_PERMISSIONS.SETTLE_LOT,
+        existingContext: authorization,
+      });
 
       const liveState = auction.liveState;
       if (!liveState?.currentTournamentPlayerId) {

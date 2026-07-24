@@ -24,21 +24,12 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/Button";
 import { useLiveAuction } from "@/features/auction/hooks/index.hook";
 import { useLiveAuctionStore } from "@/features/auction/store/index.store";
-import { formatSeconds } from "@/features/auction/utils/index.utils";
-import { CRORE } from "@/features/auction/constants/index.constants";
+import { formatSeconds, formatLakhs } from "@/features/auction/utils/index.utils";
 import type { Auction, AuctionRound, BidIncrementTier } from "@/features/auction/types/index.types";
 import { cn } from "@/lib/utils";
 
 /* ═════════════════════════════════════════════════════════════════
    TOURNAMENT-OWNED DEFAULTS
-   These belong to Tournament, not Auction — they exist before an
-   Auction document does, and are what the Empty state should surface
-   instead of borrowing fields (rounds, bidIncrement, scheduledAt)
-   that only make sense once an Auction actually exists.
-   NOTE: field names on the Tournament record itself weren't in the
-   files reviewed here — TournamentPage maps whatever the real
-   Tournament type exposes into this shape; adjust the mapping there
-   if the backend uses different names.
    ═════════════════════════════════════════════════════════════════ */
 export interface TournamentAuctionDefaults {
   purse?: number; // lakhs
@@ -82,35 +73,29 @@ export function canShowAuctionModule(status?: string): boolean {
 }
 
 /* ═════════════════════════════════════════════════════════════════
-   ROUTING
-   App.tsx mounts the entire auction feature at a store-driven shell:
+   ROUTING — useAuctionNavigate
 
-     <Route path="/auctions/*" element={<AuctionShell />}>
-       <Route index element={<AuctionDashboardPage />} />
-       <Route path="create" .../> <Route path="live" .../> <Route path="result" .../>
-       ...
-     </Route>
+   CRITICAL FIX: App.tsx defines auction routes under:
+     /tournaments/:tournamentId/auction/:auctionId/*
 
-   None of those routes carry a tournamentId or auctionId param — the
-   shell resolves "which auction" from useLiveAuctionStore. So every
-   navigation out of this module has to bootstrap the store with the
-   right ids *before* routing, or the destination page lands with no
-   context. That bootstrap call is the load-bearing part; the path
-   string is secondary.
+   The legacy /auctions/* paths do NOT exist. Every navigation must
+   include tournamentId and (when applicable) auctionId in the path.
 
-   BUG FIX: "load-bearing" turned out to be only half true. bootstrap()
-   only fires when opts.auctionId is set — correct, since it connects the
-   live-poll engine and there's nothing to poll without an auction. But
-   that meant routes reached *before* an auction exists (Create Auction)
-   never recorded tournamentId in the store at all, despite the caller
-   knowing it. The `state: { tournamentId }` passthrough below existed to
-   compensate, but the receiving page (CreateAuctionPage) was reading only
-   the store, not location.state — so the compensation silently did
-   nothing and the store just stayed empty. Now goTo() always records
-   context via setTournamentContext() when there's no auctionId yet, and
-   CreateAuctionPage reads location.state first with the store as a
-   fallback — fixed from both ends so neither page depends on the other
-   getting it exactly right.
+   Route mapping:
+     Create Auction (no auction yet):
+       /tournaments/:tournamentId/auction/create
+
+     Auction Dashboard (auction exists):
+       /tournaments/:tournamentId/auction/:auctionId/dashboard
+
+     Live Auction:
+       /tournaments/:tournamentId/auction/:auctionId/live
+
+     Results:
+       /tournaments/:tournamentId/auction/:auctionId/results
+
+     Configuration (rules editor):
+       /tournaments/:tournamentId/auction/:auctionId/configuration
    ═════════════════════════════════════════════════════════════════ */
 function useAuctionNavigate() {
   const navigate = useNavigate();
@@ -119,12 +104,24 @@ function useAuctionNavigate() {
 
   return useCallback(
     (path: string, opts: { auctionId?: string; tournamentId: string; state?: Record<string, unknown> }) => {
+      if (!opts.tournamentId) {
+        console.error("[AuctionModule] Cannot navigate: tournamentId is undefined");
+        return;
+      }
+
       if (opts.auctionId) {
         bootstrap(opts.auctionId, opts.tournamentId);
       } else {
         setTournamentContext(opts.tournamentId);
       }
-      navigate(path, opts.state ? { state: opts.state } : undefined);
+
+      const mergedState = {
+        ...opts.state,
+        tournamentId: opts.tournamentId,
+        auctionId: opts.auctionId,
+      };
+
+      navigate(path, { state: mergedState });
     },
     [navigate, bootstrap, setTournamentContext]
   );
@@ -168,15 +165,6 @@ function NavButton({
 /* ═════════════════════════════════════════════════════════════════
    FORMATTING
    ═════════════════════════════════════════════════════════════════ */
-function formatLakhs(amountInLakhs: number): string {
-  if (!amountInLakhs) return "₹0";
-  if (amountInLakhs >= CRORE) {
-    const cr = amountInLakhs / CRORE;
-    return `₹${cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(2)} Cr`;
-  }
-  return `₹${amountInLakhs} L`;
-}
-
 function describeIncrement(tiers?: BidIncrementTier[]): string {
   if (!tiers?.length) return "—";
   const first = formatLakhs(tiers[0].increment);
@@ -377,11 +365,22 @@ function AuctionModuleEmpty({
         {isOrganizer && (
           <div className="flex w-full flex-col items-end gap-1.5 sm:w-auto">
             <span className="text-[11px] font-medium uppercase tracking-wide text-amber-600/70">Next step</span>
+            {/*
+              Route: /tournaments/:tournamentId/auction/create
+              This matches the standalone route in App.tsx that renders
+              CreateAuctionPage outside of AuctionShell (no auction exists
+              yet to shell around).
+            */}
             <NavButton
               label="Create Auction"
               icon={Gavel}
               className="w-full sm:w-auto"
-              onGo={() => goTo("/auctions/create", { tournamentId, state: { tournamentId } })}
+              onGo={() =>
+                goTo(`/tournaments/${tournamentId}/auction/create`, {
+                  tournamentId,
+                  state: { tournamentId },
+                })
+              }
             />
           </div>
         )}
@@ -438,7 +437,12 @@ function AuctionModuleDraft({
             label="Continue Setup"
             icon={Settings2}
             className="w-full sm:w-auto"
-            onGo={() => goTo("/auctions", { auctionId: auction.id, tournamentId })}
+            onGo={() =>
+              goTo(`/tournaments/${tournamentId}/auction/${auction.id}/dashboard`, {
+                auctionId: auction.id,
+                tournamentId,
+              })
+            }
           />
         )}
       </div>
@@ -527,7 +531,12 @@ function AuctionModuleScheduled({
           {role === "organizer" && (
             <NavButton
               label="Open Dashboard"
-              onGo={() => goTo("/auctions", { auctionId: auction.id, tournamentId })}
+              onGo={() =>
+                goTo(`/tournaments/${tournamentId}/auction/${auction.id}/dashboard`, {
+                  auctionId: auction.id,
+                  tournamentId,
+                })
+              }
             />
           )}
         </div>
@@ -539,9 +548,7 @@ function AuctionModuleScheduled({
 /* ═════════════════════════════════════════════════════════════════
    LIVE STATE CARD — shared shell for "live" and "paused". Subscribes
    to the real-time snapshot via useLiveAuction so the tournament page
-   feels alive before anyone enters the live room. This does open a
-   websocket connection while this card is on screen — a deliberate
-   trade-off for the richer preview; it closes when the card unmounts.
+   feels alive before anyone enters the live room.
    ═════════════════════════════════════════════════════════════════ */
 function LiveSnapshotCard({
   auction,
@@ -555,14 +562,26 @@ function LiveSnapshotCard({
   paused: boolean;
 }) {
   const goTo = useAuctionNavigate();
-  const live = useLiveAuction(auction.id, tournamentId);
+  // useLiveAuction takes ResolveAuctionIdsOptions object, not positional args.
+  // We pass explicit IDs so it works even when this component is rendered
+  // outside the AuctionShell route hierarchy (e.g. on TournamentPage).
+  const live = useLiveAuction({ auctionId: auction.id, tournamentId });
   const isCurrentAuction = live.auctionId === auction.id;
 
   const totalPlayers = isCurrentAuction ? live.players.length : 0;
   const resolvedPlayers = isCurrentAuction ? live.playersSoldCount + live.playersUnsoldCount : 0;
   const timerCritical = isCurrentAuction && live.timer.remaining <= 5 && live.timer.remaining > 0;
 
-  const destination = role === "organizer" ? "/auctions" : "/auctions/live";
+  // Destination paths updated to match App.tsx nested routes.
+  // Organizer goes to dashboard (control room), others go to live page.
+  const destination = paused
+    ? role === "organizer"
+      ? `/tournaments/${tournamentId}/auction/${auction.id}/dashboard`
+      : `/tournaments/${tournamentId}/auction/${auction.id}/live`
+    : role === "organizer"
+    ? `/tournaments/${tournamentId}/auction/${auction.id}/dashboard`
+    : `/tournaments/${tournamentId}/auction/${auction.id}/live`;
+
   const ctaLabel = paused
     ? role === "organizer"
       ? "Resume from Dashboard"
@@ -609,7 +628,12 @@ function LiveSnapshotCard({
               "w-full sm:w-auto",
               paused ? "bg-white text-slate-900 hover:bg-amber-50" : "bg-white text-slate-900 hover:bg-rose-50"
             )}
-            onGo={() => goTo(destination, { auctionId: auction.id, tournamentId })}
+            onGo={() =>
+              goTo(destination, {
+                auctionId: auction.id,
+                tournamentId,
+              })
+            }
           />
         </div>
 
@@ -687,7 +711,12 @@ function AuctionModuleCompleted({ auction, tournamentId }: { auction: Auction; t
           label="View Results"
           variant="outline"
           className="w-full sm:w-auto"
-          onGo={() => goTo("/auctions/result", { auctionId: auction.id, tournamentId })}
+          onGo={() =>
+            goTo(`/tournaments/${tournamentId}/auction/${auction.id}/results`, {
+              auctionId: auction.id,
+              tournamentId,
+            })
+          }
         />
       </div>
     </motion.div>
@@ -696,11 +725,6 @@ function AuctionModuleCompleted({ auction, tournamentId }: { auction: Auction; t
 
 /* ═════════════════════════════════════════════════════════════════
    AUCTION MODULE — the single entry point.
-   Purely presentational: TournamentPage owns the auction fetch (one
-   useAuction call, one cache) and passes it in, so future consumers
-   (a hero badge, a header pill) can share the same data without a
-   second request. This component only resolves which state to show
-   and how each role should act on it.
    ═════════════════════════════════════════════════════════════════ */
 export function AuctionModule({
   tournament,
@@ -716,7 +740,7 @@ export function AuctionModule({
   playersCount,
   defaults,
 }: {
-  tournament: any;
+  tournament: { id: string; status?: string; name?: string; organizerName?: string; organizerId?: string };
   isOwner: boolean;
   user: any;
   eligible: boolean;
@@ -739,12 +763,7 @@ export function AuctionModule({
   else if (!auction) state = "empty";
   else if (auction.status === "completed") state = "completed";
   else if (auction.status === "paused") state = "paused";
-  else if (auction.status === "live" || auction.status === "running") state = "live";
-  // The backend's AUCTION_STATUS enum is DRAFT → LIVE → PAUSED → COMPLETED —
-  // there is no SCHEDULED status. "Scheduled" is a UI-only distinction
-  // within DRAFT: has the organizer set scheduledAt yet, or not. Trusting
-  // auction.status === "scheduled" here would never match anything, since
-  // the backend never sets it.
+  else if (auction.status === "live") state = "live";
   else if (auction.status === "draft" && auction.scheduledAt) state = "scheduled";
   else state = "draft";
 

@@ -1,7 +1,6 @@
-import { useMemo } from "react";
-import { Loader2, ShieldAlert, Gavel } from "lucide-react";
+import { Loader2, ShieldAlert, Gavel, WifiOff, RadioTower } from "lucide-react";
 import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   useAuth,
   useLiveAuction,
@@ -29,12 +28,17 @@ export default function LiveAuctionPage() {
   const {
     currentRound,
     currentPlayer,
+    nextBidAmount,
     status,
     connection,
     serverLatencyMs,
-  } = useLiveAuction(storeAuctionId || undefined, storeTournamentId || undefined);
+  } = useLiveAuction({
+    auctionId: storeAuctionId || undefined,
+    tournamentId: storeTournamentId || undefined,
+  });
 
   const permissions = useAuctionPermissions();
+  const reduceMotion = useReducedMotion();
 
   // Auth & hydration guards
   if (!hasHydrated) {
@@ -83,7 +87,7 @@ export default function LiveAuctionPage() {
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
+      initial={reduceMotion ? false : { opacity: 0 }}
       animate={{ opacity: 1 }}
       className="mx-auto -mt-1 max-w-[1500px] space-y-4 pb-4"
     >
@@ -91,11 +95,25 @@ export default function LiveAuctionPage() {
 
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-black text-white sm:text-2xl">Live Auction Room</h1>
           <AuctionStatusBadge status={status} />
+          {status === "live" && connection === "connected" && (
+            <span className="hidden items-center gap-1 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-400 ring-1 ring-emerald-400/30 sm:flex">
+              <RadioTower className="h-3 w-3" /> Live
+            </span>
+          )}
           {currentRound && (
             <CurrentRoundBadge name={currentRound.name} type={currentRound.type} />
+          )}
+          {/* Server permissions are authoritative (see @deprecated note on
+             computePermissions in index.utils.ts) — this chip is purely
+             informational, reflecting the decision already fetched here,
+             not deriving one client-side. */}
+          {!permissions.loading && (
+            <span className="hidden items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 ring-1 ring-white/10 sm:flex">
+              Viewing as {permissions.canManageAuction ? "Organizer" : permissions.canBid ? "Team" : "Spectator"}
+            </span>
           )}
         </div>
 
@@ -119,13 +137,40 @@ export default function LiveAuctionPage() {
         </div>
       </div>
 
+      {(connection === "reconnecting" || connection === "offline") && (
+        <div
+          role="status"
+          className="flex items-center gap-2.5 rounded-xl border border-amber-400/20 bg-amber-400/10 px-4 py-2.5 text-xs text-amber-200"
+        >
+          <WifiOff className="h-4 w-4 shrink-0" />
+          {connection === "offline"
+            ? "Lost connection to the live auction — retrying automatically. What you're seeing may be a few seconds behind."
+            : "Reconnecting to the live auction — data may be a few seconds behind until it catches up."}
+        </div>
+      )}
+
       <LiveStatistics />
 
       {/* Main 3-column layout */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)_minmax(0,1fr)]">
+      <motion.div
+        initial={reduceMotion ? false : "hidden"}
+        animate="show"
+        variants={{
+          hidden: {},
+          show: { transition: { staggerChildren: 0.08 } },
+        }}
+        className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)_minmax(0,1fr)]"
+      >
         {/* Column 1: current lot + controls */}
-        <div className="space-y-4">
-          <PlayerAuctionCard player={currentPlayer} />
+        <motion.div
+          variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
+          className="space-y-4"
+        >
+          <PlayerAuctionCard
+             player={currentPlayer}
+             nextBidAmount={nextBidAmount}
+             compact={false}
+           />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] p-5">
               <AuctionClock
@@ -137,24 +182,30 @@ export default function LiveAuctionPage() {
           </div>
           <FranchisePanel />
           <AuctionControls />
-        </div>
+        </motion.div>
 
         {/* Column 2: bid feed + logs */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1 xl:gap-4">
+        <motion.div
+          variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1 xl:gap-4"
+        >
           <div className="h-80">
             <BidHistoryPanel limit={14} />
           </div>
           <div className="h-80">
             <AuctionLogs limit={14} />
           </div>
-        </div>
+        </motion.div>
 
         {/* Column 3: sidebar */}
-        <div className="space-y-4">
+        <motion.div
+          variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
+          className="space-y-4"
+        >
           <PlayerQueue />
           <RoundProgress />
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
 
       <AuctionFooter />
     </motion.div>
