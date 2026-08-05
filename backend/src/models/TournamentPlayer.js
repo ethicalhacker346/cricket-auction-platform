@@ -78,6 +78,11 @@ const tournamentPlayerSchema = new mongoose.Schema(
       min: 0,
     },
     soldAt: Date,
+    permanentUnsoldAt: Date,
+    permanentUnsoldBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
   },
   {
     timestamps: true,
@@ -120,6 +125,19 @@ tournamentPlayerSchema.pre('validate', function enforceSoldFieldsConsistency(nex
   }
   if (this.soldPrice != null && this.soldPrice < this.basePrice) {
     return next(new Error('soldPrice cannot be less than basePrice'));
+  }
+  next();
+});
+
+// NEW: permanent unsold consistency
+tournamentPlayerSchema.pre('validate', function enforcePermanentUnsoldConsistency(next) {
+  if (this.lotOutcome === LOT_OUTCOME.PERMANENT_UNSOLD) {
+    if (!this.permanentUnsoldAt || !this.permanentUnsoldBy) {
+      return next(new Error('permanentUnsoldAt and permanentUnsoldBy are required when lotOutcome is PERMANENT_UNSOLD'));
+    }
+    if (this.isSold || this.soldToTeamId || this.soldPrice) {
+      return next(new Error('A permanently unsold player cannot carry sold state'));
+    }
   }
   next();
 });

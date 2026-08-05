@@ -53,6 +53,7 @@ export const LOT_OUTCOME = Object.freeze({
   IN_PROGRESS: 'IN_PROGRESS',
   SOLD: 'SOLD',
   UNSOLD: 'UNSOLD',
+  PERMANENT_UNSOLD: 'PERMANENT_UNSOLD',
 });
 
 export const PLAYER_ROLES = Object.freeze({
@@ -85,6 +86,16 @@ export const LOT_STATUS = Object.freeze({
   BIDDING: 'BIDDING',
   SOLD: 'SOLD',
   UNSOLD: 'UNSOLD',
+  PERMANENT_UNSOLD: 'PERMANENT_UNSOLD'
+});
+
+// ------------------------------------------------------------------
+// ROUND_TYPE
+// ------------------------------------------------------------------
+
+export const ROUND_TYPE = Object.freeze({
+  NORMAL: 'normal',
+  UNSOLD: 'unsold',
 });
 
 export const ROUND_STATUS = Object.freeze({
@@ -119,6 +130,8 @@ export const AUCTION_LOG_ACTIONS = Object.freeze({
   BID_PLACED: 'BID_PLACED',
   LOT_SOLD: 'LOT_SOLD',
   LOT_UNSOLD: 'LOT_UNSOLD',
+  UNSOLD_ROUND_CREATED: 'UNSOLD_ROUND_CREATED',
+  PERMANENT_UNSOLD_MARKED: 'PERMANENT_UNSOLD_MARKED',
 });
  
 

@@ -1,7 +1,7 @@
 import { useAuthStore } from "@/store/authStore";
 import type {
   Auction, AuctionPermissions, AuctionRound, Bid, Franchise, Player,
-  BidIncrementTier, AuctionSnapshot,
+  BidIncrementTier, AuctionSnapshot, PlayerRole,
 } from "@/features/auction/types/index.types";
 import { normalizeAuctionPermissions } from "@/features/auction/utils/index.utils";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
@@ -32,6 +32,21 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 const stringId = (value: any): string => value?.toString?.() || value || "";
 
+/* ============================================================================
+   ROLE NORMALIZER  ← NEW
+   Backend enum: BATSMAN | BOWLER | ALL_ROUNDER | WICKET_KEEPER
+   Frontend contract: Batter | Bowler | All-Rounder | Wicket-Keeper
+   ============================================================================ */
+function normalizePlayerRole(role: string | undefined): PlayerRole {
+  if (!role) return "Batter";
+  const r = role.toUpperCase().replace(/[\s_-]/g, "");
+  if (r === "BATSMAN" || r === "BAT") return "Batter";
+  if (r === "BOWLER" || r === "BOWL") return "Bowler";
+  if (r === "ALLROUNDER" || r === "ALL_ROUNDER" || r === "AR") return "All-Rounder";
+  if (r === "WICKETKEEPER" || r === "WICKET_KEEPER" || r === "WK") return "Wicket-Keeper";
+  return role as PlayerRole;
+}
+
 export function mapPlayer(tp: any): Player {
   const playerDoc = tp.playerId;
   
@@ -39,7 +54,7 @@ export function mapPlayer(tp: any): Player {
     id: stringId(tp._id || tp.id),
     name: playerDoc?.fullName || tp.fullName || tp.name || "Unknown Player",
     fullName: playerDoc?.fullName || tp.fullName,
-    role: tp.primaryRole || tp.role,
+    role: normalizePlayerRole(tp.primaryRole || tp.role),   // ← FIX
     country: playerDoc?.nationality || tp.country || "",
     overseas: playerDoc?.overseas ?? tp.overseas ?? false,
     age: playerDoc?.age ?? tp.age ?? computeAge(playerDoc?.dateOfBirth) ?? 0,
@@ -70,17 +85,25 @@ function computeAge(dob?: string | Date): number | undefined {
   return age > 0 ? age : undefined;
 }
 
+// ------------------------------------------------------------------
+// mapLotOutcome — add PERMANENT_UNSOLD mapping
+// ------------------------------------------------------------------
 function mapLotOutcome(outcome?: string): Player["status"] {
-  return ({ NOT_LISTED: "pending", IN_PROGRESS: "current", SOLD: "sold", UNSOLD: "unsold" } as const)[outcome as any] || "pending";
+  return ({
+    NOT_LISTED: "pending",
+    IN_PROGRESS: "current",
+    SOLD: "sold",
+    UNSOLD: "unsold",
+    PERMANENT_UNSOLD: "permanent_unsold",
+  } as const)[outcome as any] || "pending";
 }
 
+
 export function mapFranchise(team: any): Franchise {
-  // ── FIX: Detect whether franchiseId is populated (object) or raw ObjectId (string) ──
   const franchiseDoc = team.franchiseId && typeof team.franchiseId === 'object' 
     ? team.franchiseId 
     : null;
   
-  // ── FIX: Detect whether ownerId is populated ──
   const ownerDoc = team.ownerId && typeof team.ownerId === 'object' 
     ? team.ownerId 
     : null;
@@ -93,7 +116,6 @@ export function mapFranchise(team: any): Franchise {
     0
   );
 
-  // Stable derived hue when no explicit brand colors are set
   const seed = franchiseDoc?.slug || franchiseDoc?.name || team.name || stringId(team._id);
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
@@ -125,7 +147,6 @@ export function mapFranchise(team: any): Franchise {
       10000,
     spent: team.wallet?.spentBudget ?? team.spent ?? spent,
     reservedBudget: team.wallet?.reservedBudget ?? team.reservedBudget ?? 0,
-    // ── NOTE: maxSquadSize / maxOverseas are patched by getSnapshot below ──
     maxSquadSize: 25,
     maxOverseas: 8,
     squad: roster,
@@ -182,6 +203,7 @@ export function mapRound(r: any): AuctionRound {
     auctionId: stringId(r.auctionId),
     name: r.name,
     type: r.type || "normal",
+    category: r.category ?? "CUSTOM",
     order: r.order,
     status: r.status?.toLowerCase?.() || r.status,
     playerIds: (r.playerIds || []).map(stringId),
@@ -243,13 +265,11 @@ export const auctionApi = {
     mapAuction(dataOf(await request<any>(`/auctions/${auctionId}/complete`, { method: "POST" }))),
   getLiveState: async (auctionId: string) => dataOf(await request<any>(`/auctions/${auctionId}/live`)),
   
-  // ── FIX: Normalize maxSquadSize / maxOverseas from auction rules onto every franchise ──
   getSnapshot: async (auctionId: string): Promise<AuctionSnapshot> => {
     const d = dataOf(await request<any>(`/auctions/${auctionId}/snapshot`));
     const auction = mapAuction(d.auction);
     
     const rawFranchises = (d.franchises || []).map(mapFranchise);
-    // Patch squad limits from auction rules (single source of truth)
     const franchises = rawFranchises.map((f) => ({
       ...f,
       maxSquadSize: auction.rules.maxSquadSize,
@@ -344,6 +364,11 @@ export const liveAuctionApi = {
     dataOf(await request<any>(`/auctions/${auctionId}/lot/sold`, { method: "POST" })),
   markUnsold: async (auctionId: string, _playerId: string) =>
     dataOf(await request<any>(`/auctions/${auctionId}/lot/unsold`, { method: "POST" })),
+  // NEW: organizer explicitly retires a player from the unsold pool
+  markPermanentUnsold: async (auctionId: string, tournamentPlayerId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/players/${tournamentPlayerId}/permanent-unsold`, {
+      method: "POST",
+    })),
 };
 
 export const bidApi = {

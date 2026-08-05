@@ -5,6 +5,7 @@ import type { Franchise, Player } from "@/features/auction/types/index.types";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
+import { useAuth } from "@/features/auction/hooks/index.hook";
 
 /* =============================================================================
    IMAGE FALLBACK HOOK
@@ -108,6 +109,9 @@ export function TeamBudgetCard({
   franchise: Franchise;
   players?: Player[];
 }) {
+  const { user } = useAuth();
+  const isYou = franchise.ownerId === user?.id;
+
   const reserved = franchise.reservedBudget ?? 0;
   const remaining = franchise.purseTotal - franchise.spent - reserved;
   const pctSpent = franchise.purseTotal > 0 ? (franchise.spent / franchise.purseTotal) * 100 : 0;
@@ -145,7 +149,14 @@ export function TeamBudgetCard({
         <div className="flex items-start gap-4">
           <TeamEmblem franchise={franchise} size="lg" />
           <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-extrabold text-white">{franchise.name}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-extrabold text-white">{franchise.name}</h3>
+              {isYou && (
+                <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-400 border border-emerald-500/20">
+                  You
+                </span>
+              )}
+            </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
               <span className="inline-flex items-center gap-1">
                 <User className="h-3 w-3" />
@@ -297,6 +308,9 @@ export function TeamRosterCard({
   franchise: Franchise;
   players?: Player[];
 }) {
+  const { user } = useAuth();
+  const isYou = franchise.ownerId === user?.id;
+
   // ── FIX: Null-safe filter ──
   const squad = useMemo(
     () => (players ?? []).filter((p) => franchise.squad?.includes(p.id) ?? false),
@@ -325,6 +339,11 @@ export function TeamRosterCard({
           <div>
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.15em] text-slate-400">
               <Shield className="h-3.5 w-3.5" /> Squad
+              {isYou && (
+                <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400 border border-emerald-500/20">
+                  You
+                </span>
+              )}
             </p>
             <p className="mt-0.5 text-[10px] text-slate-500">
               {squad.length} players · {overseasCount} overseas

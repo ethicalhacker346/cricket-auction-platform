@@ -151,7 +151,16 @@ export default function LiveAuctionPage() {
 
       <LiveStatistics />
 
-      {/* Main 3-column layout */}
+      {/* Main layout — three named areas (main / feed / side) instead of
+          three raw tracks. Going straight from a single column to the full
+          3-track desktop grid at `xl` left the 1024-1279px band squeezed
+          into one narrow column next to the persistent sidebar nav, and the
+          default grid `stretch` alignment forced every column to match the
+          height of the tallest one, which is what let the empty-state
+          player card (and short sidebar panels) balloon or float with dead
+          space. `items-start` stops that stretch, and the areas give us an
+          explicit 2-column tablet/small-laptop step instead of skipping
+          straight to 3. */}
       <motion.div
         initial={reduceMotion ? false : "hidden"}
         animate="show"
@@ -159,12 +168,17 @@ export default function LiveAuctionPage() {
           hidden: {},
           show: { transition: { staggerChildren: 0.08 } },
         }}
-        className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)_minmax(0,1fr)]"
+        className="grid grid-cols-1 items-start gap-4
+          [grid-template-areas:'main'_'feed'_'side']
+          lg:grid-cols-2
+          lg:[grid-template-areas:'main_main'_'feed_side']
+          xl:grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)_minmax(0,1fr)]
+          xl:[grid-template-areas:'main_feed_side']"
       >
         {/* Column 1: current lot + controls */}
         <motion.div
           variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
-          className="space-y-4"
+          className="min-w-0 space-y-4 [grid-area:main]"
         >
           <PlayerAuctionCard
              player={currentPlayer}
@@ -172,7 +186,7 @@ export default function LiveAuctionPage() {
              compact={false}
            />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+            <div className="flex min-w-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] p-5">
               <AuctionClock
                 auctionId={storeAuctionId || undefined}
                 tournamentId={storeTournamentId || undefined}
@@ -187,12 +201,12 @@ export default function LiveAuctionPage() {
         {/* Column 2: bid feed + logs */}
         <motion.div
           variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1 xl:gap-4"
+          className="grid min-w-0 grid-cols-1 gap-4 [grid-area:feed] sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-1"
         >
-          <div className="h-80">
+          <div className="h-80 min-w-0">
             <BidHistoryPanel limit={14} />
           </div>
-          <div className="h-80">
+          <div className="h-80 min-w-0">
             <AuctionLogs limit={14} />
           </div>
         </motion.div>
@@ -200,14 +214,14 @@ export default function LiveAuctionPage() {
         {/* Column 3: sidebar */}
         <motion.div
           variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
-          className="space-y-4"
+          className="min-w-0 space-y-4 [grid-area:side]"
         >
           <PlayerQueue />
           <RoundProgress />
         </motion.div>
       </motion.div>
 
-      <AuctionFooter />
+      <AuctionFooter auctionId={storeAuctionId || undefined} />
     </motion.div>
   );
 }

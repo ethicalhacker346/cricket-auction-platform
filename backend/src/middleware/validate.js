@@ -5,8 +5,14 @@ export function validate(schema, source = 'body') {
     const result = schema.safeParse(req[source]);
 
     if (!result.success) {
+      console.dir(result.error.issues, { depth: null });
+
       return next(
-        new AppError('Validation failed', 400, result.error.flatten().fieldErrors)
+        new AppError(
+            "Validation failed",
+              400,
+            result.error.flatten().fieldErrors
+         )
       );
     }
 

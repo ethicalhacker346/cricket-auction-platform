@@ -21,14 +21,11 @@ import {
 import { SOCKET_EVENTS, WS_URL } from "@/features/auction/constants/index.constants";
 import { io, Socket } from "socket.io-client";
 import { useAuthStore } from "@/store/authStore";
+import { StateDiffEmitter } from '@/features/auction/audio/StateDiffEmitter';
 
 type Listener = (snapshot: LiveAuctionSnapshot) => void;
 
-// Reconciliation interval: full snapshot fetch as a safety net for missed
-// socket events or state drift. In Socket.IO mode this is a backup; in
-// fallback REST mode this is the primary data source.
 const RECONCILE_INTERVAL_MS = 10000;
-// Local timer interpolation between server updates (socket or poll).
 const TICK_INTERVAL_MS = 250;
 
 export class AuctionEngine {
@@ -37,8 +34,8 @@ export class AuctionEngine {
   private listeners = new Set<Listener>();
   private socket: Socket | null = null;
   private intentionalDisconnect = false;
+  private diffEmitter = new StateDiffEmitter();
 
-  // Local cache
   private auction: Auction | null = null;
   private rounds: AuctionRound[] = [];
   private players: Player[] = [];
@@ -46,7 +43,6 @@ export class AuctionEngine {
   private bidHistory: Bid[] = [];
   private logs: AuctionLog[] = [];
 
-  // Live state
   private currentRoundId: string | null = null;
   private currentPlayerId: string | null = null;
   private currentBid = { amount: 0, teamId: null as string | null };
@@ -58,6 +54,8 @@ export class AuctionEngine {
 
   private soldEvent: LiveAuctionSnapshot["soldEvent"] = null;
   private unsoldEvent: LiveAuctionSnapshot["unsoldEvent"] = null;
+  // NEW: discrete event for permanent-unsold transitions (UI toasts / sounds)
+  private permanentUnsoldEvent: { playerId: string; seq: number } | null = null;
   private eventSeq = 0;
   private connection: LiveAuctionSnapshot["connection"] = "connecting";
   private latency = 40;
@@ -76,9 +74,6 @@ export class AuctionEngine {
     return this.connection === "connected" && this.auctionId !== null;
   }
 
-  // ---------------------------------------------------------------------------
-  // Connection lifecycle
-  // ---------------------------------------------------------------------------
   async connect(auctionId: string, tournamentId: string) {
     if (this.destroyed) return;
 
@@ -91,11 +86,8 @@ export class AuctionEngine {
     this.emit();
 
     try {
-      // 1. Hydrate immediately from REST so the UI isn't blank while the
-      //    socket handshake is in flight.
       await this.refreshSnapshot();
 
-      // 2. Attempt Socket.IO; degrade gracefully to REST polling on failure.
       let socketReady = false;
       try {
         await this.setupSocket(auctionId);
@@ -111,7 +103,6 @@ export class AuctionEngine {
       );
       this.emit();
 
-      // 3. Reconciliation poll: safety net for missed events / state drift.
       this.reconcileHandle = setInterval(() => this.refreshSnapshot(), RECONCILE_INTERVAL_MS);
       this.tickHandle = setInterval(() => this.tick(), TICK_INTERVAL_MS);
     } catch (err: any) {
@@ -157,9 +148,6 @@ export class AuctionEngine {
   private bindSocketEvents() {
     if (!this.socket) return;
 
-    // -----------------------------------------------------------------------
-    // Auction lifecycle
-    // -----------------------------------------------------------------------
     this.socket.on(SOCKET_EVENTS.AUCTION_STARTED, (payload: any) => {
       if (payload.auction) {
         this.auction = mapAuction(payload.auction);
@@ -209,9 +197,6 @@ export class AuctionEngine {
       this.emit();
     });
 
-    // -----------------------------------------------------------------------
-    // Round management
-    // -----------------------------------------------------------------------
     this.socket.on(SOCKET_EVENTS.ROUND_ADDED, (payload: any) => {
       if (payload.round) {
         const mapped = mapRound(payload.round);
@@ -250,12 +235,12 @@ export class AuctionEngine {
         round.status = "completed";
         this.pushLog("round_complete", `Round ${round.name || payload.round?.name} completed`);
         this.emit();
+        // NEW: backend may auto-create the unsold round or complete the auction
+        // immediately after the last normal round closes. Refresh to catch it.
+        setTimeout(() => this.refreshSnapshot(), 600);
       }
     });
 
-    // -----------------------------------------------------------------------
-    // Live bidding
-    // -----------------------------------------------------------------------
     this.socket.on(SOCKET_EVENTS.LOT_OPENED, (payload: any) => {
       this.currentPlayerId = payload.tournamentPlayerId;
       this.currentRoundId = payload.roundId;
@@ -265,7 +250,6 @@ export class AuctionEngine {
         this.applyLiveState(payload.liveState);
       }
 
-      // Merge player data if the socket payload includes the populated doc
       if (payload.currentPlayer) {
         const mapped = mapPlayer(payload.currentPlayer);
         const idx = this.players.findIndex((p) => p.id === mapped.id);
@@ -315,7 +299,6 @@ export class AuctionEngine {
         `${franchise?.shortName || payload.teamName || "Unknown"} bids ${formatQuick(payload.amount)}`
       );
 
-      // Anti-snipe: mirror the backend reset client-side for instant feedback
       const resetSeconds = this.auction?.rules?.bidResetSeconds ?? 12;
       if (this.timer.remaining < resetSeconds) {
         this.setTimerBaseline(resetSeconds, this.timer.total, true);
@@ -386,18 +369,11 @@ export class AuctionEngine {
       }
     });
 
-    // -----------------------------------------------------------------------
-    // Presence
-    // -----------------------------------------------------------------------
     this.socket.on(SOCKET_EVENTS.VIEWER_COUNT_UPDATED, (payload: any) => {
-      // Backend emits either a raw number or { count, source, viewerId }
       this.viewerCount = typeof payload === "number" ? payload : payload.count ?? this.viewerCount;
       this.emit();
     });
 
-    // -----------------------------------------------------------------------
-    // Connection resilience
-    // -----------------------------------------------------------------------
     this.socket.on("disconnect", (reason: string) => {
       if (this.intentionalDisconnect) return;
       this.connection = "reconnecting";
@@ -409,7 +385,6 @@ export class AuctionEngine {
       this.connection = "connected";
       this.socket?.emit("join:auction", this.auctionId);
       this.pushLog("connect", "Reconnected to live auction room");
-      // Re-hydrate to catch anything missed while disconnected
       this.refreshSnapshot();
       this.emit();
     });
@@ -452,6 +427,7 @@ export class AuctionEngine {
     if (this.tickHandle) clearInterval(this.tickHandle);
     this.reconcileHandle = null;
     this.tickHandle = null;
+    this.diffEmitter.reset(); 
     this.emit();
   }
 
@@ -461,9 +437,6 @@ export class AuctionEngine {
     this.listeners.clear();
   }
 
-  // ---------------------------------------------------------------------------
-  // Pub/sub
-  // ---------------------------------------------------------------------------
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     if (this.auction) listener(this.getSnapshot());
@@ -473,12 +446,15 @@ export class AuctionEngine {
   private emit() {
     if (this.destroyed) return;
     const snapshot = this.getSnapshot();
+    this.diffEmitter.emit(snapshot);
     this.listeners.forEach((l) => l(snapshot));
   }
 
   getSnapshot(): LiveAuctionSnapshot {
     const playersSoldCount = this.players.filter((p) => p.status === "sold").length;
     const playersUnsoldCount = this.players.filter((p) => p.status === "unsold").length;
+    // NEW: track permanent unsold separately — backend treats this as terminal
+    const playersPermanentUnsoldCount = this.players.filter((p) => p.status === "permanent_unsold").length;
     const totalMoneySpent = this.franchises.reduce((sum, f) => sum + f.spent, 0);
 
     return {
@@ -495,10 +471,13 @@ export class AuctionEngine {
       logs: [...this.logs].slice(0, 80),
       soldEvent: this.soldEvent,
       unsoldEvent: this.unsoldEvent,
+      // NEW: discrete event for UI consumption (toasts, sounds, analytics)
+      permanentUnsoldEvent: this.permanentUnsoldEvent,
       connection: this.connection,
       serverLatencyMs: this.latency,
       playersSoldCount,
       playersUnsoldCount,
+      playersPermanentUnsoldCount,
       totalMoneySpent,
       viewerCount: this.viewerCount,
     };
@@ -508,9 +487,6 @@ export class AuctionEngine {
     this.logs.unshift({ id: uid("log"), type, message, timestamp: Date.now() });
   }
 
-  // ---------------------------------------------------------------------------
-  // Local countdown interpolation between updates
-  // ---------------------------------------------------------------------------
   private tick() {
     if (!this.timer.isRunning) return;
     const elapsed = (Date.now() - this.timerSyncedAt) / 1000;
@@ -527,9 +503,6 @@ export class AuctionEngine {
     this.timerSyncedRemaining = remaining;
   }
 
-  // ---------------------------------------------------------------------------
-  // Snapshot fetch — reconciliation / initial hydration
-  // ---------------------------------------------------------------------------
   private async refreshSnapshot() {
     if (!this.auctionId || this.destroyed) return;
     try {
@@ -540,7 +513,6 @@ export class AuctionEngine {
       const unchanged = snapshot.version === this.lastVersion && this.auction !== null;
       this.lastVersion = snapshot.version;
 
-      // Capture previous players BEFORE overwriting for transition detection
       const previousPlayers = this.players;
 
       this.auction = snapshot.auction;
@@ -558,7 +530,6 @@ export class AuctionEngine {
         this.detectSoldUnsoldEvents(previousPlayers);
       }
 
-      // Merge server logs with client-only logs
       const serverLogIds = new Set(snapshot.logs.map((l) => l.id));
       const clientOnlyLogs = this.logs.filter((l) => !serverLogIds.has(l.id) && l.id.startsWith("log_"));
       this.logs = [...clientOnlyLogs, ...snapshot.logs]
@@ -592,92 +563,106 @@ export class AuctionEngine {
       } else if (player.status === "unsold") {
         this.eventSeq++;
         this.unsoldEvent = { playerId: player.id, seq: this.eventSeq };
+      } else if (player.status === "permanent_unsold") {
+        this.eventSeq++;
+        this.permanentUnsoldEvent = { playerId: player.id, seq: this.eventSeq };
       }
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Commands (REST — mutations still go via HTTP)
-  // ---------------------------------------------------------------------------
-  async start() {
-    if (!this.auctionId) return;
+  async start(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId) return { success: false, error: "No active auction" };
     try {
       this.auction = await auctionApi.startAuction(this.auctionId);
       this.pushLog("start", "Auction has started");
-      // Socket event will arrive momentarily; refresh immediately for sync
       await this.refreshSnapshot();
       this.emit();
+      return { success: true };
     } catch (e: any) {
-      this.pushLog("start", `Start failed: ${e.message}`);
-      this.emit();
+      const msg = e.message || "Start failed";
+      this.pushLog("start", `Start failed: ${msg}`);
+      return { success: false, error: msg };
     }
   }
 
-  async pause() {
-    if (!this.auctionId) return;
+  async pause(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId) return { success: false, error: "No active auction" };
     try {
       this.auction = await auctionApi.pauseAuction(this.auctionId);
       this.pushLog("pause", "Auction paused by organizer");
       this.emit();
+      return { success: true };
     } catch (e: any) {
-      this.pushLog("pause", `Pause failed: ${e.message}`);
-      this.emit();
+      const msg = e.message || "Pause failed";
+      this.pushLog("pause", `Pause failed: ${msg}`);
+      return { success: false, error: msg };
     }
   }
 
-  async resume() {
-    if (!this.auctionId) return;
+  async resume(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId) return { success: false, error: "No active auction" };
     try {
       this.auction = await auctionApi.resumeAuction(this.auctionId);
       this.pushLog("resume", "Auction resumed");
       await this.refreshSnapshot();
       this.emit();
+      return { success: true };
     } catch (e: any) {
-      this.pushLog("resume", `Resume failed: ${e.message}`);
-      this.emit();
+      const msg = e.message || "Resume failed";
+      this.pushLog("resume", `Resume failed: ${msg}`);
+      return { success: false, error: msg };
     }
   }
 
-  async complete() {
-    if (!this.auctionId) return;
+  async complete(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId) return { success: false, error: "No active auction" };
     try {
       this.auction = await auctionApi.completeAuction(this.auctionId);
       this.pushLog("complete", "Auction completed");
       this.disconnect();
       this.emit();
+      return { success: true };
     } catch (e: any) {
-      this.pushLog("complete", `Complete failed: ${e.message}`);
-      this.emit();
+      const msg = e.message || "Complete failed";
+      this.pushLog("complete", `Complete failed: ${msg}`);
+      return { success: false, error: msg };
     }
   }
 
-  async openNextLot() {
-    if (!this.auctionId || !this.auction) return;
+  /**
+   * Opens the next pending lot respecting round boundaries.
+   * 
+   * CRITICAL FIX: previously this flattened all rounds and auto-completed
+   * the auction when no pending players remained. That bypassed the unsold
+   * round entirely. Now it walks rounds in order, skips completed rounds,
+   * and never auto-completes — terminal completion is owned by the backend
+   * via maybeCompleteAuction() after the unsold round drains.
+   */
+  async openNextLot(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId || !this.auction) {
+      return { success: false, error: "No active auction" };
+    }
     const orderedRounds = [...this.rounds].sort((a, b) => a.order - b.order);
-    const flat = orderedRounds.flatMap((r) => r.playerIds);
-    const nextPlayerId = flat.find((pid) => {
-      const p = this.players.find((pl) => pl.id === pid);
-      return p?.status === "pending";
-    });
-
-    if (!nextPlayerId) {
-      await this.complete();
-      return;
+    for (const round of orderedRounds) {
+      if (round.status === "completed") continue;
+      const nextPlayerId = round.playerIds.find((pid) => {
+        const p = this.players.find((pl) => pl.id === pid);
+        return p?.status === "pending";
+      });
+      if (!nextPlayerId) continue;
+      try {
+        await liveAuctionApi.openLot(this.auctionId, nextPlayerId, round.id);
+        this.pushLog("lot_open", `Lot opened for player ${nextPlayerId}`);
+        await this.refreshSnapshot();
+        this.emit();
+        return { success: true };
+      } catch (e: any) {
+        const msg = e.message || "Open lot failed";
+        this.pushLog("lot_open", `Open lot failed: ${msg}`);
+        return { success: false, error: msg };
+      }
     }
-
-    const round = this.rounds.find((r) => r.playerIds.includes(nextPlayerId));
-    if (!round) return;
-
-    try {
-      await liveAuctionApi.openLot(this.auctionId, nextPlayerId, round.id);
-      this.pushLog("lot_open", `Lot opened for player ${nextPlayerId}`);
-      // Socket will push the official update; refresh for safety
-      await this.refreshSnapshot();
-      this.emit();
-    } catch (e: any) {
-      this.pushLog("lot_open", `Open lot failed: ${e.message}`);
-      this.emit();
-    }
+    return { success: false, error: "No remaining players in open rounds" };
   }
 
   async placeBid(
@@ -721,8 +706,6 @@ export class AuctionEngine {
       }
 
       this.emit();
-      // The socket will arrive with the authoritative update; give it a moment
-      // then reconcile. This also catches any concurrent bids we missed.
       setTimeout(() => this.refreshSnapshot(), 300);
       return { ok: true };
     } catch (e: any) {
@@ -730,27 +713,58 @@ export class AuctionEngine {
     }
   }
 
-  async forceSold() {
-    if (!this.auctionId || !this.currentPlayerId || !this.currentBid.teamId) return;
+  async forceSold(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId || !this.currentPlayerId || !this.currentBid.teamId) {
+      return { success: false, error: "No active lot or winning bid to settle" };
+    }
     try {
       await liveAuctionApi.markSold(this.auctionId, this.currentPlayerId, this.currentBid.teamId, this.currentBid.amount);
       this.pushLog("sold", `Force sold ${this.currentPlayerId}`);
       await this.refreshSnapshot();
       this.emit();
+      return { success: true };
     } catch (e: any) {
-      this.pushLog("sold", `Force sold failed: ${e.message}`);
+      const msg = e.message || "Force sold failed";
+      this.pushLog("sold", `Force sold failed: ${msg}`);
+      return { success: false, error: msg };
     }
   }
 
-  async forceUnsold() {
-    if (!this.auctionId || !this.currentPlayerId) return;
+  async forceUnsold(): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId || !this.currentPlayerId) {
+      return { success: false, error: "No active lot to settle" };
+    }
     try {
       await liveAuctionApi.markUnsold(this.auctionId, this.currentPlayerId);
       this.pushLog("unsold", `Force unsold ${this.currentPlayerId}`);
       await this.refreshSnapshot();
       this.emit();
+      return { success: true };
     } catch (e: any) {
-      this.pushLog("unsold", `Force unsold failed: ${e.message}`);
+      const msg = e.message || "Force unsold failed";
+      this.pushLog("unsold", `Force unsold failed: ${msg}`);
+      return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * NEW: Organizer explicitly retires a player from the unsold pool.
+   * This is the only way a player can reach PERMANENT_UNSOLD state.
+   */
+  async markPermanentUnsold(tournamentPlayerId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.auctionId) {
+      return { success: false, error: "No active auction" };
+    }
+    try {
+      await liveAuctionApi.markPermanentUnsold(this.auctionId, tournamentPlayerId);
+      this.pushLog("permanent_unsold_marked", `Player ${tournamentPlayerId} marked permanently unsold`);
+      await this.refreshSnapshot();
+      this.emit();
+      return { success: true };
+    } catch (e: any) {
+      const msg = e.message || "Failed to mark permanent unsold";
+      this.pushLog("permanent_unsold_marked", `Mark permanent unsold failed: ${msg}`);
+      return { success: false, error: msg };
     }
   }
 }

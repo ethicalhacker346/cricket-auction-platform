@@ -4,7 +4,6 @@ import { AuctionAuthorizationService } from '../services/auction-authorization.s
 
 export const auctionController = {
   create: async (req, res) => {
-
     console.log("Controller req.body", req.body);
     const auction = await AuctionService.create(req.params.tournamentId, req.user, req.body);
     console.log(req.body);
@@ -24,12 +23,6 @@ export const auctionController = {
   },
 
   getById: async (req, res) => {
-    // CHANGE: getByIdPopulated (not getById) — the service's getById() was
-    // slimmed down to stop populating tournamentId for internal callers
-    // (assertOrganizer, openLot, start, etc.). This route is the public
-    // GET /auctions/:auctionId and previously returned a populated
-    // tournament object, so it needs the populated variant explicitly to
-    // avoid silently changing the API response shape for existing clients.
     const auction = await AuctionService.getByIdPopulated(req.params.auctionId);
     return res.json({ success: true, data: auction });
   },
@@ -89,6 +82,19 @@ export const auctionController = {
     return res.json({ success: true, data: auction });
   },
 
+  // ------------------------------------------------------------------
+  // NEW: Mark a player as permanently unsold (unsold-round escape hatch).
+  // ------------------------------------------------------------------
+  markPermanentUnsold: async (req, res) => {
+    const player = await AuctionService.markPermanentUnsold(
+      req.params.auctionId,
+      req.params.tournamentPlayerId,
+      req.user,
+      req.authorization
+    );
+    return res.json({ success: true, data: player });
+  },
+
   getPermissions: async (req, res) => {
     const context = req.authorization || await AuctionAuthorizationService.buildContext({
       auctionId: req.params.auctionId,
@@ -103,6 +109,8 @@ export const auctionController = {
       canOpenLot: data.permissions.OPEN_LOT,
       canForceSold: data.permissions.SETTLE_LOT,
       canBid: data.permissions.PLACE_BID,
+      // NEW: expose the permanent-unsold capability to the UI
+      canMarkPermanentUnsold: data.permissions.MARK_PERMANENT_UNSOLD,
     };
     return res.json({ success: true, data: { ...aliases, ...data } });
   },
@@ -112,9 +120,6 @@ export const auctionController = {
     return res.json({ success: true, data: state });
   },
 
-  // Live viewer presence. No organizer check — any authenticated or
-  // anonymous spectator on the live screen is meant to be counted here;
-  // see AuctionService.heartbeatViewer for the reasoning.
   heartbeatViewer: async (req, res) => {
     const viewerCount = await AuctionService.heartbeatViewer(
       req.params.auctionId,
@@ -124,9 +129,6 @@ export const auctionController = {
     return res.json({ success: true, data: { viewerCount } });
   },
 
-  // Fired from the client's beforeunload/sendBeacon handler so the count
-  // drops immediately on a clean tab close instead of waiting for the
-  // heartbeat TTL to expire the presence row.
   leaveViewer: async (req, res) => {
     const viewerCount = await AuctionService.removeViewer(req.params.auctionId, req.body.viewerId);
     return res.json({ success: true, data: { viewerCount } });

@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { useLiveAuction } from "@/features/auction/hooks/index.hook";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
-import { RoundStatusBadge } from "./Badges";
+import { RoundStatusBadge, RoundTypeBadge, RoundCategoryBadge } from "./Badges";
 import { cn } from "@/utils/cn";
 
 /* ─── Helpers ─── */
@@ -63,23 +63,6 @@ function StyleChip({ children }: { children: React.ReactNode }) {
   return (
     <span className="rounded bg-white/5 px-1 py-0.5 text-[9px] text-slate-400 border border-white/5">
       {children}
-    </span>
-  );
-}
-
-const ROUND_TYPE_STYLES: Record<string, { gradient: string; text: string }> = {
-  marquee: { gradient: "from-amber-400 to-rose-500", text: "text-slate-950" },
-  capped: { gradient: "from-indigo-400 to-sky-400", text: "text-slate-950" },
-  uncapped: { gradient: "from-slate-400 to-slate-500", text: "text-white" },
-  overseas: { gradient: "from-sky-400 to-cyan-400", text: "text-slate-950" },
-  accelerated: { gradient: "from-emerald-400 to-teal-400", text: "text-slate-950" },
-};
-
-function RoundTypeBadge({ type }: { type: string }) {
-  const style = ROUND_TYPE_STYLES[type] || ROUND_TYPE_STYLES.uncapped;
-  return (
-    <span className={cn("rounded-full bg-gradient-to-r px-2 py-0.5 text-[9px] font-bold", style.gradient, style.text)}>
-      {type}
     </span>
   );
 }
@@ -214,11 +197,13 @@ export function RoundProgress() {
           const roundPlayers = players.filter((p) => r.playerIds.includes(p.id));
           const soldCount = roundPlayers.filter((p) => p.status === "sold").length;
           const unsoldCount = roundPlayers.filter((p) => p.status === "unsold").length;
+          const permanentunsoldCount = roundPlayers.filter((p) => p.status === "permanent_unsold").length;
           const pendingCount = roundPlayers.filter((p) => p.status === "pending").length;
           const totalInRound = r.playerIds.length;
 
           const soldPct = totalInRound > 0 ? (soldCount / totalInRound) * 100 : 0;
           const unsoldPct = totalInRound > 0 ? (unsoldCount / totalInRound) * 100 : 0;
+          const permUnsoldPct = totalInRound > 0 ? (permanentunsoldCount / totalInRound) * 100 : 0;
           const pendingPct = totalInRound > 0 ? (pendingCount / totalInRound) * 100 : 0;
 
           return (
@@ -261,7 +246,8 @@ export function RoundProgress() {
                   >
                     {r.name}
                   </span>
-                  {r.type && r.type !== "normal" && <RoundTypeBadge type={r.type} />}
+                  {r.category && <RoundCategoryBadge category={r.category} />}
+                  {r.type === "unsold" && <RoundTypeBadge type={r.type} />}
                 </div>
                 <RoundStatusBadge status={r.status} />
               </div>
@@ -275,6 +261,10 @@ export function RoundProgress() {
                   <div
                     className="h-full bg-rose-500 transition-all duration-500"
                     style={{ width: `${unsoldPct}%` }}
+                  />
+                   <div
+                    className="h-full bg-rose-300 transition-all duration-500"
+                    style={{ width: `${permUnsoldPct}%` }}
                   />
                   <div
                     className="h-full bg-white/10 transition-all duration-500"
@@ -295,6 +285,7 @@ export function RoundProgress() {
                     </span>
                   )}
                   {unsoldCount > 0 && <span className="text-rose-400">{unsoldCount} unsold</span>}
+                  {permanentunsoldCount > 0 && <span className="text-rose-300">{permanentunsoldCount} Perm.unsold</span>}
                   {pendingCount > 0 && <span className="text-slate-400">{pendingCount} pending</span>}
                 </span>
               </div>

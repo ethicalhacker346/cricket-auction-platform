@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, GripVertical, Loader2, Plus, Save, ShieldAlert, Trash2 } from "lucide-react";
+import { ArrowLeft, GripVertical, Loader2, Lock, Plus, Save, ShieldAlert, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -9,14 +9,47 @@ import {
   useAuctionPermissions,
 } from "@/features/auction/hooks/index.hook";
 import { playerApi } from "@/features/auction/api/index.api";
-import type { Player, RoundType } from "@/features/auction/types/index.types";
+import type { Player, AuctionRoundCategory } from "@/features/auction/types/index.types";
+import { RoundTypeBadge } from "@/features/auction/components/Badges";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
 import { useAuctionContext } from "../hooks/useAuctionContext";
 import { resolveAuctionRoute } from "../routes/auction.navigation";
 import { AuctionSegments } from "../routes/auction.routes";
 
-const TYPES: RoundType[] = ["marquee", "capped", "uncapped", "overseas", "accelerated"];
+// ============================================================================
+// Round CATEGORY — who a round is for. Editable here (organizer content).
+//
+// Round TYPE ("normal" | "unsold") is intentionally NOT editable in this
+// form. It's a structural/engine concept (AuctionRound.js / ROUND_TYPE):
+// the unsold round is auto-created by the auction engine, must always be
+// last, and rejects manual playerIds edits once it exists
+// (enforceUnsoldRoundPlayerIds). Flipping an existing round's type here
+// would bypass those invariants, so it's shown as a read-only badge instead.
+// ============================================================================
+const CATEGORIES: AuctionRoundCategory[] = [
+  "BATSMAN",
+  "BOWLER",
+  "ALL_ROUNDER",
+  "WICKET_KEEPER",
+  "CAPPED",
+  "UNCAPPED",
+  "OVERSEAS",
+  "MARQUEE",
+  "CUSTOM",
+];
+
+const CATEGORY_LABEL: Record<AuctionRoundCategory, string> = {
+  BATSMAN: "Batters",
+  BOWLER: "Bowlers",
+  ALL_ROUNDER: "All-Rounders",
+  WICKET_KEEPER: "Keepers",
+  CAPPED: "Capped",
+  UNCAPPED: "Uncapped",
+  OVERSEAS: "Overseas",
+  MARQUEE: "Marquee",
+  CUSTOM: "Custom",
+};
 
 export default function RoundEditorPage() {
   const { roundId } = useParams();
@@ -36,7 +69,7 @@ export default function RoundEditorPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [playersLoading, setPlayersLoading] = useState(true);
   const [name, setName] = useState("");
-  const [type, setType] = useState<RoundType>("capped");
+  const [category, setCategory] = useState<AuctionRoundCategory | string>("CUSTOM");
   const [playerIds, setPlayerIds] = useState<string[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [search, setSearch] = useState("");
@@ -74,7 +107,7 @@ export default function RoundEditorPage() {
   useEffect(() => {
     if (round) {
       setName(round.name);
-      setType(round.type);
+      setCategory(round.category ?? "CUSTOM");
       setPlayerIds(round.playerIds ?? []);
     }
   }, [round]);
@@ -168,7 +201,15 @@ export default function RoundEditorPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      await actions.update(round.id, { name, type, playerIds });
+      // playerIds on the "unsold" round are engine-managed — AuctionRound.js
+      // rejects manual edits to it once the round exists, so we never send
+      // it back in that case, even though local `playerIds` state mirrors
+      // it for display.
+      await actions.update(round.id, {
+        name,
+        category,
+        ...(isAutoManaged ? {} : { playerIds }),
+      });
       navigate(roundsRoute);
     } catch (e: any) {
       setSaveError(e.message || "Failed to save round");
@@ -177,6 +218,11 @@ export default function RoundEditorPage() {
   }
 
   const isLocked = round.status === "active" || round.status === "completed";
+  // Structural constraint from AuctionRound.js enforceUnsoldRoundPlayerIds:
+  // once an "unsold" round exists, its playerIds can only be changed by the
+  // auction engine (as lots go unsold), never manually.
+  const isAutoManaged = round.type === "unsold";
+  const playersEditable = !isLocked && !isAutoManaged;
 
   return (
     <motion.div
@@ -197,6 +243,17 @@ export default function RoundEditorPage() {
         </div>
       )}
 
+      {isAutoManaged && (
+        <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-slate-400">
+          <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+          <span>
+            This is the Unsold Pool round. Its player list is populated automatically by the
+            auction engine whenever a lot goes unsold, so it can&apos;t be edited manually here.
+            Name and category can still be updated.
+          </span>
+        </div>
+      )}
+
       {saveError && (
         <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-xs text-rose-400">
           {saveError}
@@ -213,18 +270,31 @@ export default function RoundEditorPage() {
             placeholder="Round name"
             className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-400/50 disabled:opacity-50 sm:col-span-2"
           />
+
           <select
-            value={type}
-            onChange={(e) => setType(e.target.value as RoundType)}
+            value={category}
+            onChange={(e) => setCategory(e.target.value as AuctionRoundCategory)}
             disabled={isLocked}
             className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-400/50 disabled:opacity-50"
           >
-            {TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
+            {CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {CATEGORY_LABEL[c]}
               </option>
             ))}
+            {/* Fallback keeps a legacy/unknown backend category selectable
+                instead of silently snapping to the first option. Category is
+                free-text server-side (AuctionRound.js), not an enum. */}
+            {!CATEGORIES.includes(category as AuctionRoundCategory) && (
+              <option value={category}>{category}</option>
+            )}
           </select>
+        </div>
+
+        {/* Type is structural, not organizer-editable — shown for context only */}
+        <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+          <span className="font-medium text-slate-400">Type:</span>
+          <RoundTypeBadge type={round.type} />
         </div>
       </div>
 
@@ -235,13 +305,15 @@ export default function RoundEditorPage() {
             Player Order ({assigned.length})
           </p>
           <p className="mb-3 text-[11px] text-slate-500">
-            Drag cards to reorder the sequence players will be auctioned in.
+            {isAutoManaged
+              ? "Players are added here automatically as lots go unsold."
+              : "Drag cards to reorder the sequence players will be auctioned in."}
           </p>
           <div className="space-y-2">
             {assigned.map((p, i) => (
               <div
                 key={p.id}
-                draggable={!isLocked}
+                draggable={playersEditable}
                 onDragStart={() => setDragIndex(i)}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => {
@@ -263,7 +335,7 @@ export default function RoundEditorPage() {
                 </div>
                 <button
                   onClick={() => setPlayerIds((prev) => prev.filter((id) => id !== p.id))}
-                  disabled={isLocked}
+                  disabled={!playersEditable}
                   className="text-slate-600 transition hover:text-rose-400 disabled:opacity-30"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -284,8 +356,9 @@ export default function RoundEditorPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            disabled={!playersEditable}
             placeholder="Search players…"
-            className="mb-3 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-400/50"
+            className="mb-3 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-400/50 disabled:opacity-50"
           />
           <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
             {playersLoading ? (
@@ -311,7 +384,8 @@ export default function RoundEditorPage() {
                   </div>
                   <button
                     onClick={() => setPlayerIds((prev) => [...prev, p.id])}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400/10 text-amber-300 transition hover:bg-amber-400/20"
+                    disabled={!playersEditable}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400/10 text-amber-300 transition hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-30"
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </button>

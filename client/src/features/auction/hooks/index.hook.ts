@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { auctionApi, auctionRoundApi, franchiseApi } from "@/features/auction/api/index.api";
+import { auctionApi, auctionRoundApi, franchiseApi, liveAuctionApi } from "@/features/auction/api/index.api";
 import type { AuctionSavePayload } from "@/features/auction/api/index.api";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
 import { getAuctionEngine, useBidUiStore, useLiveAuctionStore, useRoleStore } from "@/features/auction/store/index.store";
 import { useAuthStore } from "@/store/authStore";
 import type { User } from "@/types/auth";
-import type { Auction, AuctionPermissions, AuctionRound, Franchise } from "@/features/auction/types/index.types";
+import type { Auction, AuctionPermissions, AuctionRound, Franchise, Player } from "@/features/auction/types/index.types";
 import {
   formatSeconds,
   getApiErrorMessage,
@@ -600,4 +600,32 @@ export function useUserTeam(franchises: Franchise[]) {
     const targetId = user?.teamId || userTeamId;
     return franchises.find((f) => f.id === targetId) ?? null;
   }, [franchises, user, userTeamId]);
+}
+
+// ============================================================================
+// useUnsoldRoundActions — organizer escape-hatch for the unsold pool
+// ============================================================================
+export function useUnsoldRoundActions(auctionId?: string) {
+  const [marking, setMarking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const markPermanentUnsold = useCallback(
+    async (tournamentPlayerId: string) => {
+      if (!auctionId) throw new Error("No auction ID");
+      setMarking(true);
+      setError(null);
+      try {
+        const result = await liveAuctionApi.markPermanentUnsold(auctionId, tournamentPlayerId);
+        return result;
+      } catch (e: any) {
+        setError(e.message || "Failed to mark permanent unsold");
+        throw e;
+      } finally {
+        setMarking(false);
+      }
+    },
+    [auctionId]
+  );
+
+  return { markPermanentUnsold, marking, error };
 }

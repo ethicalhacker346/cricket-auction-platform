@@ -13,6 +13,8 @@ import {
   LOT_OUTCOME,
   REGISTRATION_STATUS,
   NOTIFICATION_TYPES,
+  ROUND_TYPE,
+  
 } from '../config/constants.js';
 import { AuctionService } from './auction.service.js';
 import { NotificationService } from './notification.service.js';
@@ -266,6 +268,8 @@ export class BidService {
           ownerId: winningTeam.ownerId,
         };
 
+        
+
         await NotificationService.create({
           userId: winningTeam.ownerId,
           type: NOTIFICATION_TYPES.AUCTION_UPDATE,
@@ -302,6 +306,8 @@ export class BidService {
 
         liveState.lotStatus = LOT_STATUS.UNSOLD;
       }
+
+      
 
       // Capture liveState before resetting
       liveStateForEvent = {

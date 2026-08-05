@@ -9,6 +9,8 @@ const UI_ALIASES = Object.freeze({
   canOpenLot: 'OPEN_LOT',
   canForceSold: 'SETTLE_LOT',
   canBid: 'PLACE_BID',
+  // NEW: align with POLICY_VERSION 3
+  canMarkPermanentUnsold: 'MARK_PERMANENT_UNSOLD',
 });
 
 export const auctionPermissionsController = {

@@ -41,68 +41,73 @@ import { cn } from "@/lib/utils";
 /* ═════════════════════════════════════════════════════════════════
    STATUS THEME
    ═════════════════════════════════════════════════════════════════ */
-const STATUS_THEME: Record<
-  string,
-  { gradient: string; badge: string; dot: string; text: string; glow: string }
-> = {
+const STATUS_THEME = {
   DRAFT: {
-    gradient: "from-slate-800 via-slate-900 to-slate-950",
+    gradient: "from-slate-600 via-slate-700 to-slate-800",
     badge: "bg-slate-100 text-slate-700 ring-slate-200",
     dot: "bg-slate-400",
     text: "text-slate-300",
     glow: "shadow-slate-500/10",
   },
+
   PLAYER_REGISTRATION_OPEN: {
-    gradient: "from-emerald-900 via-slate-900 to-emerald-950",
+    gradient: "from-emerald-700 via-slate-800 to-emerald-800",
     badge: "bg-emerald-100 text-emerald-700 ring-emerald-200",
     dot: "bg-emerald-400",
     text: "text-emerald-300",
     glow: "shadow-emerald-500/10",
   },
+
   TEAM_REGISTRATION_OPEN: {
-    gradient: "from-violet-900 via-slate-900 to-violet-950",
+    gradient: "from-violet-700 via-slate-800 to-violet-800",
     badge: "bg-violet-100 text-violet-700 ring-violet-200",
     dot: "bg-violet-400",
     text: "text-violet-300",
     glow: "shadow-violet-500/10",
   },
+
   TEAMS_APPROVED: {
-    gradient: "from-amber-900 via-slate-900 to-amber-950",
+    gradient: "from-amber-700 via-slate-800 to-amber-800",
     badge: "bg-amber-100 text-amber-700 ring-amber-200",
     dot: "bg-amber-400",
     text: "text-amber-300",
     glow: "shadow-amber-500/10",
   },
+
   AUCTION_SCHEDULED: {
-    gradient: "from-sky-900 via-slate-900 to-sky-950",
+    gradient: "from-sky-700 via-slate-800 to-sky-800",
     badge: "bg-sky-100 text-sky-700 ring-sky-200",
     dot: "bg-sky-400",
     text: "text-sky-300",
     glow: "shadow-sky-500/10",
   },
+
   AUCTION_RUNNING: {
-    gradient: "from-rose-900 via-slate-900 to-rose-950",
+    gradient: "from-rose-700 via-slate-800 to-rose-800",
     badge: "bg-rose-100 text-rose-700 ring-rose-200",
     dot: "bg-rose-400",
     text: "text-rose-300",
     glow: "shadow-rose-500/10",
   },
+
   AUCTION_COMPLETED: {
-    gradient: "from-teal-900 via-slate-900 to-teal-950",
+    gradient: "from-teal-700 via-slate-800 to-teal-800",
     badge: "bg-teal-100 text-teal-700 ring-teal-200",
     dot: "bg-teal-400",
     text: "text-teal-300",
     glow: "shadow-teal-500/10",
   },
+
   TOURNAMENT_COMPLETED: {
-    gradient: "from-indigo-900 via-slate-900 to-indigo-950",
+    gradient: "from-indigo-700 via-slate-800 to-indigo-800",
     badge: "bg-indigo-100 text-indigo-700 ring-indigo-200",
     dot: "bg-indigo-400",
     text: "text-indigo-300",
     glow: "shadow-indigo-500/10",
   },
+
   CANCELLED: {
-    gradient: "from-red-900 via-slate-900 to-red-950",
+    gradient: "from-red-700 via-slate-800 to-red-800",
     badge: "bg-red-100 text-red-700 ring-red-200",
     dot: "bg-red-400",
     text: "text-red-300",

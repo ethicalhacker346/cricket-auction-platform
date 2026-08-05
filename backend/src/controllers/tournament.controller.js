@@ -39,7 +39,9 @@ export const tournamentController = {
   update: async (req, res, next) => {
     try {
       const tournament = await TournamentService.update(req.params.id, req.user, req.body);
+      console.log(req.user);
       return res.json({ success: true, data: tournament });
+      console.log(tournament.organizerId);
     } catch (err) {
       next(err);
     }

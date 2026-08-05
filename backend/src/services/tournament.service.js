@@ -40,6 +40,10 @@ export class TournamentService {
 
     const [data, total] = await Promise.all([
       Tournament.find(filter)
+        .populate({
+          path: "organizerId",
+          select: "name",
+        })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -51,7 +55,7 @@ export class TournamentService {
   }
 
   static async getById(id) {
-    return assertFound(await Tournament.findById(id), 'Tournament not found');
+    return assertFound(await Tournament.findById(id) .populate({ path: "organizerId", select: "name", }), 'Tournament not found');
   }
 
   // Generic field updates only — status is never accepted here. Status
@@ -61,6 +65,8 @@ export class TournamentService {
   static async update(id, user, payload) {
     const tournament = await TournamentService.getById(id);
     TournamentService.assertOrganizerAccess(tournament, user);
+
+    console.log(tournament.organizerId);
 
     const { status: _ignoredStatus, ...safePayload } = payload;
 
@@ -155,12 +161,20 @@ export class TournamentService {
     return tournament;
   }
 
-  static assertOrganizerAccess(tournament, user) {
-    const isOrganizer = tournament.organizerId.toString() === user._id.toString();
+ static assertOrganizerAccess(tournament, user) {
+    const organizerId =
+        tournament.organizerId?._id || tournament.organizerId;
+
+    const isOrganizer =
+        organizerId.toString() === user._id.toString();
+
     const isAdmin = user.role === USER_ROLES.ADMIN;
 
     if (!isOrganizer && !isAdmin) {
-      throw new AppError('Only the tournament organizer can perform this action', 403);
+        throw new AppError(
+            "Only the tournament organizer can perform this action",
+            403
+        );
     }
   }
 }

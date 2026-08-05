@@ -219,12 +219,31 @@ export function PlayerAuctionCard({
   compact?: boolean;
   nextBidAmount?: number;
 }) {
-  /* ── Empty state ── */
+  /* ── Empty state ──
+     Deliberately NOT `h-full`: this card sits in a CSS grid column that
+     uses the default `stretch` alignment, so `h-full` here used to make
+     the card blow up to match whichever sibling column (bid feed / sidebar)
+     happened to be tallest — sometimes 2-3x taller than a real, populated
+     card. Height is intentionally self-contained instead, sized to roughly
+     match a populated card at each breakpoint so nothing visibly jumps when
+     a lot goes from "no player" to "player under the hammer" or back. */
   if (!player) {
     return (
-      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] text-center">
-        <Shield className="h-10 w-10 text-slate-700" />
-        <p className="text-sm text-slate-500">No player under the hammer right now</p>
+      <div
+        className={cn(
+          "flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-5 text-center",
+          compact ? "min-h-[120px]" : "min-h-[320px] sm:min-h-[380px] lg:min-h-[440px]"
+        )}
+      >
+        <div className="rounded-full bg-white/[0.03] p-3 ring-1 ring-white/5">
+          <Shield className="h-7 w-7 text-slate-600" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-slate-400">No player under the hammer</p>
+          {!compact && (
+            <p className="text-xs text-slate-600">The next lot will appear here the moment it goes live.</p>
+          )}
+        </div>
       </div>
     );
   }

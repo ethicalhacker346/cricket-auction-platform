@@ -6,9 +6,23 @@ import strict from "assert/strict";
 
 export type AuctionStatus = "draft" | "scheduled" | "live" | "paused" | "completed";
 export type RoundStatus = "pending" | "active" | "completed";
-export type RoundType = "marquee" | "capped" | "uncapped" | "overseas" | "accelerated";
+export type AuctionRoundType =
+    | "normal"
+    | "unsold";
+
+export type AuctionRoundCategory =
+    | "BATSMAN"
+    | "BOWLER"
+    | "ALL_ROUNDER"
+    | "WICKET_KEEPER"
+    | "CAPPED"
+    | "UNCAPPED"
+    | "OVERSEAS"
+    | "MARQUEE"
+    | "CUSTOM";
+
 export type PlayerRole = "Batter" | "Bowler" | "All-Rounder" | "Wicket-Keeper";
-export type PlayerStatus = "pending" | "current" | "sold" | "unsold";
+export type PlayerStatus = "pending" | "current" | "sold" | "unsold"| "permanent_unsold";
 
 export type AuctionPermission =
   | "MANAGE_AUCTION"
@@ -23,6 +37,8 @@ export type AuctionPermission =
   | "PLACE_BID";
 
 export type UserRole = "ADMIN" | "ORGANIZER" | "FRANCHISE_OWNER" | "PLAYER" | string;
+
+
 
 export type PermissionReason =
   | "ALLOWED"
@@ -64,9 +80,11 @@ export interface AuctionPermissions {
   canBid: boolean;
   canMarkSold: boolean;
   canMarkUnsold: boolean;
+  canMarkPermanentUnsold: boolean;
   canAccessRoundManagement: boolean;
   canAccessAuctionControls: boolean;
   canAccessRulesEditor: boolean;
+
 
   ownsTournamentTeam: boolean;
 
@@ -121,7 +139,8 @@ export interface AuctionRound {
   id: string;
   auctionId: string;
   name: string;
-  type: RoundType | (string & {});
+  type:AuctionRoundType;
+  category:AuctionRoundCategory | string;
   order: number;
   status: RoundStatus;
   playerIds: string[];
@@ -219,10 +238,12 @@ export interface LiveAuctionSnapshot {
   logs: AuctionLog[];
   soldEvent: { playerId: string; teamId: string; amount: number; seq: number } | null;
   unsoldEvent: { playerId: string; seq: number } | null;
+  permanentUnsoldEvent: { playerId: string; seq: number } | null;
   connection: "connecting" | "connected" | "reconnecting" | "offline";
   serverLatencyMs: number;
   playersSoldCount: number;
   playersUnsoldCount: number;
+  playersPermanentUnsoldCount : number;
   totalMoneySpent: number;
   viewerCount: number;
 }

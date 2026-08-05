@@ -119,6 +119,7 @@ export const createAuctionRoundSchema = z.object({
   name: z.string().trim().min(2).max(120),
   order: z.number().int().min(1),
   type: z.string().trim().optional(),
+  category: z.string().trim().optional(),
   playerIds: z.array(objectId).optional(),
 });
 
@@ -193,6 +194,16 @@ export const tournamentIdParamSchema = z.object({
   tournamentId: objectId,
 });
 
+// validators/schemas.js  (append)
+export const tournamentPlayerIdParamSchema = z.object({
+  tournamentPlayerId :objectId,
+});
+
+export const permanentUnsoldParamsSchema = z.object({
+  auctionId: objectId,
+  tournamentPlayerId: objectId,
+});
+
 export const registrationIdParamSchema = z.object({
   registrationId: objectId,
 });
@@ -206,15 +217,10 @@ export const auctionIdParamSchema = z.object({
 
 
 export const heartbeatViewerSchema = z.object({
-  auctionId: objectId,
-  roundId: objectId,
-  tournamentPlayerId: objectId,
-  viewerId: z.string().trim().min(1),
+    viewerId: z.string().trim().min(1),
 });
 
 export const leaveViewerSchema = z.object({
-  auctionId: objectId,
-  roundId: objectId,
-  tournamentPlayerId: objectId,
+
   viewerId: z.string().trim().min(1),
 });

@@ -1,8 +1,8 @@
 import { Link } from "react-router-dom";
-import { Edit3, Trash2, Users } from "lucide-react";
+import { Edit3, Trash2, Users, Lock } from "lucide-react";
 
 import type { AuctionRound } from "@/features/auction/types/index.types";
-import { RoundStatusBadge, RoundTypeBadge } from "./Badges";
+import { RoundStatusBadge, RoundTypeBadge, RoundCategoryBadge } from "./Badges";
 
 type RoundCardProps = {
   round: AuctionRound;
@@ -23,8 +23,15 @@ function RoundCard({
     round.status === "active" ||
     round.status === "completed";
 
+  // The unsold round is engine-managed: AuctionRound.js rejects manual
+  // playerIds edits on it once it exists (enforceUnsoldRoundPlayerIds), since
+  // the auction engine repopulates it automatically from unsold lots. Round
+  // metadata (name/order) can still be edited, but player membership can't.
+  const isAutoManaged = round.type === "unsold";
+
   const canEdit = canManage && !isLocked;
   const canDelete = canManage && !isLocked;
+  const canManagePlayers = canManage && !isLocked && !isAutoManaged && !!onManagePlayers;
 
   return (
     <div className="group flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/20">
@@ -34,12 +41,26 @@ function RoundCard({
         </span>
 
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-white">
               {round.name}
             </p>
 
+            {/* Type: structural/engine concept (normal vs unsold) */}
             <RoundTypeBadge type={round.type} />
+
+            {/* Category: which players this round is for (batters, overseas, marquee, ...) */}
+            {round.category ? <RoundCategoryBadge category={round.category} /> : null}
+
+            {isAutoManaged && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-white/10"
+                title="Player list is managed automatically by the auction engine"
+              >
+                <Lock className="h-2.5 w-2.5" />
+                Auto-managed
+              </span>
+            )}
           </div>
 
           <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
@@ -51,6 +72,25 @@ function RoundCard({
 
       <div className="flex items-center gap-2">
         <RoundStatusBadge status={round.status} />
+
+        {onManagePlayers && (
+          <button
+            onClick={() => canManagePlayers && onManagePlayers(round.id)}
+            disabled={!canManagePlayers}
+            title={
+              isAutoManaged
+                ? "Players for the unsold round are added automatically"
+                : isLocked
+                ? "Round is locked"
+                : canManage
+                ? "Manage players"
+                : "Organizer only"
+            }
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-slate-300 ring-1 ring-white/10 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <Users className="h-3.5 w-3.5" />
+          </button>
+        )}
 
         {canEdit ? (
           <Link

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ListOrdered, Loader2, Plus, ShieldAlert, Users } from "lucide-react";
+import { Info, ListOrdered, Loader2, Plus, ShieldAlert, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -9,13 +9,47 @@ import {
   useLiveAuction,
 } from "@/features/auction/hooks/index.hook";
 import { RoundList } from "@/features/auction/components/RoundList";
-import type { RoundType } from "@/features/auction/types/index.types";
+import type { AuctionRoundCategory } from "@/features/auction/types/index.types";
 import { resolveAuctionRoute } from "../routes/auction.navigation";
 import { AuctionSegments } from "../routes/auction.routes";
 import { useAuctionContext } from "../hooks/useAuctionContext";
 import { PlayerPoolDrawer } from "../components/player-pool/PlayerPoolDrawer";
 
-const TYPES: RoundType[] = ["marquee", "capped", "uncapped", "overseas", "accelerated"];
+// ============================================================================
+// Round CATEGORY — which players a round is for (Batters, Overseas, Marquee…).
+// This is organizer-authored content, distinct from round TYPE.
+//
+// Round TYPE is intentionally NOT offered as a create-form choice here: the
+// backend only recognizes "normal" | "unsold" (AuctionRound.js / ROUND_TYPE),
+// and the "unsold" round is engine-managed — it is auto-created by the
+// auction engine when lots go unsold, is always ordered last, and rejects
+// manual playerIds edits (see AuctionRound.js enforceUnsoldRoundPlayerIds /
+// enforceUnsoldRoundIsLast). Every round an organizer creates by hand here is
+// therefore always type "normal"; there's nothing to pick.
+// ============================================================================
+const CATEGORIES: AuctionRoundCategory[] = [
+  "BATSMAN",
+  "BOWLER",
+  "ALL_ROUNDER",
+  "WICKET_KEEPER",
+  "CAPPED",
+  "UNCAPPED",
+  "OVERSEAS",
+  "MARQUEE",
+  "CUSTOM",
+];
+
+const CATEGORY_LABEL: Record<AuctionRoundCategory, string> = {
+  BATSMAN: "Batters",
+  BOWLER: "Bowlers",
+  ALL_ROUNDER: "All-Rounders",
+  WICKET_KEEPER: "Keepers",
+  CAPPED: "Capped",
+  UNCAPPED: "Uncapped",
+  OVERSEAS: "Overseas",
+  MARQUEE: "Marquee",
+  CUSTOM: "Custom",
+};
 
 export default function AuctionRoundsPage() {
   const { isAuthenticated, hasHydrated } = useAuth();
@@ -27,7 +61,7 @@ export default function AuctionRoundsPage() {
   const { rounds, actions, loading } = useAuctionRounds(storeAuctionId);
 
   const [name, setName] = useState("");
-  const [type, setType] = useState<RoundType>("capped");
+  const [category, setCategory] = useState<AuctionRoundCategory>("CUSTOM");
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -42,7 +76,7 @@ export default function AuctionRoundsPage() {
     setDrawerOpen(true);
   }
 
-  // ── Handlers (unchanged) ──────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────
   async function handleAdd() {
     if (!name.trim()) return;
     if (!storeAuctionId) {
@@ -55,12 +89,14 @@ export default function AuctionRoundsPage() {
       const nextOrder = rounds.reduce((max, r) => Math.max(max, r.order), 0) + 1;
       await actions.add({
         name: name.trim(),
-        type,
+        type: "normal",
+        category,
         order: nextOrder,
         status: "pending",
         playerIds: [],
       });
       setName("");
+      setCategory("CUSTOM");
       setShowForm(false);
     } catch (e: any) {
       setCreateError(e.message || "Failed to create round");
@@ -197,17 +233,25 @@ export default function AuctionRoundsPage() {
                 className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-400/50 sm:col-span-2"
               />
               <select
-                value={type}
-                onChange={(e) => setType(e.target.value as RoundType)}
+                value={category}
+                onChange={(e) => setCategory(e.target.value as AuctionRoundCategory)}
                 className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-400/50"
               >
-                {TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t.charAt(0).toUpperCase() + t.slice(1)}
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {CATEGORY_LABEL[c]}
                   </option>
                 ))}
               </select>
             </div>
+
+            <p className="mt-2.5 flex items-start gap-1.5 text-[11px] text-slate-500">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" />
+              New rounds are created as standard rounds. The Unsold Pool round is
+              created automatically by the auction engine when lots go unsold —
+              it doesn&apos;t need to be created here.
+            </p>
+
             <button
               onClick={handleAdd}
               disabled={creating || !name.trim()}

@@ -91,6 +91,8 @@ export const STATUS_COLORS: Record<string, string> = {
   active: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
   sold: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
   unsold: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
+  // NEW: terminal withdrawal state — neutral gray to distinguish from active unsold
+  permanent_unsold: "bg-gray-500/15 text-gray-300 ring-gray-500/30",
   current: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
 };
 
@@ -109,6 +111,8 @@ export const LOG_ICON: Record<string, string> = {
   bid: "💰",
   sold: "🔨",
   unsold: "🚫",
+  // NEW: align with AUCTION_LOG_ACTIONS v2 additions
+  unsold_round_created: "🔄",
   round_complete: "🏁",
   complete: "🏆",
   connect: "🟢",
@@ -142,6 +146,7 @@ export const SOCKET_EVENTS = {
   BID_PLACED: "bid:placed",
   LOT_SOLD: "lot:sold",
   LOT_UNSOLD: "lot:unsold",
+  LOT_PERMANENT_UNSOLD: "lot:permanent_unsold",
   LIVE_STATE_UPDATED: "live:state:updated",
 
   // Presence

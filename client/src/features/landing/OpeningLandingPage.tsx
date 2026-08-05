@@ -141,7 +141,7 @@ export default function OpeningLandingPage({
         <div className="mt-2 flex items-baseline justify-center gap-2.5 whitespace-nowrap sm:gap-3">
           <strong className="gb-credit-name">VENKAT SAI</strong>
           <span aria-hidden="true" className="h-1 w-1 rounded-full bg-[#d9a82a]" />
-          <em className="gb-credit-tag">the HitMan</em>
+          <em className="gb-credit-tag">The HitMan</em>
         </div>
       </motion.footer>
 
@@ -189,11 +189,11 @@ const introStyles = `
     z-index: 2;
     left: 50%;
     top: 50%;
-    border: 1px solid rgba(221, 170, 47, .17);
+    border: 3px solid rgba(221, 170, 47, .17);
     border-radius: 999px;
     pointer-events: none;
     transform: translate(-50%, -50%);
-    transition: opacity .42s ease-out;
+    transition: opacity .102s ease-out;
     mask-image: linear-gradient(110deg, transparent 0%, black 23%, black 74%, transparent 100%);
     -webkit-mask-image: linear-gradient(110deg, transparent 0%, black 23%, black 74%, transparent 100%);
   }

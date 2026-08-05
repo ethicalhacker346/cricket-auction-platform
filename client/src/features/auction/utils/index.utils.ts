@@ -18,6 +18,7 @@ export const AUCTION_PERMISSIONS: Record<string, AuctionPermission> = {
   OPEN_LOT: "OPEN_LOT",
   SETTLE_LOT: "SETTLE_LOT",
   PLACE_BID: "PLACE_BID",
+  MARK_PERMANENT_UNSOLD: "MARK_PERMANENT_UNSOLD",
 };
 
 const PERMISSION_KEYS = Object.values(AUCTION_PERMISSIONS);
@@ -163,6 +164,8 @@ export function normalizeAuctionPermissions(raw: any): AuctionPermissions {
     canBid: value("PLACE_BID", "canBid"),
     canMarkSold: value("SETTLE_LOT", "canMarkSold") || value("SETTLE_LOT", "canForceSold"),
     canMarkUnsold: value("SETTLE_LOT", "canMarkUnsold") || value("SETTLE_LOT", "canForceSold"),
+    // NEW: permanent unsold capability
+    canMarkPermanentUnsold: value("MARK_PERMANENT_UNSOLD", "canMarkPermanentUnsold"),
     ownsTournamentTeam:
       Boolean(raw?.ownsTournamentTeam),
 

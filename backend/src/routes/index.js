@@ -6,6 +6,7 @@ import franchiseRoutes from './franchise.routes.js';
 import registrationRoutes from './registration.routes.js';
 import notificationRoutes from './notification.routes.js';
 import { tournamentAuctionRouter, auctionRouter } from './auction.routes.js';
+import statsRoutes from './statsRoutes.js';
 
 const router = Router();
 
@@ -18,6 +19,7 @@ router.get('/health', (_req, res) => {
 });
 
 router.use('/auth', authRoutes);
+router.use('/api/stats', statsRoutes);
 router.use('/tournaments', tournamentRoutes);
 router.use('/tournaments/:tournamentId/registrations', registrationRoutes);
 router.use('/tournaments/:tournamentId/auction', tournamentAuctionRouter);

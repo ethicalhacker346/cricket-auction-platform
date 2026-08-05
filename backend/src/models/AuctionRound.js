@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ROUND_STATUS } from '../config/constants.js';
+import { ROUND_STATUS, ROUND_TYPE } from '../config/constants.js';
 
 const auctionRoundSchema = new mongoose.Schema(
   {
@@ -24,7 +24,12 @@ const auctionRoundSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: 'normal',
+      enum: Object.values(ROUND_TYPE),
       maxlength: 40,
+    },
+    category:{
+      type: String,
+      
     },
     status: {
       type: String,
@@ -50,6 +55,7 @@ const auctionRoundSchema = new mongoose.Schema(
         message: 'playerIds must not contain duplicates within a round',
       },
     },
+    
     startedAt: Date,
     completedAt: Date,
   },
@@ -67,6 +73,11 @@ const auctionRoundSchema = new mongoose.Schema(
 
 auctionRoundSchema.index({ auctionId: 1, order: 1 }, { unique: true });
 
+auctionRoundSchema.index(
+  { auctionId: 1, type: 1 },
+  { unique: true, partialFilterExpression: { type: ROUND_TYPE.UNSOLD } }
+);
+
 auctionRoundSchema.path('completedAt').validate(function validateCompletedAfterStarted(v) {
   if (!v || !this.startedAt) return true;
   return v >= this.startedAt;
@@ -81,5 +92,30 @@ auctionRoundSchema.pre('validate', function requirePlayersWhenActive(next) {
   }
   next();
 });
+
+// NEW: The unsold round must always be the last one in the order.
+// Normal rounds may not be inserted after it.
+auctionRoundSchema.pre('validate', async function enforceUnsoldRoundIsLast(next) {
+  if (this.type !== ROUND_TYPE.UNSOLD) {
+    const unsoldExists = await mongoose.model('AuctionRound').exists({
+      auctionId: this.auctionId,
+      type: ROUND_TYPE.UNSOLD,
+      order: { $lte: this.order },
+    });
+    if (unsoldExists) {
+      return next(new Error('Normal rounds cannot be added after the unsold round'));
+    }
+  }
+  next();
+});
+
+// NEW: Guard against manual tampering of the engine-managed unsold round.
+auctionRoundSchema.pre('validate', function enforceUnsoldRoundPlayerIds(next) {
+  if (this.type === ROUND_TYPE.UNSOLD && this.isModified('playerIds') && !this.isNew) {
+    return next(new Error('playerIds on the unsold round are managed automatically by the auction engine'));
+  }
+  next();
+});
+
 
 export const AuctionRound = mongoose.model('AuctionRound', auctionRoundSchema);

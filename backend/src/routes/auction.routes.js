@@ -19,6 +19,8 @@ import {
   tournamentIdParamSchema,
   heartbeatViewerSchema, // NEW — add to validators/schemas.js: { viewerId: string().required() }
   leaveViewerSchema, // NEW — add to validators/schemas.js: same shape as heartbeatViewerSchema
+  tournamentPlayerIdParamSchema,
+  permanentUnsoldParamsSchema
 } from '../validators/schemas.js';
 import { USER_ROLES } from '../config/constants.js';
 import { requireAuctionPermission, loadAuctionAuthorization } from '../middleware/authorization.js';
@@ -202,6 +204,18 @@ auctionRouter.post(
   requireAuctionPermission(AUCTION_PERMISSIONS.SETTLE_LOT),
 
   asyncHandler(auctionController.settleLotUnsold)
+);
+
+// ------------------------------------------------------------------
+// NEW: Permanent unsold — organiser explicitly retires a player from
+// the unsold round so the auction can reach terminal state.
+// ------------------------------------------------------------------
+auctionRouter.post(
+  '/:auctionId/players/:tournamentPlayerId/permanent-unsold',
+  authenticate,
+  validate(permanentUnsoldParamsSchema, "params"),
+  requireAuctionPermission(AUCTION_PERMISSIONS.MARK_PERMANENT_UNSOLD),
+  asyncHandler(auctionController.markPermanentUnsold)
 );
 
 auctionRouter.post(

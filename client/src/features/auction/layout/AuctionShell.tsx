@@ -18,7 +18,15 @@ import { AuctionHeader } from "@/features/auction/components/AuctionHeader";
 import { cn } from "@/utils/cn";
 import { useAuctionContext } from "../hooks/useAuctionContext";
 import { resolveAuctionRoute } from "../routes/auction.navigation";
-import { useAuth, useAuctionPermissions } from "@/features/auction/hooks/index.hook";
+// ============================================================================
+// NEW: Import the socket bootstrap and the sound engine
+// ============================================================================
+import {
+  useAuth,
+  useAuctionPermissions,
+  useAuctionSocket,
+} from "@/features/auction/hooks/index.hook";
+import { AuctionSoundEngine } from "@/features/auction/audio/AuctionSoundEngine";
 import { USER_ROLES } from "@/lib/constants/roles";
 
 type IconName = (typeof NAV_ITEMS)[number]["icon"];
@@ -34,42 +42,13 @@ const ICONS: Record<IconName, React.ElementType> = {
   Trophy,
 };
 
-// Nav segments whose visibility is gated by role/permissions rather than
-// always shown. Anything not listed here is visible to every authenticated
-// user (dashboard, live, history, analytics, results).
 const RESTRICTED_SEGMENTS = new Set(["configuration", "rounds", "team"]);
-
 const SIDEBAR_COLLAPSE_KEY = "gullybid-sidebar-collapsed";
 
-/**
- * Derives which nav segments are visible for the current viewer.
- *
- * Nav visibility asks "what kind of user is this?" — a different question
- * from "can this user mutate X right now?". Configuration/Rounds used to be
- * gated on canUpdateRules/canManageRounds, but the backend also flips those
- * false once the auction leaves draft/scheduled (rules & rounds become
- * read-only once live) — so an organizer's own Configuration and Rounds
- * links would vanish from their sidebar the moment their auction went live.
- * Gating on organizer identity instead (ownership or role) keeps the nav
- * item visible for the whole lifecycle; the Configuration/Rounds pages
- * themselves still use canUpdateRules/canManageRounds to decide what's
- * editable once you're there.
- *
- *   - Organizers/Admins: everything except Team Console.
- *   - Franchise Owners: Configuration + Rounds hidden, Team Console shown.
- *   - Everyone else (players, unassigned viewers): Configuration, Rounds,
- *     and Team Console all hidden.
- *
- * While permissions are still loading, restricted segments default to
- * hidden — never flash a privileged section before we know it's allowed.
- */
 function useVisibleNavItems(auctionId: string) {
   const { user } = useAuth();
   const permissions = useAuctionPermissions(auctionId);
 
-  // Same identity check AuctionHeader uses for its role pill — kept in sync
-  // deliberately, so "who counts as an organizer" never drifts between the
-  // header and the sidebar.
   const userRole = user?.role ?? permissions.role;
   const isOrganizer =
     !permissions.loading &&
@@ -98,14 +77,26 @@ function useVisibleNavItems(auctionId: string) {
 
 export function AuctionShell() {
   const { tournamentId, auctionId } = useAuctionContext();
-  const visibleNavItems = useVisibleNavItems(auctionId);
 
-  // Mobile off-canvas drawer — slides over content, closes on navigate/escape.
+  // ========================================================================
+  // NEW: Eager socket bootstrap at the layout boundary.
+  //
+  // Previously, this only happened inside LiveAuctionPage via useLiveAuction.
+  // Now the connection starts as soon as the user enters ANY auction route
+  // (dashboard, live, team, history, analytics, results).
+  //
+  // The store's bootstrap() is idempotent — child pages calling
+  // useAuctionSocket() again will safely no-op. But by hoisting it here,
+  // we guarantee the session is alive before any child asks for data.
+  // ========================================================================
+  const { isConnected, latencyMs } = useAuctionSocket({
+    tournamentId,
+    auctionId,
+  });
+
+  const visibleNavItems = useVisibleNavItems(auctionId);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Desktop persistent collapse — sidebar takes up real layout space, so
-  // collapsing it actually gives the content area its width back instead of
-  // just hiding it behind a translate. Remembered across visits.
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -119,12 +110,10 @@ export function AuctionShell() {
     try {
       window.localStorage.setItem(SIDEBAR_COLLAPSE_KEY, collapsed ? "1" : "0");
     } catch {
-      // Storage can be unavailable (private mode, quota) — collapse state
-      // simply won't persist, which is harmless.
+      /* noop */
     }
   }, [collapsed]);
 
-  // Lock body scroll + support Escape while the mobile drawer is open.
   useEffect(() => {
     if (!mobileOpen) return;
     const previousOverflow = document.body.style.overflow;
@@ -141,11 +130,7 @@ export function AuctionShell() {
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
-      {/* Sidebar
-          - Below `lg`: fixed off-canvas drawer, slides in/out, sits above content.
-          - At `lg`+: sticky-in-flow (not `fixed`), so it never scrolls out of
-            view with the page, but still reserves its own layout width —
-            which is what lets the collapse toggle actually reflow content. */}
+      {/* Sidebar */}
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-50 flex w-72 flex-col overflow-hidden border-r border-white/10 bg-slate-950/95 backdrop-blur-2xl transition-transform duration-300 ease-out",
@@ -173,7 +158,6 @@ export function AuctionShell() {
             AuctionRoom
           </span>
 
-          {/* Mobile: close drawer (desktop rail has its own toggle row below) */}
           <button
             type="button"
             className="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-white lg:hidden"
@@ -184,10 +168,7 @@ export function AuctionShell() {
           </button>
         </div>
 
-        {/* Desktop toggle row — lives inside the sidebar itself, so the
-            control to reopen a collapsed rail is never off somewhere else.
-            Expanded: sits top-right, tucks the sidebar into an icon rail.
-            Collapsed: centered, expands it back out. */}
+        {/* Desktop toggle row */}
         <div
           className={cn(
             "hidden shrink-0 px-3 pb-2 pt-1 lg:flex",
@@ -205,10 +186,7 @@ export function AuctionShell() {
           </button>
         </div>
 
-        {/* Nav — the only part allowed to scroll internally, and only if the
-            item list ever outgrows the viewport. The sidebar shell itself
-            never scrolls with the page. Collapsed: icons only, centered,
-            with a hover tooltip standing in for the hidden label. */}
+        {/* Nav */}
         <nav className={cn("min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-2", collapsed && "lg:px-2")}>
           {visibleNavItems.map((item) => {
             const Icon = ICONS[item.icon];
@@ -233,9 +211,6 @@ export function AuctionShell() {
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className={cn("truncate", collapsed && "lg:hidden")}>{item.label}</span>
 
-                {/* Hover tooltip — only meaningful (and only mounted) once
-                    the rail is collapsed; harmless on mobile since it stays
-                    display:none there regardless. */}
                 {collapsed && (
                   <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 hidden -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-xl transition-opacity lg:group-hover:block lg:group-hover:opacity-100">
                     {item.label}
@@ -246,9 +221,7 @@ export function AuctionShell() {
           })}
         </nav>
 
-        {/* Footer panel — hidden on the collapsed rail since the copy
-            doesn't fit; reappears once expanded. Normal flow (not
-            absolutely positioned), so it can never overlap nav items. */}
+        {/* Footer panel */}
         <div className={cn("shrink-0 px-5 py-4", collapsed && "lg:hidden")}>
           <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-[11px] text-slate-500">
             State-driven live auction engine. No polling, no refetching — every screen reacts to the same real-time snapshot.
@@ -265,11 +238,28 @@ export function AuctionShell() {
         />
       )}
 
-      {/* Main column — the header now owns the mobile menu trigger itself
-          (see AuctionHeader's onMenuClick), so there's a single sticky bar
-          instead of a separate hamburger strip stacked above it. */}
+      {/* Main column */}
       <div className="flex min-h-screen flex-1 flex-col">
         <AuctionHeader onMenuClick={() => setMobileOpen(true)} />
+
+        {/* =================================================================
+            NEW: AuctionSoundEngine
+            Mounted once at the layout level. Renders null. Listens to the
+            global Zustand store + EventBus. Survives tab switches.
+            ================================================================= */}
+        <AuctionSoundEngine />
+
+        {/* =================================================================
+            NEW: Connection status strip (optional but recommended)
+            If the user is on the Dashboard tab and the socket drops, they
+            would otherwise have no idea. This gives universal feedback.
+            ================================================================= */}
+        {!isConnected && (
+          <div className="bg-amber-600 text-xs font-bold text-center py-1 animate-pulse">
+            Reconnecting to auction room… {latencyMs}ms
+          </div>
+        )}
+
         <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8">
           <Outlet />
         </main>

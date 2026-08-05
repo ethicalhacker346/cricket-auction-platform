@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Trophy, Users, XCircle, Loader2, ShieldAlert, BarChart3 } from "lucide-react";
+import { Trophy, Users, XCircle, Loader2, ShieldAlert, BarChart3, Ban, Info } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth, useLiveAuction } from "@/features/auction/hooks/index.hook";
@@ -9,7 +9,7 @@ import { AuctionStatusBadge } from "@/features/auction/components/Badges";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
 
-type ResultTab = "teams" | "sold" | "unsold";
+type ResultTab = "teams" | "sold" | "unsold" | "permanent_unsold";
 
 export default function AuctionResultPage() {
   const { isAuthenticated, hasHydrated } = useAuth();
@@ -23,18 +23,20 @@ export default function AuctionResultPage() {
     connection,
     playersSoldCount,
     playersUnsoldCount,
+    playersPermanentUnsoldCount,
     totalMoneySpent,
   } = useLiveAuction(storeAuctionId || undefined, storeTournamentId || undefined);
 
   const [tab, setTab] = useState<ResultTab>("teams");
 
   // Memoized data transforms
-  const { sold, unsold, topBuy, avgSoldPrice } = useMemo(() => {
+  const { sold, unsold, permanentUnsold, topBuy, avgSoldPrice } = useMemo(() => {
     const sold = players.filter((p) => p.status === "sold");
     const unsold = players.filter((p) => p.status === "unsold");
+    const permanentUnsold = players.filter((p) => p.status === "permanent_unsold");
     const topBuy = [...sold].sort((a, b) => (b.soldPrice ?? 0) - (a.soldPrice ?? 0))[0];
     const avgSoldPrice = sold.length > 0 ? totalMoneySpent / sold.length : 0;
-    return { sold, unsold, topBuy, avgSoldPrice };
+    return { sold, unsold, permanentUnsold, topBuy, avgSoldPrice };
   }, [players, totalMoneySpent]);
 
   // Guards
@@ -86,7 +88,11 @@ export default function AuctionResultPage() {
   const totalPlayers = players.length;
   const completionRate =
     totalPlayers > 0
-      ? Math.round(((playersSoldCount + playersUnsoldCount) / totalPlayers) * 100)
+      ? Math.round(
+          ((playersSoldCount + playersUnsoldCount + (playersPermanentUnsoldCount ?? 0)) /
+            totalPlayers) *
+            100
+        )
       : 0;
 
   return (
@@ -121,6 +127,11 @@ export default function AuctionResultPage() {
           {[
             { label: "Sold", value: playersSoldCount, color: "text-emerald-400" },
             { label: "Unsold", value: playersUnsoldCount, color: "text-rose-400" },
+            {
+              label: "Perm. Unsold",
+              value: playersPermanentUnsoldCount ?? 0,
+              color: "text-slate-400",
+            },
             { label: "Total Spent", value: formatLakhs(totalMoneySpent), color: "text-amber-400" },
             { label: "Completion", value: `${completionRate}%`, color: "text-sky-400" },
           ].map((stat) => (
@@ -167,7 +178,7 @@ export default function AuctionResultPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 rounded-xl bg-white/5 p-1 ring-1 ring-white/10">
-        {(["teams", "sold", "unsold"] as const).map((t) => (
+        {(["teams", "sold", "unsold", "permanent_unsold"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -178,13 +189,19 @@ export default function AuctionResultPage() {
                 : "text-slate-300 hover:text-white"
             )}
           >
-            {t === "teams" ? "Team Standings" : t}
+            {t === "teams"
+              ? "Team Standings"
+              : t === "permanent_unsold"
+              ? "Perm. Unsold"
+              : t}
             <span className="ml-1.5 rounded-full bg-white/20 px-1.5 py-0.5 text-[9px]">
               {t === "teams"
                 ? franchises.length
                 : t === "sold"
                 ? sold.length
-                : unsold.length}
+                : t === "unsold"
+                ? unsold.length
+                : permanentUnsold.length}
             </span>
           </button>
         ))}
@@ -303,10 +320,15 @@ export default function AuctionResultPage() {
             {unsold.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10">
                 <Users className="h-8 w-8 text-slate-600" />
-                <p className="text-sm text-slate-500">No unsold players yet.</p>
-                {isCompleted && (
+                <p className="text-sm text-slate-500">No unsold players remaining.</p>
+                {isCompleted && permanentUnsold.length === 0 && (
                   <p className="text-xs text-slate-600">
                     Every player found a franchise — clean sweep!
+                  </p>
+                )}
+                {isCompleted && permanentUnsold.length > 0 && (
+                  <p className="text-xs text-slate-600">
+                    All remaining players were either sold or permanently removed.
                   </p>
                 )}
               </div>
@@ -328,6 +350,58 @@ export default function AuctionResultPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {tab === "permanent_unsold" && (
+          <motion.div
+            key="permanent_unsold"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+          >
+            {permanentUnsold.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-10">
+                <Ban className="h-8 w-8 text-slate-600" />
+                <p className="text-sm text-slate-500">No permanently unsold players.</p>
+                {isCompleted && (
+                  <p className="text-xs text-slate-600">
+                    All players were either sold or remain in the unsold pool.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-start gap-2 rounded-xl border border-slate-500/10 bg-slate-500/5 p-3">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    These players have been permanently removed from the auction pool by the
+                    organizer. They will not appear in future unsold rounds and are no longer
+                    eligible for bidding.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {permanentUnsold.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-3 transition hover:border-slate-500/20 hover:bg-white/[0.04]"
+                    >
+                      <Ban className="h-4 w-4 shrink-0 text-slate-400" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-slate-300">
+                          {p.name}
+                        </p>
+                        <p className="text-[10px] text-slate-500">
+                          {p.role} · Base {formatLakhs(p.basePrice)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </motion.div>

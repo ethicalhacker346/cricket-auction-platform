@@ -158,21 +158,19 @@ tournamentTeamSchema.methods.commitSpend = function commitSpend(amount) {
 
 tournamentTeamSchema.virtual("budgetUtilization").get(function () {
 
-    console.log("TEAM:", this._id);
+    //console.log("--------------");
 
-    console.log("WALLET:", this.wallet);
+    //console.log("constructor:", this.constructor.name);
 
-    if (!this.wallet) {
-        console.log("BROKEN DOCUMENT");
-        return 0;
-    }
+    //console.log("instanceof mongoose.Document:",
+    //    this instanceof mongoose.Document);
 
-    return Number(
-        (
-            this.wallet.spentBudget /
-            this.wallet.initialBudget
-        ).toFixed(4)
-    );
+   // console.log("keys:",
+       // Object.keys(this));
+
+    //console.log("wallet:", this.wallet);
+
+    //return 0;
 });
 
 export const TournamentTeam = mongoose.model('TournamentTeam', tournamentTeamSchema);

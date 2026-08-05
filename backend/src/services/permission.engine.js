@@ -2,7 +2,7 @@ import { AppError } from '../../src/utils/helpers.js';
 import { CAPABILITIES } from './identity.resolver.js';
 
 export const AUCTION_PERMISSIONS = CAPABILITIES;
-export const POLICY_VERSION = 2; // bumped: PLACE_BID semantics changed
+export const POLICY_VERSION = 3; // bumped: MARK_PERMANENT_UNSOLD added
 
 const STATES = Object.freeze({ DRAFT: 'DRAFT', SCHEDULED: 'SCHEDULED', LIVE: 'LIVE', PAUSED: 'PAUSED', COMPLETED: 'COMPLETED' });
 
@@ -20,6 +20,7 @@ const STATE_RULES = Object.freeze({
   [CAPABILITIES.OPEN_LOT]: [STATES.LIVE],
   [CAPABILITIES.SETTLE_LOT]: [STATES.LIVE],
   [CAPABILITIES.PLACE_BID]: [STATES.LIVE],
+  [CAPABILITIES.MARK_PERMANENT_UNSOLD]: [STATES.LIVE, STATES.PAUSED],
 });
 
 const stateReason = (status, allowedStates) => {
@@ -33,6 +34,7 @@ const OWNER_REQUIRED = Object.freeze([
   CAPABILITIES.PAUSE_AUCTION, CAPABILITIES.RESUME_AUCTION,
   CAPABILITIES.COMPLETE_AUCTION, CAPABILITIES.OPEN_LOT,
   CAPABILITIES.SETTLE_LOT,
+  CAPABILITIES.MARK_PERMANENT_UNSOLD,
 ]);
 
 /** Pure policy evaluator: no database work, no UI aliases. */

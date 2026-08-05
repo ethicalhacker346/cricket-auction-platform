@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Wallet, User, Hexagon, AlertTriangle } from "lucide-react";
-import { useLiveAuction, useUserTeam } from "@/features/auction/hooks/index.hook";
+import { useAuth, useLiveAuction, useUserTeam } from "@/features/auction/hooks/index.hook";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
 import type { Franchise, Player } from "@/features/auction/types/index.types";
@@ -98,6 +98,7 @@ function BudgetBar({
 export function FranchisePanel() {
   // ── FIX: pull players from live store so we can compute real overseas counts ──
   const { franchises, currentBid, players } = useLiveAuction();
+  const { user } = useAuth();
   const userTeam = useUserTeam(franchises);
 
   if (franchises.length === 0) {
@@ -123,7 +124,7 @@ export function FranchisePanel() {
           const remaining = f.purseTotal - f.spent - reserved;
           const squadCount = f.squad?.length ?? 0;
           const isLeading = currentBid?.teamId === f.id;
-          const isUser = f.id === userTeam?.id;
+          const isUser = f.id === userTeam?.id || f.ownerId === user?.id;
           const squadFull = squadCount >= f.maxSquadSize;
 
           // ── FIX: Compute overseas count by looking up actual player data ──
