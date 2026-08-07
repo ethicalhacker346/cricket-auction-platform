@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   ArrowDown,
   Building2,
+  ArrowLeft,
 } from "lucide-react";
 import { FranchiseForm } from "@/components/franchise/FranchiseForm";
 import { LogoSelector } from "@/components/ui/LogoSelector";
@@ -127,7 +128,14 @@ export function CreateFranchisePage() {
           className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-violet-500 via-sky-500 to-emerald-500 origin-left"
         />
 
-        <div className="relative max-w-5xl mx-auto px-6 py-16 md:py-20">
+        <div className="relative max-w-5xl mx-auto px-6 py-5 md:py-5">
+          <Link
+            to="/dashboard"
+            className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-100 transition-colors hover:text-slate-500"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Link>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}

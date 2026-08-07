@@ -180,10 +180,17 @@ export function mapAuction(a: any): Auction {
     id: stringId(a._id || a.id),
     name: a.name || "Auction",
     tournamentName: a.tournamentId?.name || a.tournamentName || "Tournament",
-    organizer: a.tournamentId?.organizer?.name || a.organizer || "Organizer",
+    organizer:
+      a.tournamentId?.organizerId?.name ??
+      a.tournamentId?.organizer?.name ??
+      a.organizer ??
+      "organizer",
     status: a.status?.toLowerCase?.() || a.status,
     scheduledAt: a.scheduledAt,
-    season: a.season || new Date().getFullYear().toString(),
+    season:
+      a.tournamentId?.season ??
+      a.season ??
+      "",
     rules: {
       bidIncrements: tiers,
       lotTimerSeconds: config.lotTimerSeconds ?? a.lotTimerSeconds ?? 30,

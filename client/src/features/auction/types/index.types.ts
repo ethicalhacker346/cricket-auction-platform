@@ -34,7 +34,8 @@ export type AuctionPermission =
   | "COMPLETE_AUCTION"
   | "OPEN_LOT"
   | "SETTLE_LOT"
-  | "PLACE_BID";
+  | "PLACE_BID"
+  | "MARK_PERMANENT_UNSOLD";
 
 export type UserRole = "ADMIN" | "ORGANIZER" | "FRANCHISE_OWNER" | "PLAYER" | string;
 

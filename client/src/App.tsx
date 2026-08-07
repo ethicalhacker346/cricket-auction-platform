@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import {
+  BrowserRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+} from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useState } from "react";
 import { AnimatePresence } from "framer-motion";
@@ -17,51 +23,96 @@ import DashboardPage from "@/pages/DashBoardPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
 import TournamentPage from "@/pages/TournamentPage";
-import CreateTournamentPage from "./pages/CreateTournamentPage";
-import EditTournamentPage from "./pages/EditTournamentPage";
+import CreateTournamentPage from "@/pages/CreateTournamentPage";
+import EditTournamentPage from "@/pages/EditTournamentPage";
 import { RegisterTeamPage } from "@/pages/RegisterTeamPage";
 import { RegisterPlayerPage } from "@/pages/RegisterPlayerPage";
-import { CreatePlayerPage } from "./pages/CreatePlayerPage";
-import { EditPlayerPage } from "./pages/EditPlayerPage";
-import { CreateFranchisePage } from "./pages/CreateFranchisePage";
-import { EditFranchisePage } from "./pages/EditFranchisePage";
+import { CreatePlayerPage } from "@/pages/CreatePlayerPage";
+import { EditPlayerPage } from "@/pages/EditPlayerPage";
+import { CreateFranchisePage } from "@/pages/CreateFranchisePage";
+import { EditFranchisePage } from "@/pages/EditFranchisePage";
+import  { NotificationsPage } from "@/pages/NotificationsPage";
 
-// === AUCTION IMPORTS ===
-import { AuctionShell } from "./features/auction/layout/AuctionShell";
-import AuctionDashboardPage from "./features/auction/pages/AuctionDashboardPage";
-import CreateAuctionPage from "./features/auction/pages/CreateAuctionPage";
-import AuctionRoundsPage from "./features/auction/pages/AuctionRoundsPage";
-import RoundEditorPage from "./features/auction/pages/RoundEditorPage";
-import LiveAuctionPage from "./features/auction/pages/LiveAuctionPage";
-import FranchiseAuctionPage from "./features/auction/pages/FranchiseAuctionPage";
-import AuctionHistoryPage from "./features/auction/pages/AuctionHistoryPage";
-import AuctionAnalyticsPage from "./features/auction/pages/AuctionAnalyticsPage";
-import AuctionResultPage from "./features/auction/pages/AuctionResultPage";
+// Auction workspace
+import { AuctionShell } from "@/features/auction/layout/AuctionShell";
+import AuctionDashboardPage from "@/features/auction/pages/AuctionDashboardPage";
+import CreateAuctionPage from "@/features/auction/pages/CreateAuctionPage";
+import AuctionRoundsPage from "@/features/auction/pages/AuctionRoundsPage";
+import RoundEditorPage from "@/features/auction/pages/RoundEditorPage";
+import LiveAuctionPage from "@/features/auction/pages/LiveAuctionPage";
+import FranchiseAuctionPage from "@/features/auction/pages/FranchiseAuctionPage";
+import AuctionHistoryPage from "@/features/auction/pages/AuctionHistoryPage";
+import AuctionAnalyticsPage from "@/features/auction/pages/AuctionAnalyticsPage";
+import AuctionResultPage from "@/features/auction/pages/AuctionResultPage";
+
+import { AppShell } from "@/components/layout/AppShell";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { refetchOnWindowFocus: false, retry: 1 },
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
   },
 });
 
+const OPENING_SEEN_KEY = "app-opening-seen";
+
 function RootRedirect() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  return <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />;
+  return (
+    <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />
+  );
+}
+
+/** Auth-only layout with no visual shell – just <Outlet /> */
+function ProtectedOutlet() {
+  return (
+    <ProtectedRoute>
+      <Outlet />
+    </ProtectedRoute>
+  );
 }
 
 export default function App() {
-  const [showOpening, setShowOpening] = useState(true);
+  // ────────────────────────────────────────────────
+  // ONE-TIME SPLASH – survives any remount of <App>
+  // ────────────────────────────────────────────────
+  const [showOpening, setShowOpening] = useState(() => {
+    try {
+      return sessionStorage.getItem(OPENING_SEEN_KEY) !== "1";
+    } catch {
+      // private mode / SSR – fall back to showing once
+      return true;
+    }
+  });
+
+  const handleOpeningComplete = () => {
+    try {
+      sessionStorage.setItem(OPENING_SEEN_KEY, "1");
+    } catch {
+      // ignore
+    }
+    setShowOpening(false);
+  };
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        {/*
+          Splash lives completely outside <Routes>.
+          Once dismissed it is unmounted forever for this tab session.
+          No route change can bring it back.
+        */}
         <AnimatePresence mode="wait">
           {showOpening && (
             <OpeningLandingPage
               duration={5200}
-              onComplete={() => setShowOpening(false)}
+              onComplete={handleOpeningComplete}
             />
           )}
         </AnimatePresence>
+
         <Toaster
           position="top-right"
           toastOptions={{
@@ -72,13 +123,16 @@ export default function App() {
               color: "#fff",
               fontSize: "0.875rem",
             },
-            success: { iconTheme: { primary: "#10b981", secondary: "#fff" } },
+            success: {
+              iconTheme: { primary: "#10b981", secondary: "#fff" },
+            },
           }}
         />
 
         <Routes>
-          {/* Public Routes */}
+          {/* ═══════════════ PUBLIC ═══════════════ */}
           <Route path="/" element={<RootRedirect />} />
+
           <Route
             path="/login"
             element={
@@ -112,102 +166,48 @@ export default function App() {
             }
           />
 
-          {/* Protected Routes */}
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <DashboardPage />
-              </ProtectedRoute>
-            }
-          />
+          
 
-          {/* Tournament Routes */}
+          {/* ═══════════════ APPSHELL (only these two) ═══════════════ */}
           <Route
-            path="/tournaments/create"
             element={
               <ProtectedRoute>
-                <CreateTournamentPage />
+                <AppShell />
               </ProtectedRoute>
             }
-          />
-          <Route
-            path="/tournaments/:id/edit"
-            element={
-              <ProtectedRoute>
-                <EditTournamentPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/tournaments/:tournamentId/register-franchise"
-            element={
-              <ProtectedRoute>
-                <RegisterTeamPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/tournaments/:tournamentId/register-player"
-            element={
-              <ProtectedRoute>
-                <RegisterPlayerPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/tournaments/:id"
-            element={
-              <ProtectedRoute>
-                <TournamentPage />
-              </ProtectedRoute>
-            }
-          />
+          >
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/tournaments/:id" element={<TournamentPage />} />
+          </Route>
 
-          {/* Player & Franchise Routes */}
-          <Route
-            path="/create-player"
-            element={
-              <ProtectedRoute>
-                <CreatePlayerPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/players/:id/edit"
-            element={
-              <ProtectedRoute>
-                <EditPlayerPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/create-franchise"
-            element={
-              <ProtectedRoute>
-                <CreateFranchisePage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/franchises/:id/edit"
-            element={
-              <ProtectedRoute>
-                <EditFranchisePage />
-              </ProtectedRoute>
-            }
-          />
+          {/* ═══════════════ FULL-PAGE PROTECTED ═══════════════ */}
+          <Route element={<ProtectedOutlet />}>
+            <Route path="/tournaments/create" element={<CreateTournamentPage />} />
+            <Route path="/tournaments/:id/edit" element={<EditTournamentPage />} />
+            <Route
+              path="/tournaments/:tournamentId/register-franchise"
+              element={<RegisterTeamPage />}
+            />
+            <Route
+              path="/tournaments/:tournamentId/register-player"
+              element={<RegisterPlayerPage />}
+            />
+            <Route
+              path="/tournaments/:tournamentId/auction/create"
+              element={<CreateAuctionPage />}
+            />
 
-          <Route
-            path="/tournaments/:tournamentId/auction/create"
-            element={
-              <ProtectedRoute>
-                <CreateAuctionPage />
-              </ProtectedRoute>
-            }
-          />
+            <Route path="/create-player" element={<CreatePlayerPage />} />
+            <Route path="/players/:id/edit" element={<EditPlayerPage />} />
 
-          {/* === AUCTION ROUTES (Nested under /auctions) === */}
+            <Route path="/create-franchise" element={<CreateFranchisePage />} />
+            <Route path="/franchises/:id/edit" element={<EditFranchisePage />} />
+
+            
+          </Route>
+
+          {/* ═══════════════ AUCTION WORKSPACE ═══════════════ */}
           <Route
             path="/tournaments/:tournamentId/auction/:auctionId"
             element={
@@ -216,20 +216,8 @@ export default function App() {
               </ProtectedRoute>
             }
           >
-            <Route
-              index
-              element={
-               <Navigate
-                 to="dashboard"
-                 replace
-               />
-              } 
-            />
-
-            <Route
-              path="dashboard"
-              element={<AuctionDashboardPage/>}
-            />
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<AuctionDashboardPage />} />
             <Route path="configuration" element={<CreateAuctionPage />} />
             <Route path="rounds" element={<AuctionRoundsPage />} />
             <Route path="rounds/:roundId" element={<RoundEditorPage />} />
@@ -238,10 +226,10 @@ export default function App() {
             <Route path="history" element={<AuctionHistoryPage />} />
             <Route path="analytics" element={<AuctionAnalyticsPage />} />
             <Route path="results" element={<AuctionResultPage />} />
-            <Route path="*" element={<Navigate to="../dashboard" replace />} />
+            <Route path="*" element={<Navigate to="dashboard" replace />} />
           </Route>
 
-          {/* 404 */}
+          {/* ═══════════════ FALLBACK ═══════════════ */}
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </BrowserRouter>

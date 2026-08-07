@@ -2,18 +2,18 @@
  * socket.publisher.js — Socket Event Publisher
  * ----------------------------------------------------------------
  * Bridges Domain Events (eventBus) -> Socket.IO rooms
- * 
+ *
  * Architecture:
- *   Service commits TX -> auction.events.emitXxx() -> eventBus -> 
+ *   Service commits TX -> auction.events.emitXxx() -> eventBus ->
  *   SocketPublisher listens -> io.to(`auction:${auctionId}`).emit(socketEvent, payload)
  *
  * This file DOES depend on socket.io, but services do NOT — perfect decoupling.
- * 
+ *
  * Also manages per-auction lot timers (authoritative server timer broadcast).
  */
 
-import eventBus from '../events/eventBus.js';
-import { AUCTION_EVENTS } from '../events/auction.events.js';
+import eventBus from "../events/eventBus.js";
+import { AUCTION_EVENTS } from "../events/auction.events.js";
 
 class SocketEventPublisher {
   constructor(io) {
@@ -33,66 +33,179 @@ class SocketEventPublisher {
     this.isListening = true;
 
     // Auction lifecycle
-    eventBus.on(AUCTION_EVENTS.AUCTION_STARTED, (p) => this.handleAuctionStarted(p));
-    eventBus.on(AUCTION_EVENTS.AUCTION_PAUSED, (p) => this.handleAuctionPaused(p));
-    eventBus.on(AUCTION_EVENTS.AUCTION_RESUMED, (p) => this.handleAuctionResumed(p));
-    eventBus.on(AUCTION_EVENTS.AUCTION_COMPLETED, (p) => this.handleAuctionCompleted(p));
-    eventBus.on(AUCTION_EVENTS.AUCTION_RULES_UPDATED, (p) => this.handleRulesUpdated(p));
+    eventBus.on(AUCTION_EVENTS.AUCTION_STARTED, (p) =>
+      this.handleAuctionStarted(p),
+    );
+    eventBus.on(AUCTION_EVENTS.AUCTION_PAUSED, (p) =>
+      this.handleAuctionPaused(p),
+    );
+    eventBus.on(AUCTION_EVENTS.AUCTION_RESUMED, (p) =>
+      this.handleAuctionResumed(p),
+    );
+    eventBus.on(AUCTION_EVENTS.AUCTION_COMPLETED, (p) =>
+      this.handleAuctionCompleted(p),
+    );
+    eventBus.on(AUCTION_EVENTS.AUCTION_RULES_UPDATED, (p) =>
+      this.handleRulesUpdated(p),
+    );
 
     // Round
     eventBus.on(AUCTION_EVENTS.ROUND_ADDED, (p) => this.handleRoundAdded(p));
-    eventBus.on(AUCTION_EVENTS.ROUND_UPDATED, (p) => this.handleRoundUpdated(p));
-    eventBus.on(AUCTION_EVENTS.ROUND_DELETED, (p) => this.handleRoundDeleted(p));
-    eventBus.on(AUCTION_EVENTS.ROUND_COMPLETED, (p) => this.handleRoundCompleted(p));
+    eventBus.on(AUCTION_EVENTS.ROUND_UPDATED, (p) =>
+      this.handleRoundUpdated(p),
+    );
+    eventBus.on(AUCTION_EVENTS.ROUND_DELETED, (p) =>
+      this.handleRoundDeleted(p),
+    );
+    eventBus.on(AUCTION_EVENTS.ROUND_COMPLETED, (p) =>
+      this.handleRoundCompleted(p),
+    );
 
     // Lot
     eventBus.on(AUCTION_EVENTS.LOT_OPENED, (p) => this.handleLotOpened(p));
     eventBus.on(AUCTION_EVENTS.LOT_SOLD, (p) => this.handleLotSold(p));
     eventBus.on(AUCTION_EVENTS.LOT_UNSOLD, (p) => this.handleLotUnsold(p));
-    eventBus.on(AUCTION_EVENTS.LIVE_STATE_UPDATED, (p) => this.handleLiveStateUpdated(p));
+    eventBus.on(AUCTION_EVENTS.LIVE_STATE_UPDATED, (p) =>
+      this.handleLiveStateUpdated(p),
+    );
 
     // Bidding
     eventBus.on(AUCTION_EVENTS.BID_PLACED, (p) => this.handleBidPlaced(p));
 
     // Presence
-    eventBus.on(AUCTION_EVENTS.VIEWER_COUNT_UPDATED, (p) => this.handleViewerCountUpdated(p));
-    eventBus.on(AUCTION_EVENTS.VIEWER_JOINED, (p) => this.handleViewerJoined(p));
+    eventBus.on(AUCTION_EVENTS.VIEWER_COUNT_UPDATED, (p) =>
+      this.handleViewerCountUpdated(p),
+    );
+    eventBus.on(AUCTION_EVENTS.VIEWER_JOINED, (p) =>
+      this.handleViewerJoined(p),
+    );
     eventBus.on(AUCTION_EVENTS.VIEWER_LEFT, (p) => this.handleViewerLeft(p));
 
-    console.log('[SocketPublisher] Listening to auction domain events');
+    console.log("[SocketPublisher] Listening to auction domain events");
   }
 
-  // ---------- low level publish ----------
+  /**
+   * Lightweight transport sanitizer — transport layer only.
+   *
+   * Guards against:
+   * - Circular references
+   * - Functions / Symbols
+   * - Unexpected non-serializable values
+   *
+   * Does NOT know about Mongoose. All Mongoose→DTO conversion
+   * happens upstream in the event layer (auction.events.js).
+   */
+  sanitizePayload(obj, seen = new WeakSet()) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== "object") {
+      if (typeof obj === "function" || typeof obj === "symbol")
+        return undefined;
+      return obj;
+    }
+    if (obj instanceof Date) return obj.toISOString();
+
+    if (Array.isArray(obj)) {
+      const out = [];
+      for (const item of obj) {
+        const converted = this.sanitizePayload(item, seen);
+        if (converted !== undefined) out.push(converted);
+      }
+      return out;
+    }
+
+    // Circular guard
+    if (seen.has(obj)) return "[Circular]";
+    seen.add(obj);
+
+    const out = {};
+    for (const key of Object.keys(obj)) {
+      const converted = this.sanitizePayload(obj[key], seen);
+      if (converted !== undefined) out[key] = converted;
+    }
+
+    seen.delete(obj);
+    return out;
+  }
+
   publishToAuction(auctionId, socketEvent, payload) {
     try {
       const room = `auction:${auctionId}`;
-      this.io.to(room).emit(socketEvent, payload);
+     
+
+      const safePayload = this.sanitizePayload(payload);
+
+      // DEV smoke test: scream if something upstream still escaped
+      if (process.env.NODE_ENV !== "production") {
+        try {
+          JSON.stringify(safePayload);
+        } catch (err) {
+          console.error(
+            `[SocketPublisher] NON-SERIALIZABLE payload escaped sanitization for ${socketEvent}:`,
+            err.message,
+          );
+        }
+      }
+
+      this.io.to(room).emit(socketEvent, safePayload);
+
+      const roomInfo = this.io.sockets.adapter.rooms.get(room);
+
+      const connectedClients = roomInfo ? roomInfo.size : 0;
+
+      console.log({
+        room,
+        event: socketEvent,
+        connectedClients,
+        payloadKeys: Object.keys(safePayload),
+      });
+
+
       if (process.env.DEBUG_SOCKET) {
-        console.log(`[SocketPublisher] -> ${room} :: ${socketEvent}`, payload?.auctionId || '');
+        console.log(
+          `[SocketPublisher] -> ${room} :: ${socketEvent}`,
+          safePayload?.auctionId || "",
+        );
       }
     } catch (err) {
-      console.error(`[SocketPublisher] Failed to publish ${socketEvent} for ${auctionId}`, err);
+      console.error(
+        `[SocketPublisher] Failed to publish ${socketEvent} for ${auctionId}`,
+        err,
+      );
     }
   }
 
   publishToAll(socketEvent, payload) {
-    this.io.emit(socketEvent, payload);
+    try {
+      const safePayload = this.sanitizePayload(payload);
+      this.io.emit(socketEvent, safePayload);
+    } catch (err) {
+      console.error(
+        `[SocketPublisher] Failed to publish ${socketEvent} globally`,
+        err,
+      );
+    }
   }
 
   // ---------- Auction handlers ----------
-  handleAuctionStarted({ auctionId, auction, tournamentId, startedBy, _emittedAt }) {
+  handleAuctionStarted({
+    auctionId,
+    auction,
+    tournamentId,
+    startedBy,
+    _emittedAt,
+  }) {
     this.stopTimer(auctionId); // clear any stale timer
-    this.publishToAuction(auctionId, 'auction:started', {
+    this.publishToAuction(auctionId, "auction:started", {
       auctionId,
       auction,
       tournamentId,
       startedBy,
       timestamp: _emittedAt,
     });
-    this.publishToAuction(auctionId, 'auction:log', {
+    this.publishToAuction(auctionId, "auction:log", {
       auctionId,
-      action: 'AUCTION_STARTED',
-      message: 'Auction started',
+      action: "AUCTION_STARTED",
+      message: "Auction started",
       timestamp: _emittedAt,
       userId: startedBy,
     });
@@ -100,7 +213,7 @@ class SocketEventPublisher {
 
   handleAuctionPaused({ auctionId, auction, pausedBy, _emittedAt }) {
     this.pauseTimer(auctionId);
-    this.publishToAuction(auctionId, 'auction:paused', {
+    this.publishToAuction(auctionId, "auction:paused", {
       auctionId,
       auction,
       pausedBy,
@@ -110,7 +223,7 @@ class SocketEventPublisher {
 
   handleAuctionResumed({ auctionId, auction, resumedBy, _emittedAt }) {
     this.resumeTimer(auctionId);
-    this.publishToAuction(auctionId, 'auction:resumed', {
+    this.publishToAuction(auctionId, "auction:resumed", {
       auctionId,
       auction,
       resumedBy,
@@ -120,18 +233,21 @@ class SocketEventPublisher {
 
   handleAuctionCompleted({ auctionId, auction, completedBy, _emittedAt }) {
     this.stopTimer(auctionId);
-    this.publishToAuction(auctionId, 'auction:completed', {
+    this.publishToAuction(auctionId, "auction:completed", {
       auctionId,
       auction,
       completedBy,
       timestamp: _emittedAt,
     });
     // optional global broadcast for lobby screens
-    this.publishToAll('auction:global:completed', { auctionId, timestamp: _emittedAt });
+    this.publishToAll("auction:global:completed", {
+      auctionId,
+      timestamp: _emittedAt,
+    });
   }
 
   handleRulesUpdated({ auctionId, patch, updatedBy, auction, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:rules:updated', {
+    this.publishToAuction(auctionId, "auction:rules:updated", {
       auctionId,
       patch,
       auction,
@@ -142,7 +258,7 @@ class SocketEventPublisher {
 
   // ---------- Round handlers ----------
   handleRoundAdded({ auctionId, round, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:round:added', {
+    this.publishToAuction(auctionId, "auction:round:added", {
       auctionId,
       round,
       timestamp: _emittedAt,
@@ -150,7 +266,7 @@ class SocketEventPublisher {
   }
 
   handleRoundUpdated({ auctionId, round, patch, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:round:updated', {
+    this.publishToAuction(auctionId, "auction:round:updated", {
       auctionId,
       round,
       patch,
@@ -159,7 +275,7 @@ class SocketEventPublisher {
   }
 
   handleRoundDeleted({ auctionId, roundId, roundName, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:round:deleted', {
+    this.publishToAuction(auctionId, "auction:round:deleted", {
       auctionId,
       roundId,
       roundName,
@@ -168,7 +284,7 @@ class SocketEventPublisher {
   }
 
   handleRoundCompleted({ auctionId, roundId, round, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:round:completed', {
+    this.publishToAuction(auctionId, "auction:round:completed", {
       auctionId,
       roundId,
       round,
@@ -177,12 +293,21 @@ class SocketEventPublisher {
   }
 
   // ---------- Lot handlers ----------
-  handleLotOpened({ auctionId, tournamentPlayerId, roundId, currentPlayer, currentRound, liveState, openedBy, _emittedAt }) {
+  handleLotOpened({
+    auctionId,
+    tournamentPlayerId,
+    roundId,
+    currentPlayer,
+    currentRound,
+    liveState,
+    openedBy,
+    _emittedAt,
+  }) {
     // Start authoritative timer
     const total = liveState?.remainingTimeSeconds || 0;
     this.startTimer(auctionId, total, liveState);
 
-    this.publishToAuction(auctionId, 'auction:lot:opened', {
+    this.publishToAuction(auctionId, "auction:lot:opened", {
       auctionId,
       tournamentPlayerId,
       roundId,
@@ -191,23 +316,35 @@ class SocketEventPublisher {
       liveState: {
         ...liveState,
         _serverTime: _emittedAt,
-        _expiresAt: new Date(new Date(_emittedAt).getTime() + total * 1000).toISOString(),
+        _expiresAt: new Date(
+          new Date(_emittedAt).getTime() + total * 1000,
+        ).toISOString(),
       },
       openedBy,
       timestamp: _emittedAt,
     });
 
-    this.publishToAuction(auctionId, 'auction:liveState', {
+    this.publishToAuction(auctionId, "auction:liveState", {
       auctionId,
       liveState,
-      trigger: 'LOT_OPENED',
+      trigger: "LOT_OPENED",
       timestamp: _emittedAt,
     });
   }
 
-  handleLotSold({ auctionId, tournamentPlayerId, roundId, soldPrice, soldToTeamId, soldToTeamName, liveState, settledBy, _emittedAt }) {
+  handleLotSold({
+    auctionId,
+    tournamentPlayerId,
+    roundId,
+    soldPrice,
+    soldToTeamId,
+    soldToTeamName,
+    liveState,
+    settledBy,
+    _emittedAt,
+  }) {
     this.stopTimer(auctionId);
-    this.publishToAuction(auctionId, 'auction:lot:sold', {
+    this.publishToAuction(auctionId, "auction:lot:sold", {
       auctionId,
       tournamentPlayerId,
       roundId,
@@ -218,17 +355,24 @@ class SocketEventPublisher {
       settledBy,
       timestamp: _emittedAt,
     });
-    this.publishToAuction(auctionId, 'auction:liveState', {
+    this.publishToAuction(auctionId, "auction:liveState", {
       auctionId,
       liveState,
-      trigger: 'LOT_SOLD',
+      trigger: "LOT_SOLD",
       timestamp: _emittedAt,
     });
   }
 
-  handleLotUnsold({ auctionId, tournamentPlayerId, roundId, liveState, settledBy, _emittedAt }) {
+  handleLotUnsold({
+    auctionId,
+    tournamentPlayerId,
+    roundId,
+    liveState,
+    settledBy,
+    _emittedAt,
+  }) {
     this.stopTimer(auctionId);
-    this.publishToAuction(auctionId, 'auction:lot:unsold', {
+    this.publishToAuction(auctionId, "auction:lot:unsold", {
       auctionId,
       tournamentPlayerId,
       roundId,
@@ -236,16 +380,16 @@ class SocketEventPublisher {
       settledBy,
       timestamp: _emittedAt,
     });
-    this.publishToAuction(auctionId, 'auction:liveState', {
+    this.publishToAuction(auctionId, "auction:liveState", {
       auctionId,
       liveState,
-      trigger: 'LOT_UNSOLD',
+      trigger: "LOT_UNSOLD",
       timestamp: _emittedAt,
     });
   }
 
   handleLiveStateUpdated({ auctionId, liveState, trigger, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:liveState', {
+    this.publishToAuction(auctionId, "auction:liveState", {
       auctionId,
       liveState,
       trigger,
@@ -273,7 +417,7 @@ class SocketEventPublisher {
     }
 
     // 1) New bid event — every client listening to this auction
-    this.publishToAuction(auctionId, 'auction:bid:placed', {
+    this.publishToAuction(auctionId, "auction:bid:placed", {
       auctionId,
       bid,
       tournamentPlayerId,
@@ -288,17 +432,17 @@ class SocketEventPublisher {
     });
 
     // 2) Live state sync (currentHighestBid, highestBidderTeamId, remainingTime, version)
-    this.publishToAuction(auctionId, 'auction:liveState', {
+    this.publishToAuction(auctionId, "auction:liveState", {
       auctionId,
       liveState,
-      trigger: 'BID_PLACED',
+      trigger: "BID_PLACED",
       timestamp: _emittedAt,
     });
 
     // 3) Log entry
-    this.publishToAuction(auctionId, 'auction:log', {
+    this.publishToAuction(auctionId, "auction:log", {
       auctionId,
-      action: 'BID_PLACED',
+      action: "BID_PLACED",
       message: `Bid of ${amount} placed by ${teamName}`,
       metadata: { bidId: bid?._id || bid?.id, amount, teamId },
       timestamp: _emittedAt,
@@ -314,7 +458,7 @@ class SocketEventPublisher {
 
   // ---------- Presence ----------
   handleViewerCountUpdated({ auctionId, viewerCount, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:viewer:count', {
+    this.publishToAuction(auctionId, "auction:viewer:count", {
       auctionId,
       viewerCount,
       timestamp: _emittedAt,
@@ -322,7 +466,7 @@ class SocketEventPublisher {
   }
 
   handleViewerJoined({ auctionId, viewerId, userId, viewerCount, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:viewer:joined', {
+    this.publishToAuction(auctionId, "auction:viewer:joined", {
       auctionId,
       viewerId,
       userId,
@@ -332,7 +476,7 @@ class SocketEventPublisher {
   }
 
   handleViewerLeft({ auctionId, viewerId, viewerCount, _emittedAt }) {
-    this.publishToAuction(auctionId, 'auction:viewer:left', {
+    this.publishToAuction(auctionId, "auction:viewer:left", {
       auctionId,
       viewerId,
       viewerCount,
@@ -357,7 +501,7 @@ class SocketEventPublisher {
       totalSeconds,
       expiresAt,
       version: liveState?.version ?? 0,
-      lotStatus: liveState?.lotStatus || 'BIDDING',
+      lotStatus: liveState?.lotStatus || "BIDDING",
       startedAt: new Date(),
       isPaused: false,
     });
@@ -371,7 +515,7 @@ class SocketEventPublisher {
       ticks += 1;
 
       // Every second emit tick
-      this.publishToAuction(auctionId, 'auction:timer:tick', {
+      this.publishToAuction(auctionId, "auction:timer:tick", {
         auctionId,
         remaining: Math.ceil(trueRemaining * 10) / 10, // 0.1s precision
         total: state.totalSeconds,
@@ -383,7 +527,7 @@ class SocketEventPublisher {
 
       // Every 5 ticks send full sync (correct drift)
       if (ticks % 5 === 0) {
-        this.publishToAuction(auctionId, 'auction:timer:sync', {
+        this.publishToAuction(auctionId, "auction:timer:sync", {
           auctionId,
           remaining: trueRemaining,
           total: state.totalSeconds,
@@ -393,7 +537,7 @@ class SocketEventPublisher {
       }
 
       if (trueRemaining <= 0) {
-        this.publishToAuction(auctionId, 'auction:timer:expired', {
+        this.publishToAuction(auctionId, "auction:timer:expired", {
           auctionId,
           timestamp: new Date().toISOString(),
         });
@@ -404,7 +548,7 @@ class SocketEventPublisher {
     this.activeTimers.set(auctionId, interval);
 
     // Immediate sync on start
-    this.publishToAuction(auctionId, 'auction:timer:sync', {
+    this.publishToAuction(auctionId, "auction:timer:sync", {
       auctionId,
       remaining: remainingSeconds,
       total: totalSeconds,
@@ -418,7 +562,7 @@ class SocketEventPublisher {
     const state = this.timerState.get(auctionId);
     if (!state) {
       // No active timer — start one if lot is BIDDING
-      if (liveState?.lotStatus === 'BIDDING') {
+      if (liveState?.lotStatus === "BIDDING") {
         this.startTimer(auctionId, newRemainingSeconds, liveState);
       }
       return;
@@ -427,14 +571,14 @@ class SocketEventPublisher {
     state.version = liveState?.version ?? state.version;
     state.remainingSeconds = newRemainingSeconds;
 
-    this.publishToAuction(auctionId, 'auction:timer:sync', {
+    this.publishToAuction(auctionId, "auction:timer:sync", {
       auctionId,
       remaining: newRemainingSeconds,
       total: state.totalSeconds,
       version: state.version,
       serverTime: new Date().toISOString(),
       expiresAt: new Date(state.expiresAt).toISOString(),
-      reason: 'BID_PLACED',
+      reason: "BID_PLACED",
     });
   }
 
@@ -442,7 +586,10 @@ class SocketEventPublisher {
     const state = this.timerState.get(auctionId);
     if (state) {
       state.isPaused = true;
-      state.pausedRemaining = Math.max(0, (state.expiresAt - Date.now()) / 1000);
+      state.pausedRemaining = Math.max(
+        0,
+        (state.expiresAt - Date.now()) / 1000,
+      );
     }
   }
 
@@ -464,7 +611,7 @@ class SocketEventPublisher {
       this.timerState.delete(auctionId);
     }
     // Notify clients timer stopped
-    this.publishToAuction(auctionId, 'auction:timer:stopped', {
+    this.publishToAuction(auctionId, "auction:timer:stopped", {
       auctionId,
       timestamp: new Date().toISOString(),
     });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, GripVertical, Loader2, Lock, Plus, Save, ShieldAlert, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -9,7 +9,7 @@ import {
   useAuctionPermissions,
 } from "@/features/auction/hooks/index.hook";
 import { playerApi } from "@/features/auction/api/index.api";
-import type { Player, AuctionRoundCategory } from "@/features/auction/types/index.types";
+import type { Player, AuctionRound, AuctionRoundCategory } from "@/features/auction/types/index.types";
 import { RoundTypeBadge } from "@/features/auction/components/Badges";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
@@ -112,6 +112,33 @@ export default function RoundEditorPage() {
     }
   }, [round]);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // DEEP FIX: Player → Round mapping that respects BOTH server state and
+  // local unsaved edits. This is the single source of truth for the pool.
+  // ─────────────────────────────────────────────────────────────────────────
+  const playerToRoundMap = useMemo(() => {
+    const map = new Map<string, AuctionRound>();
+
+    // 1. OTHER rounds (server truth — never edited on this page)
+    for (const r of rounds) {
+      if (r.id === roundId) continue;
+      for (const pid of r.playerIds) {
+        if (!map.has(pid)) map.set(pid, r);
+      }
+    }
+
+    // 2. CURRENT round (local `playerIds` is the source of truth here).
+    //    This means dragging a player OUT of the left panel instantly frees
+    //    them in the pool without waiting for a server save.
+    if (round) {
+      for (const pid of playerIds) {
+        map.set(pid, round);
+      }
+    }
+
+    return map;
+  }, [rounds, roundId, round, playerIds]);
+
   // Guards
   if (!hasHydrated) {
     return (
@@ -183,8 +210,12 @@ export default function RoundEditorPage() {
     .map((id) => players.find((p) => p.id === id))
     .filter((p): p is Player => !!p);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // DEEP FIX: Pool now shows ALL matching players. Taken ones are disabled
+  // and annotated with their round name instead of being silently hidden.
+  // ─────────────────────────────────────────────────────────────────────────
   const pool = players.filter(
-    (p) => !playerIds.includes(p.id) && p.name.toLowerCase().includes(search.toLowerCase())
+    (p) => p.name.toLowerCase().includes(search.toLowerCase())
   );
 
   function reorder(from: number, to: number) {
@@ -368,29 +399,64 @@ export default function RoundEditorPage() {
             ) : pool.length === 0 ? (
               <p className="py-6 text-center text-xs text-slate-600">No matching players</p>
             ) : (
-              pool.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center gap-2.5 rounded-lg bg-white/[0.02] px-3 py-2"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-[10px] font-bold text-white">
-                    {initials(p.name)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-slate-200">{p.name}</p>
-                    <p className="text-[10px] text-slate-500">
-                      {ROLE_ICONS[p.role]} {p.role} · {formatLakhs(p.basePrice)}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setPlayerIds((prev) => [...prev, p.id])}
-                    disabled={!playersEditable}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400/10 text-amber-300 transition hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-30"
+              pool.map((p) => {
+                const assignedRound = playerToRoundMap.get(p.id);
+                const isInCurrentRound = assignedRound?.id === round?.id;
+                const isTaken = !!assignedRound;
+
+                return (
+                  <div
+                    key={p.id}
+                    className={`flex items-center gap-2.5 rounded-lg px-3 py-2 ${
+                      isTaken ? "bg-white/[0.01]" : "bg-white/[0.02]"
+                    }`}
                   >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))
+                    <div
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold ${
+                        isTaken ? "bg-slate-800/50 text-slate-600" : "bg-slate-800 text-white"
+                      }`}
+                    >
+                      {initials(p.name)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={`truncate text-xs font-medium ${
+                          isTaken ? "text-slate-500" : "text-slate-200"
+                        }`}
+                      >
+                        {p.name}
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        {ROLE_ICONS[p.role]} {p.role} · {formatLakhs(p.basePrice)}
+                        {isInCurrentRound && (
+                          <span className="ml-1.5 text-amber-400/80">· Already in this round</span>
+                        )}
+                        {assignedRound && !isInCurrentRound && (
+                          <span className="ml-1.5 text-sky-400/80">· In: {assignedRound.name}</span>
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setPlayerIds((prev) => [...prev, p.id])}
+                      disabled={!playersEditable || isTaken}
+                      title={
+                        isTaken
+                          ? isInCurrentRound
+                            ? "Already in this round"
+                            : `Assigned to ${assignedRound.name}`
+                          : "Add to round"
+                      }
+                      className={`flex h-7 w-7 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-30 ${
+                        isTaken
+                          ? "bg-white/5 text-slate-600"
+                          : "bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
+                      }`}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

@@ -436,6 +436,7 @@ function DashboardHero({
         timeStyle: "short",
       })
     : "Not scheduled";
+  const organizer = activeAuction?.tournamentId?.organizerId?.name ?? activeAuction?.organizer ?? "";
 
   return (
     <motion.div
@@ -456,7 +457,7 @@ function DashboardHero({
 
           <p className="mt-1 max-w-xl text-sm text-slate-400">
             {activeAuction?.tournamentName
-              ? `${activeAuction.tournamentName} · Organized by ${activeAuction.organizer}`
+              ? `${activeAuction.tournamentName} • Season ${activeAuction.season}· Organized by ${organizer}`
               : "Configure your tournament to get started"}
           </p>
 

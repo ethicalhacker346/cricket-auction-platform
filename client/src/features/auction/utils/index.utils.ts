@@ -25,6 +25,8 @@ const PERMISSION_KEYS = Object.values(AUCTION_PERMISSIONS);
 
 const THOUSAND = 1_000;
 const LAKH = 1_00_000;
+const CRORE = 100 * LAKH; // 10,000,000 — 1 Crore
+
 
 /**
  * Formats a *raw rupee amount* into a compact Indian numbering string.

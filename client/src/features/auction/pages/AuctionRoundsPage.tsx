@@ -192,12 +192,12 @@ export default function AuctionRoundsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
+           {/* <button
               onClick={() => openPlayerPool()}
               className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/[0.06]"
             >
               <Users className="h-4 w-4 text-amber-400" /> Manage Players
-            </button>
+            </button> */}
             <button
               onClick={() => setShowForm((v) => !v)}
               className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110"

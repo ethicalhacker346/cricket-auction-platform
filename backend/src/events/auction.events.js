@@ -9,7 +9,7 @@
  */
 
 import eventBus from './eventBus.js';
-
+import { toTransportDTO } from '../utils/transport-serializer.js'; // ← NEW
 /**
  * All domain events in the auction bounded context
  * Naming: {aggregate}:{action} in past-tense where possible
@@ -59,10 +59,11 @@ function emitAuctionEvent(eventName, auctionId, data = {}) {
     console.warn(`[auction.events] Missing auctionId for ${eventName}`);
     return false;
   }
-  return eventBus.safeEmit(eventName, {
+  // ← NEW: Convert entire payload to transport-safe DTO before it hits the bus
+  return eventBus.safeEmit(eventName, toTransportDTO({
     auctionId: auctionId.toString(),
     ...data,
-  });
+  }));
 }
 
 // ===================== HELPER EMITTERS =====================

@@ -14,13 +14,15 @@
  * Personal user rooms: `user:${userId}` (created in auth middleware)
  */
 
-import mongoose from 'mongoose';
-import eventBus from '../../events/eventBus.js';
+import mongoose from "mongoose";
+import eventBus from "../../events/eventBus.js";
 import {
   emitViewerJoined,
   emitViewerLeft,
   emitViewerCountUpdated,
-} from '../../events/auction.events.js';
+} from "../../events/auction.events.js";
+
+import { toTransportDTO } from "../../utils/transport-serializer.js"; // ← NEW
 
 // In-memory tracker for socket viewers — complements DB-based AuctionViewer
 // Map<auctionId, Map<viewerId, { socketIds, userId, lastSeen }>>
@@ -47,24 +49,26 @@ function getViewerCount(auctionId) {
 // Try to import AuctionService for DB-backed viewer tracking if available
 let AuctionService = null;
 try {
-  const mod = await import('../../services/auction.service.js').catch(() => null);
+  const mod = await import("../../services/auction.service.js").catch(
+    () => null,
+  );
   if (mod?.AuctionService) AuctionService = mod.AuctionService;
 } catch (_) {}
 
 export function handleAuctionEvents(io, socket) {
   // ---------- JOIN ----------
-  socket.on('auction:join', async (payload, ack) => {
+  socket.on("auction:join", async (payload, ack) => {
     try {
       const { auctionId, viewerId } = payload || {};
       if (!auctionId) {
-        const err = { success: false, message: 'auctionId is required' };
-        if (typeof ack === 'function') return ack(err);
-        return socket.emit('auction:error', err);
+        const err = { success: false, message: "auctionId is required" };
+        if (typeof ack === "function") return ack(err);
+        return socket.emit("auction:error", err);
       }
       if (!isValidObjectId(auctionId)) {
-        const err = { success: false, message: 'Invalid auctionId format' };
-        if (typeof ack === 'function') return ack(err);
-        return socket.emit('auction:error', err);
+        const err = { success: false, message: "Invalid auctionId format" };
+        if (typeof ack === "function") return ack(err);
+        return socket.emit("auction:error", err);
       }
 
       const room = getRoomName(auctionId);
@@ -99,9 +103,13 @@ export function handleAuctionEvents(io, socket) {
       // Try DB persistence if service exists (so REST getViewerCount stays consistent)
       if (AuctionService?.heartbeatViewer) {
         try {
-          await AuctionService.heartbeatViewer(auctionId, finalViewerId, socket.userId || null);
+          await AuctionService.heartbeatViewer(
+            auctionId,
+            finalViewerId,
+            socket.userId || null,
+          );
         } catch (e) {
-          console.warn('[AuctionHandler] heartbeatViewer DB failed', e.message);
+          console.warn("[AuctionHandler] heartbeatViewer DB failed", e.message);
         }
       }
 
@@ -112,11 +120,13 @@ export function handleAuctionEvents(io, socket) {
         viewerCount,
       });
       emitViewerCountUpdated(auctionId, viewerCount, {
-        source: 'socket:join',
+        source: "socket:join",
         viewerId: finalViewerId,
       });
 
-      console.log(`[AuctionHandler] ${finalViewerId} joined ${room} (socket ${socket.id}) count=${viewerCount}`);
+      console.log(
+        `[AuctionHandler] ${finalViewerId} joined ${room} (socket ${socket.id}) count=${viewerCount}`,
+      );
 
       const response = {
         success: true,
@@ -139,11 +149,11 @@ export function handleAuctionEvents(io, socket) {
         }
       }
 
-      if (typeof ack === 'function') return ack(response);
-      socket.emit('auction:joined', response.data);
+      if (typeof ack === "function") return ack(response);
+      socket.emit("auction:joined", response.data);
 
       // Notify others in room excluding sender about new viewer
-      socket.to(room).emit('auction:viewer:joined', {
+      socket.to(room).emit("auction:viewer:joined", {
         auctionId,
         viewerId: finalViewerId,
         userId: socket.userId || null,
@@ -151,32 +161,33 @@ export function handleAuctionEvents(io, socket) {
         timestamp: new Date().toISOString(),
       });
     } catch (err) {
-      console.error('[AuctionHandler] join error', err);
+      console.error("[AuctionHandler] join error", err);
       const errorPayload = { success: false, message: err.message };
-      if (typeof ack === 'function') ack(errorPayload);
-      else socket.emit('auction:error', errorPayload);
+      if (typeof ack === "function") ack(errorPayload);
+      else socket.emit("auction:error", errorPayload);
     }
   });
 
   // Alias for join
-  socket.on('auction:subscribe', (...args) => {
+  socket.on("auction:subscribe", (...args) => {
     // delegate
-    socket.listeners('auction:join')[0]?.(...args);
+    socket.listeners("auction:join")[0]?.(...args);
   });
 
   // ---------- LEAVE ----------
-  socket.on('auction:leave', async (payload, ack) => {
+  socket.on("auction:leave", async (payload, ack) => {
     try {
       const { auctionId } = payload || {};
       if (!auctionId) {
-        const err = { success: false, message: 'auctionId required' };
-        if (typeof ack === 'function') return ack(err);
-        return socket.emit('auction:error', err);
+        const err = { success: false, message: "auctionId required" };
+        if (typeof ack === "function") return ack(err);
+        return socket.emit("auction:error", err);
       }
       const room = getRoomName(auctionId);
       await socket.leave(room);
 
-      const finalViewerId = socket.data.viewerIds?.get(auctionId) || socket.userId || socket.id;
+      const finalViewerId =
+        socket.data.viewerIds?.get(auctionId) || socket.userId || socket.id;
       const viewers = auctionViewers.get(auctionId);
       if (viewers) {
         const entry = viewers.get(finalViewerId);
@@ -201,94 +212,126 @@ export function handleAuctionEvents(io, socket) {
       }
 
       emitViewerLeft(auctionId, { viewerId: finalViewerId, viewerCount });
-      emitViewerCountUpdated(auctionId, viewerCount, { source: 'socket:leave' });
+      emitViewerCountUpdated(auctionId, viewerCount, {
+        source: "socket:leave",
+      });
 
-      console.log(`[AuctionHandler] ${finalViewerId} left ${room} count=${viewerCount}`);
+      console.log(
+        `[AuctionHandler] ${finalViewerId} left ${room} count=${viewerCount}`,
+      );
 
       const resp = { success: true, data: { auctionId, viewerCount } };
-      if (typeof ack === 'function') return ack(resp);
-      socket.emit('auction:left', resp.data);
-      socket.to(room).emit('auction:viewer:left', {
+      if (typeof ack === "function") return ack(resp);
+      socket.emit("auction:left", resp.data);
+      socket.to(room).emit("auction:viewer:left", {
         auctionId,
         viewerId: finalViewerId,
         viewerCount,
         timestamp: new Date().toISOString(),
       });
     } catch (err) {
-      console.error('[AuctionHandler] leave error', err);
-      if (typeof ack === 'function') ack({ success: false, message: err.message });
+      console.error("[AuctionHandler] leave error", err);
+      if (typeof ack === "function")
+        ack({ success: false, message: err.message });
     }
   });
 
   // ---------- HEARTBEAT (viewer presence keep-alive) ----------
-  socket.on('auction:heartbeat', async (payload, ack) => {
+  socket.on("auction:heartbeat", async (payload, ack) => {
     try {
       const { auctionId, viewerId } = payload || {};
       if (!auctionId) {
-        if (typeof ack === 'function') return ack({ success: false, message: 'auctionId required' });
+        if (typeof ack === "function")
+          return ack({ success: false, message: "auctionId required" });
         return;
       }
-      const finalViewerId = viewerId || socket.data.viewerIds?.get(auctionId) || socket.id;
+      const finalViewerId =
+        viewerId || socket.data.viewerIds?.get(auctionId) || socket.id;
       const viewers = getAuctionViewerMap(auctionId);
       if (viewers.has(finalViewerId)) {
         viewers.get(finalViewerId).lastSeen = new Date();
       }
       if (AuctionService?.heartbeatViewer) {
         try {
-          await AuctionService.heartbeatViewer(auctionId, finalViewerId, socket.userId || null);
+          await AuctionService.heartbeatViewer(
+            auctionId,
+            finalViewerId,
+            socket.userId || null,
+          );
         } catch (_) {}
       }
       const viewerCount = getViewerCount(auctionId);
-      if (typeof ack === 'function') ack({ success: true, data: { viewerCount, serverTime: new Date().toISOString() } });
+      if (typeof ack === "function")
+        ack({
+          success: true,
+          data: { viewerCount, serverTime: new Date().toISOString() },
+        });
     } catch (err) {
-      if (typeof ack === 'function') ack({ success: false, message: err.message });
+      if (typeof ack === "function")
+        ack({ success: false, message: err.message });
     }
   });
 
-  // ---------- GET LIVE STATE via socket (optional shortcut) ----------
-  socket.on('auction:getLiveState', async (payload, ack) => {
+  // ---------- GET LIVE STATE via socket ----------
+  socket.on("auction:getLiveState", async (payload, ack) => {
     try {
       const { auctionId } = payload || {};
       if (!auctionId) {
-        if (typeof ack === 'function') return ack({ success: false, message: 'auctionId required' });
+        if (typeof ack === "function")
+          return ack({ success: false, message: "auctionId required" });
         return;
       }
       if (!AuctionService?.getLiveState) {
-        if (typeof ack === 'function') return ack({ success: false, message: 'LiveState service not available' });
+        if (typeof ack === "function")
+          return ack({
+            success: false,
+            message: "LiveState service not available",
+          });
         return;
       }
       const state = await AuctionService.getLiveState(auctionId);
-      if (typeof ack === 'function') return ack({ success: true, data: state });
-      socket.emit('auction:liveState', state);
+      const safeState = toTransportDTO(state); // ← NEW
+
+      if (typeof ack === "function")
+        return ack({ success: true, data: safeState });
+      socket.emit("auction:liveState", safeState);
     } catch (err) {
-      if (typeof ack === 'function') ack({ success: false, message: err.message });
+      if (typeof ack === "function")
+        ack({ success: false, message: err.message });
     }
   });
 
-  socket.on('auction:getSnapshot', async (payload, ack) => {
+  // ---------- GET SNAPSHOT via socket ----------
+  socket.on("auction:getSnapshot", async (payload, ack) => {
     try {
       const { auctionId } = payload || {};
       if (!AuctionService?.getSnapshot) {
-        if (typeof ack === 'function') return ack({ success: false, message: 'Snapshot not available' });
+        if (typeof ack === "function")
+          return ack({ success: false, message: "Snapshot not available" });
         return;
       }
       const snap = await AuctionService.getSnapshot(auctionId);
-      if (typeof ack === 'function') return ack({ success: true, data: snap });
-      socket.emit('auction:snapshot', snap);
+      const safeSnap = toTransportDTO(snap); // ← NEW
+
+      if (typeof ack === "function")
+        return ack({ success: true, data: safeSnap });
+      socket.emit("auction:snapshot", safeSnap);
     } catch (err) {
-      if (typeof ack === 'function') ack({ success: false, message: err.message });
+      if (typeof ack === "function")
+        ack({ success: false, message: err.message });
     }
   });
 
   // ---------- DISCONNECTING cleanup ----------
-  socket.on('disconnecting', async () => {
+  socket.on("disconnecting", async () => {
     try {
       // io rooms still contain joined rooms at this point
       const rooms = Array.from(socket.rooms); // includes own socket.id room
-      const auctionRooms = rooms.filter((r) => r.startsWith('auction:'));
+      const auctionRooms = rooms.filter((r) => r.startsWith("auction:"));
       for (const room of auctionRooms) {
-        const auctionId = room.replace('auction:', '');
-        const finalViewerId = socket.data.viewerIds?.get(auctionId) || socket.userId || socket.id;
+        const auctionId = room.replace("auction:", "");
+        const finalViewerId =
+          socket.data.viewerIds?.get(auctionId) || socket.userId || socket.id;
         const viewers = auctionViewers.get(auctionId);
         if (viewers) {
           const entry = viewers.get(finalViewerId);
@@ -304,10 +347,12 @@ export function handleAuctionEvents(io, socket) {
           AuctionService.removeViewer(auctionId, finalViewerId).catch(() => {});
         }
         emitViewerLeft(auctionId, { viewerId: finalViewerId, viewerCount });
-        emitViewerCountUpdated(auctionId, viewerCount, { source: 'disconnecting' });
+        emitViewerCountUpdated(auctionId, viewerCount, {
+          source: "disconnecting",
+        });
       }
     } catch (err) {
-      console.error('[AuctionHandler] disconnecting cleanup error', err);
+      console.error("[AuctionHandler] disconnecting cleanup error", err);
     }
   });
 }

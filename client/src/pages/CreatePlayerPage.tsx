@@ -10,7 +10,9 @@ import {
   User,
   CheckCircle2,
   ArrowDown,
+  ArrowLeft,
   Loader2,
+  
 } from "lucide-react";
 import { PlayerForm } from "@/components/player/PlayerForm";
 import { LogoSelector } from "@/components/ui/LogoSelector";
@@ -18,6 +20,7 @@ import { LOGO_LIBRARY, type Logo } from "@/components/ui/logoLibrary";
 import { useCreatePlayer } from "@/hooks/usePlayers";
 import { usePlayerMe } from "@/hooks/usePlayers";
 import type { PlayerFormValues } from "@/lib/validators/playerSchema";
+import { Link } from "react-router-dom";
 
 export function CreatePlayerPage() {
   const navigate = useNavigate();
@@ -94,6 +97,7 @@ export function CreatePlayerPage() {
           HERO HEADER
           ═══════════════════════════════════════════════════════════════ */}
       <div className="relative overflow-hidden bg-slate-900 text-white">
+        
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/40 via-slate-900/0 to-slate-900/0" />
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wMykiLz48L3N2Zz4=')] opacity-30" />
 
@@ -102,9 +106,18 @@ export function CreatePlayerPage() {
           animate={{ scaleX: 1 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
           className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-emerald-500 to-sky-500 origin-left"
+          
         />
+        
 
-        <div className="relative max-w-5xl mx-auto px-6 py-16 md:py-20">
+        <div className="relative max-w-5xl mx-auto px-6 py-2 md:py-5">
+          <Link
+            to="/dashboard"
+            className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-100 transition-colors hover:text-slate-500"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Link>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -114,6 +127,7 @@ export function CreatePlayerPage() {
             <div className="p-2.5 bg-white/10 backdrop-blur rounded-xl border border-white/10">
               <Trophy className="w-5 h-5 text-amber-400" />
             </div>
+            
             <span className="text-sm font-semibold text-slate-400 uppercase tracking-[0.15em]">
               Player Onboarding
             </span>

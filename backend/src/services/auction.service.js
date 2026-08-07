@@ -58,6 +58,15 @@ export class AuctionService {
   static buildDefaultTiers(tournament) {
     return [{ upTo: null, increment: tournament.minBidIncrement }];
   }
+  static auctionPopulate = [
+    {
+      path: "tournamentId",
+      populate: {
+        path: "organizerId",
+        select: "name email avatar",
+      },
+    },
+  ];
 
   static async create(tournamentId, user, payload = {}) {
     const tournament = await TournamentService.getById(tournamentId);
@@ -146,23 +155,25 @@ export class AuctionService {
   }
 
   static async findByTournament(tournamentId) {
-    return Auction.findOne({ tournamentId });
+    return Auction.findOne({ tournamentId })
+      .populate(AuctionService.auctionPopulate);
   }
 
   static async getByTournamentOrFail(tournamentId) {
     return assertFound(
-      await Auction.findOne({ tournamentId }),
+      await Auction.findOne({ tournamentId }).populate(AuctionService.auctionPopulate),
+        
       "Auction not found for this tournament",
     );
   }
 
   static async getById(auctionId) {
-    return assertFound(await Auction.findById(auctionId), "Auction not found");
+    return assertFound(await Auction.findById(auctionId).populate(AuctionService.auctionPopulate), "Auction not found");
   }
 
   static async getByIdPopulated(auctionId) {
     return assertFound(
-      await Auction.findById(auctionId).populate("tournamentId"),
+      await Auction.findById(auctionId).populate("tournamentId").populate(AuctionService.auctionPopulate),
       "Auction not found",
     );
   }

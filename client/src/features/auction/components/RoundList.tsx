@@ -73,7 +73,7 @@ function RoundCard({
       <div className="flex items-center gap-2">
         <RoundStatusBadge status={round.status} />
 
-        {onManagePlayers && (
+        {/*{onManagePlayers && (
           <button
             onClick={() => canManagePlayers && onManagePlayers(round.id)}
             disabled={!canManagePlayers}
@@ -90,7 +90,7 @@ function RoundCard({
           >
             <Users className="h-3.5 w-3.5" />
           </button>
-        )}
+        )} */}
 
         {canEdit ? (
           <Link

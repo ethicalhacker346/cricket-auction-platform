@@ -231,7 +231,7 @@ export default function AuctionResultPage() {
                     key={f.id}
                     className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"
                   >
-                    <TeamBudgetCard franchise={f} />
+                    <TeamBudgetCard franchise={f} players={players}/>
                     <TeamRosterCard franchise={f} players={players} />
                   </div>
                 ))

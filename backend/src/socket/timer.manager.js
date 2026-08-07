@@ -19,7 +19,7 @@ export class TimerManager {
   }
 
   publish(auctionId, event, payload) {
-    this.io.to(`auction:${auctionId}`).emit(event, payload);
+    this.io.to(`auction:${auctionId}`).emit(event, this.sanitizePayload(payload));
   }
 
   startTimer(auctionId, remainingSeconds, liveState = {}) {

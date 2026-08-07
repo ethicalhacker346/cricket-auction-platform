@@ -394,7 +394,7 @@ export default function TournamentPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
+        <div className="mx-auto max-w-6xl px-4 py-0.5 md:px-6 md:py-1">
           <Skeleton className="h-64 w-full rounded-3xl" />
           <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
             <Skeleton className="h-28 rounded-2xl" />
@@ -417,7 +417,7 @@ export default function TournamentPage() {
   if (isError || !tournament) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
+        <div className="mx-auto max-w-6xl px-4 py-0.5 md:px-6 md:py-1">
           <Link
             to="/dashboard"
             className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-800"
@@ -453,15 +453,15 @@ export default function TournamentPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
+      <div className="mx-auto max-w-6xl px-4 py-0.5 md:px-6 md:py-1">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-          <Link
+         {/* <Link
             to="/dashboard"
             className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-800"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Dashboard
-          </Link>
+          </Link> */}
         </motion.div>
 
         <TournamentHero tournament={tournament} theme={theme} />
