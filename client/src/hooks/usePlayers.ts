@@ -16,11 +16,11 @@ import type {
   PlayerListQuery,
   Player,
   PlayerListResult,
+  PlayerImageUploadResult,   // ← NEW
 } from "@/api/playerApi";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Query Key Factory — centralized, type-safe cache identity
-// Prevents cache-key typos and makes invalidation surgical.
+// Query Key Factory
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const playerKeys = {
@@ -35,10 +35,6 @@ export const playerKeys = {
 // READ HOOKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Fetches the current authenticated user's player profile.
- * Mirrors useCurrentUser but with stronger cache semantics and window-focus refetch.
- */
 export function usePlayerMe() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -47,44 +43,30 @@ export function usePlayerMe() {
     queryFn: () => playerApi.me(),
     enabled: isAuthenticated,
     retry: false,
-    staleTime: 5 * 60 * 1000,      // 5 min — profile data is semi-static
-    refetchOnWindowFocus: true,      // Better than useAuth: keep fresh on return
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
   });
 }
 
-/**
- * Fetches a public player profile by ID.
- * Long stale-time because Player schema profiles change infrequently.
- */
 export function usePlayerById(id: string) {
   return useQuery({
     queryKey: playerKeys.detail(id),
     queryFn: () => playerApi.getById(id),
     enabled: !!id,
-    staleTime: 10 * 60 * 1000,     // 10 min
-    gcTime: 15 * 60 * 1000,        // Keep in garbage-collector 15 min
+    staleTime: 10 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
   });
 }
 
-/**
- * Standard paginated list. Use for grids with manual pagination controls.
- * placeholderData keeps the previous page visible while the next loads —
- * no jarring white flash.
- */
 export function usePlayerList(params?: PlayerListQuery) {
   return useQuery({
     queryKey: playerKeys.list(params ?? {}),
     queryFn: () => playerApi.list(params),
-    staleTime: 2 * 60 * 1000,      // 2 min — browse data shifts more often
+    staleTime: 2 * 60 * 1000,
     placeholderData: (previousData) => previousData,
   });
 }
 
-/**
- * Infinite-scrolling / load-more list. Superior UX for browse screens.
- * Automatically accumulates pages and detects the next-page boundary from
- * the backend pagination envelope.
- */
 export function useInfinitePlayerList(
   baseParams?: Omit<PlayerListQuery, "page">
 ) {
@@ -107,11 +89,6 @@ export function useInfinitePlayerList(
 // WRITE HOOKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Creates a player profile for the authenticated user.
- * Primes the "me" cache immediately so the profile screen renders
- * instantly on redirect without a loading flash.
- */
 export function useCreatePlayer() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -119,12 +96,8 @@ export function useCreatePlayer() {
   return useMutation({
     mutationFn: (payload: PlayerPayload) => playerApi.create(payload),
     onSuccess: (data) => {
-      // Prime the cache so /players/me mounts instantly
       queryClient.setQueryData(playerKeys.me(), data);
-
-      // Invalidate browse lists so the new player appears in public grids
       queryClient.invalidateQueries({ queryKey: playerKeys.lists() });
-
       toast.success("Player profile created successfully!");
       navigate("/players/me", { replace: true });
     },
@@ -135,11 +108,8 @@ export function useCreatePlayer() {
 }
 
 /**
- * Updates the current user's player profile.
- *
- * ROCK-STAR FEATURE: Full optimistic update with automatic rollback.
- * The UI patches instantly. If the server rejects, we snap back to the
- * previous state without the user ever seeing a broken intermediate screen.
+ * LIBRARY PATH: Update profile fields including selecting a pre-made image URL.
+ * Fully optimistic — UI updates instantly, rolls back on error.
  */
 export function useUpdatePlayerMe() {
   const queryClient = useQueryClient();
@@ -147,15 +117,10 @@ export function useUpdatePlayerMe() {
   return useMutation({
     mutationFn: (payload: Partial<PlayerPayload>) => playerApi.updateMe(payload),
 
-    // ─── Optimistic Phase ───
     onMutate: async (newData) => {
-      // Cancel in-flight refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: playerKeys.me() });
-
-      // Snapshot current cache for rollback
       const previousPlayer = queryClient.getQueryData<Player>(playerKeys.me());
 
-      // Optimistically patch the cache
       if (previousPlayer) {
         queryClient.setQueryData<Player>(playerKeys.me(), {
           ...previousPlayer,
@@ -167,7 +132,6 @@ export function useUpdatePlayerMe() {
       return { previousPlayer };
     },
 
-    // ─── Rollback Phase ───
     onError: (error, _variables, context) => {
       if (context?.previousPlayer) {
         queryClient.setQueryData(playerKeys.me(), context.previousPlayer);
@@ -175,20 +139,12 @@ export function useUpdatePlayerMe() {
       toast.error(getErrorMessage(error));
     },
 
-    // ─── Settlement Phase ───
     onSettled: (_data, _error, variables) => {
-      // Always reconcile with server truth
       queryClient.invalidateQueries({ queryKey: playerKeys.me() });
 
-      // If public-visible fields changed, invalidate public lists too
       const publicFields: (keyof PlayerPayload)[] = [
-        "fullName",
-        "primaryRole",
-        "battingStyle",
-        "bowlingStyle",
-        "profileImage",
-        "nationality",
-        "bio",
+        "fullName", "primaryRole", "battingStyle",
+        "bowlingStyle", "profileImage", "nationality", "bio",
       ];
       const touchedPublic = publicFields.some((f) => f in variables);
       if (touchedPublic) {
@@ -202,14 +158,62 @@ export function useUpdatePlayerMe() {
   });
 }
 
+// ─── NEW: CUSTOM UPLOAD PATH ────────────────────────────────────────────────
+/**
+ * CUSTOM PATH: Upload a user-selected image file.
+ * Not optimistic (we don't know the Cloudinary URL until server responds),
+ * but patches the cache instantly on success so the UI feels snappy.
+ */
+export function useUploadPlayerProfileImage() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (file: File) => playerApi.uploadProfileImage(file),
+    onSuccess: (data) => {
+      // Instant cache patch — no refetch flash
+      queryClient.setQueryData<Player>(playerKeys.me(), (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          profileImage: data.profileImage,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+
+      // profileImage is public-visible — invalidate browse grids
+      queryClient.invalidateQueries({ queryKey: playerKeys.lists() });
+      toast.success("Profile image uploaded!");
+    },
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
+/**
+ * Remove profile image. Clears DB field + deletes Cloudinary asset.
+ */
+export function useRemovePlayerProfileImage() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => playerApi.removeProfileImage(),
+    onSuccess: (player) => {
+      // Replace cache with server-truth (player doc with profileImage: undefined)
+      queryClient.setQueryData<Player>(playerKeys.me(), player);
+      queryClient.invalidateQueries({ queryKey: playerKeys.lists() });
+      toast.success("Profile image removed");
+    },
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // UTILITY HOOKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Returns a prefetch function for hover/click-before-mount scenarios.
- * Use inside player cards: onMouseEnter={() => prefetchPlayer(id)}
- */
 export function usePrefetchPlayer() {
   const queryClient = useQueryClient();
 
@@ -225,11 +229,6 @@ export function usePrefetchPlayer() {
   );
 }
 
-/**
- * Combined filter-state + query hook for browse screens.
- * Manages filters locally and returns the bound query result.
- * Resets page to 1 whenever any filter changes.
- */
 export function usePlayerBrowse(initialFilters?: PlayerListQuery) {
   const [filters, setFilters] = useState<PlayerListQuery>(initialFilters ?? {});
 
@@ -253,7 +252,3 @@ export function usePlayerBrowse(initialFilters?: PlayerListQuery) {
     ...query,
   };
 }
-
-// Simple debounce helper for usePlayerBrowse (if you want to add it)
-// import { useState, useEffect } from "react";
-// function useDebounce<T>(value: T, delay: number): T { ... }

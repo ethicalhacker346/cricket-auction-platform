@@ -1,6 +1,7 @@
+// src/hooks/useTournaments.ts
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { tournamentApi, type ListTournamentsFilters } from "@/api/tournamentApi";
+import { tournamentApi, type ListTournamentsFilters, type TournamentImageUploadResult } from "@/api/tournamentApi";
 import { ApiError } from "@/api/http";
 import type { TournamentPayload } from "@/types/tournament";
 
@@ -14,11 +15,6 @@ function errorMessage(err: unknown, fallback: string) {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-/**
- * Normalizes tournament data from API response.
- * Handles both envelope-wrapped and raw responses.
- * Ensures counts are numbers and id is always present.
- */
 function normalizeTournament(data: any) {
   if (!data) return null;
   const t = data.data ?? data;
@@ -30,16 +26,19 @@ function normalizeTournament(data: any) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// READ HOOKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export function useTournaments(filters: ListTournamentsFilters = {}) {
   return useQuery({
     queryKey: keys.list(filters),
     queryFn: async () => {
       const result = await tournamentApi.list(filters);
-      // tournamentApi.list already returns Tournament[]
       const list = Array.isArray(result) ? result : [];
       return {
         data: list.map(normalizeTournament).filter(Boolean),
-        pagination: null, // pagination not consumed by dashboard yet
+        pagination: null,
       };
     },
     staleTime: 30_000,
@@ -67,6 +66,10 @@ export function useTournament(id: string | undefined) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// WRITE HOOKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export function useCreateTournament() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -79,17 +82,75 @@ export function useCreateTournament() {
   });
 }
 
+/**
+ * LIBRARY PATH: Update tournament fields including selecting a pre-made logo URL.
+ */
 export function useUpdateTournament(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (payload: Partial<TournamentPayload>) => tournamentApi.update(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: keys.all });
+      queryClient.invalidateQueries({ queryKey: keys.detail(id) });
       toast.success("Tournament updated");
     },
     onError: (err) => toast.error(errorMessage(err, "Could not update tournament")),
   });
 }
+
+// ─── NEW: CUSTOM UPLOAD PATH ────────────────────────────────────────────────
+/**
+ * CUSTOM PATH: Upload a user-selected logo file for a tournament.
+ */
+export function useUploadTournamentLogo() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) =>
+      tournamentApi.uploadLogo(id, file),
+
+    onSuccess: (data, variables) => {
+      // Instant cache patch
+      queryClient.setQueryData(keys.detail(variables.id), (old: any) => {
+        if (!old) return old;
+        return { ...old, logo: data.logo, updatedAt: new Date().toISOString() };
+      });
+
+      // Logo is public-visible in lists
+      queryClient.invalidateQueries({ queryKey: keys.all });
+      toast.success("Tournament logo uploaded!");
+    },
+
+    onError: (err) => {
+      toast.error(errorMessage(err, "Could not upload logo"));
+    },
+  });
+}
+
+/**
+ * Remove tournament logo. Clears DB field + deletes Cloudinary asset.
+ */
+export function useRemoveTournamentLogo() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => tournamentApi.removeLogo(id),
+
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: keys.detail(variables.id) });
+      queryClient.invalidateQueries({ queryKey: keys.all });
+      toast.success("Logo removed");
+    },
+
+    onError: (err) => {
+      toast.error(errorMessage(err, "Could not remove logo"));
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIFECYCLE HOOKS (unchanged, included for completeness)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export function useOpenPlayerRegistration(id: string) {
   const queryClient = useQueryClient();
@@ -140,7 +201,7 @@ export function useScheduleAuction(id: string) {
       queryClient.invalidateQueries({ queryKey: keys.detail(id) });
       toast.success("Auction scheduled");
     },
-    onError: (err) => toast.error(errorMessage(err, "Could not schedule auction")),
+       onError: (err) => toast.error(errorMessage(err, "Could not schedule auction")),
   });
 }
 

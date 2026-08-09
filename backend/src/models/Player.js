@@ -59,6 +59,11 @@ const playerSchema = new mongoose.Schema(
         message: 'profileImage must be a valid URL',
       },
     },
+    profileImagePublicId: {
+      type: String,
+      trim: true,
+      select: false,
+    },
     bio: {
       type: String,
       maxlength: 1000,

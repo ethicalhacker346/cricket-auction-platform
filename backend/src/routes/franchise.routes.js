@@ -5,6 +5,8 @@ import { validate } from '../middleware/validate.js';
 import { franchiseController } from '../controllers/franchise.controller.js';
 import { createFranchiseSchema, idParamSchema } from '../validators/schemas.js';
 import { USER_ROLES } from '../config/constants.js';
+import { singleUpload, validateImageBuffer } from '../middleware/upload.middleware.js';
+import { imageUploadLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
 
@@ -24,6 +26,10 @@ router.get(
 );
 
 router.get('/:id', validate(idParamSchema, 'params'), asyncHandler(franchiseController.getById));
+
+// library
+router.patch('/:id/logo',   authenticate, imageUploadLimiter, singleUpload('image'), validateImageBuffer, franchiseController.uploadLogo);
+router.delete('/:id/logo',  authenticate, imageUploadLimiter, franchiseController.removeLogo);
 
 router.patch(
   '/:id',

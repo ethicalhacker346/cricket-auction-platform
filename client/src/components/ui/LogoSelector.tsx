@@ -19,6 +19,9 @@ import {
   X,
   Sparkles,
   Loader2,
+  Upload,
+  FileImage,
+  AlertCircle,
 } from "lucide-react";
 import type { Logo, LogoCategory } from "./logoLibrary";
 
@@ -30,19 +33,33 @@ export type UserRole = "player" | "franchise_owner" | "organizer" | "admin";
 
 export interface LogoSelectorProps {
   userRole: UserRole;
+  /** Current image URL (from library or Cloudinary) */
   value?: string | null;
-  onChange: (logo: Logo) => void;
+  /** Available library assets */
   logos: Logo[];
+  /** Called when user selects a library logo */
+  onSelect: (logo: Logo) => void;
+  /** Called when user drops/selects a file for custom upload */
+  onUpload?: (file: File) => Promise<void>;
+  /** Called when user clicks Remove */
+  onRemove?: () => Promise<void> | void;
+  /** Loading state from parent's upload mutation */
+  isUploading?: boolean;
+  /** Loading state from parent's remove mutation */
+  isRemoving?: boolean;
+  /** Show the custom upload tab? Default true */
+  allowUpload?: boolean;
+  /** Show the remove button? Default true */
+  allowRemove?: boolean;
+  /** Max file size in bytes (default 5MB) */
+  maxFileSize?: number;
+  /** Accepted MIME types */
+  acceptedTypes?: string[];
   className?: string;
-  /** Debounce search input in ms */
   searchDebounceMs?: number;
-  /** Number of columns in grid (responsive override) */
   columns?: { sm?: number; md?: number; lg?: number; xl?: number };
-  /** Show logo URL in preview banner */
   showUrlInPreview?: boolean;
-  /** Custom empty state message */
   emptyMessage?: string;
-  /** ARIA label for the selector region */
   ariaLabel?: string;
 }
 
@@ -84,11 +101,17 @@ const ROLE_TAB_MAP: Record<UserRole, LogoCategory[]> = {
   admin: ["player", "franchise", "tournament"],
 };
 
+const DEFAULT_ACCEPTED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+];
+
 // =============================================================================
 // HOOKS
 // =============================================================================
 
-/** Debounce any value */
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -98,7 +121,6 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
-/** Preload images for instant perceived performance */
 function usePreloadImages(urls: string[]) {
   useEffect(() => {
     urls.forEach((url) => {
@@ -108,7 +130,6 @@ function usePreloadImages(urls: string[]) {
   }, [urls]);
 }
 
-/** Measure grid columns from container width */
 function useGridColumns(
   containerRef: React.RefObject<HTMLElement | null>,
   overrides?: LogoSelectorProps["columns"]
@@ -140,6 +161,230 @@ function useGridColumns(
 // =============================================================================
 // SUB-COMPONENTS
 // =============================================================================
+
+function ModeToggle({
+  mode,
+  onChange,
+  allowUpload,
+}: {
+  mode: "library" | "upload";
+  onChange: (m: "library" | "upload") => void;
+  allowUpload: boolean;
+}) {
+  if (!allowUpload) return null;
+
+  return (
+    <div className="flex p-1 bg-slate-800/60 rounded-xl border border-slate-700/50">
+      {(["library", "upload"] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => onChange(m)}
+          className={`
+            relative flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+            transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40
+            ${mode === m ? "text-white" : "text-slate-400 hover:text-slate-200"}
+          `}
+        >
+          {m === "library" ? (
+            <>
+              <ImageIcon className="w-4 h-4" />
+              <span>Library</span>
+            </>
+          ) : (
+            <>
+              <Upload className="w-4 h-4" />
+              <span>Upload</span>
+            </>
+          )}
+          {mode === m && (
+            <motion.div
+              layoutId="modeToggle"
+              className="absolute inset-0 bg-slate-700 rounded-lg shadow-sm"
+              style={{ zIndex: -1 }}
+              transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
+            />
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function UploadZone({
+  onUpload,
+  isUploading,
+  maxFileSize,
+  acceptedTypes,
+}: {
+  onUpload: (file: File) => void;
+  isUploading: boolean;
+  maxFileSize: number;
+  acceptedTypes: string[];
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const localPreview = useMemo(
+    () => (pendingFile ? URL.createObjectURL(pendingFile) : null),
+    [pendingFile]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (localPreview) URL.revokeObjectURL(localPreview);
+    };
+  }, [localPreview]);
+
+  // Clear pending file when upload finishes
+  useEffect(() => {
+    if (!isUploading && pendingFile) {
+      setPendingFile(null);
+    }
+  }, [isUploading]);
+
+  const validate = useCallback(
+    (file: File): string | null => {
+      if (!acceptedTypes.includes(file.type)) {
+        const exts = acceptedTypes.map((t) => t.replace("image/", ".")).join(", ");
+        return `Invalid format. Allowed: ${exts}`;
+      }
+      if (file.size > maxFileSize) {
+        return `File too large. Max: ${(maxFileSize / 1024 / 1024).toFixed(1)}MB`;
+      }
+      return null;
+    },
+    [acceptedTypes, maxFileSize]
+  );
+
+  const handleFile = useCallback(
+    (file: File) => {
+      setLocalError(null);
+      const err = validate(file);
+      if (err) {
+        setLocalError(err);
+        return;
+      }
+      setPendingFile(file);
+      onUpload(file);
+    },
+    [validate, onUpload]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) handleFile(file);
+    },
+    [handleFile]
+  );
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFile(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => !isUploading && inputRef.current?.click()}
+        className={`
+          relative flex flex-col items-center justify-center
+          w-full min-h-[240px] rounded-2xl border-2 border-dashed
+          transition-all duration-300 cursor-pointer
+          ${isDragging
+            ? "border-blue-500 bg-blue-500/10 scale-[1.01]"
+            : "border-slate-700 bg-slate-800/30 hover:border-slate-500 hover:bg-slate-800/50"
+          }
+          ${isUploading ? "pointer-events-none opacity-70" : ""}
+        `}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept={acceptedTypes.join(",")}
+          onChange={handleInputChange}
+          className="hidden"
+          aria-label="Upload custom image"
+        />
+
+        {pendingFile && localPreview ? (
+          <div className="relative w-full h-full flex flex-col items-center justify-center p-6">
+            <div className="relative w-32 h-32 rounded-xl overflow-hidden border border-slate-700 shadow-lg">
+              <img
+                src={localPreview}
+                alt="Preview"
+                className="w-full h-full object-cover"
+              />
+              {isUploading && (
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                  <Loader2 className="w-8 h-8 text-white animate-spin" />
+                </div>
+              )}
+            </div>
+            <div className="mt-4 text-center">
+              <p className="text-sm font-medium text-slate-200 truncate max-w-[200px]">
+                {pendingFile.name}
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {(pendingFile.size / 1024).toFixed(1)} KB
+              </p>
+              {isUploading && (
+                <p className="text-xs text-blue-400 mt-2 animate-pulse">
+                  Uploading to Cloudinary…
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center p-8 text-center">
+            <div
+              className={`
+                w-14 h-14 rounded-2xl flex items-center justify-center mb-4
+                transition-colors duration-300
+                ${isDragging ? "bg-blue-500/20" : "bg-slate-800/60"}
+              `}
+            >
+              <Upload
+                className={`w-7 h-7 ${isDragging ? "text-blue-400" : "text-slate-500"}`}
+              />
+            </div>
+            <p className="text-sm font-semibold text-slate-300 mb-1">
+              {isDragging ? "Drop to upload" : "Drag & drop or click to browse"}
+            </p>
+            <p className="text-xs text-slate-500">
+              {acceptedTypes.map((t) => t.replace("image/", ".").toUpperCase()).join(", ")} up to{" "}
+              {(maxFileSize / 1024 / 1024).toFixed(0)}MB
+            </p>
+          </div>
+        )}
+      </div>
+
+      {localError && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs"
+        >
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{localError}</span>
+        </motion.div>
+      )}
+    </div>
+  );
+}
 
 function LogoCard({
   logo,
@@ -290,14 +535,18 @@ function CategoryTab({
 
 function SelectedBanner({
   logo,
+  url,
   onClear,
   showUrl,
+  isRemoving,
 }: {
-  logo: Logo;
+  logo: Logo | null;
+  url?: string | null;
   onClear: () => void;
   showUrl?: boolean;
+  isRemoving?: boolean;
 }) {
-  const meta = CATEGORY_META[logo.category];
+  const meta = logo ? CATEGORY_META[logo.category] : null;
 
   return (
     <motion.div
@@ -308,33 +557,53 @@ function SelectedBanner({
     >
       <div className="relative p-4 rounded-2xl bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-blue-500/10 border border-blue-500/20">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2 flex items-center justify-center shrink-0">
-            <img
-              src={logo.url}
-              alt={logo.name}
-              className="w-full h-full object-contain"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
-            />
+          <div className="w-14 h-14 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2 flex items-center justify-center shrink-0 overflow-hidden">
+            {url ? (
+              <img
+                src={url}
+                alt="Selected"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = "none";
+                }}
+              />
+            ) : (
+              <FileImage className="w-7 h-7 text-slate-600" />
+            )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-white">{logo.name}</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 ${meta.accent}`}>
-                {logo.category}
+              <span className="text-sm font-bold text-white truncate">
+                {logo?.name || "Custom Upload"}
               </span>
+              {logo && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 ${meta?.accent}`}
+                >
+                  {logo.category}
+                </span>
+              )}
+              {!logo && url && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-emerald-400">
+                  Cloudinary
+                </span>
+              )}
             </div>
-            {showUrl && (
-              <p className="text-xs text-slate-400 mt-0.5 font-mono truncate">{logo.url}</p>
+            {showUrl && url && (
+              <p className="text-xs text-slate-400 mt-0.5 font-mono truncate">{url}</p>
             )}
           </div>
           <button
             onClick={onClear}
-            className="p-2 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            disabled={isRemoving}
+            className="p-2 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-50"
             aria-label="Clear selection"
           >
-            <X className="w-4 h-4" />
+            {isRemoving ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <X className="w-4 h-4" />
+            )}
           </button>
         </div>
       </div>
@@ -371,8 +640,16 @@ function EmptyState({ query, message }: { query: string; message?: string }) {
 export function LogoSelector({
   userRole,
   value,
-  onChange,
   logos,
+  onSelect,
+  onUpload,
+  onRemove,
+  isUploading = false,
+  isRemoving = false,
+  allowUpload = true,
+  allowRemove = true,
+  maxFileSize = 5 * 1024 * 1024,
+  acceptedTypes = DEFAULT_ACCEPTED_TYPES,
   className = "",
   searchDebounceMs = 150,
   columns,
@@ -383,6 +660,7 @@ export function LogoSelector({
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<LogoCategory | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [activeMode, setActiveMode] = useState<"library" | "upload">("library");
   const searchRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const debouncedSearch = useDebounce(search, searchDebounceMs);
@@ -411,7 +689,7 @@ export function LogoSelector({
     });
   }, [logos, activeCategory, debouncedSearch]);
 
-  // Preload visible logos for instant feel
+  // Preload visible logos
   usePreloadImages(filtered.map((l) => l.url));
 
   // Category counts
@@ -428,7 +706,7 @@ export function LogoSelector({
     return c;
   }, [logos, visibleCategories, debouncedSearch]);
 
-  // Selected logo object
+  // Selected logo object (null if custom upload)
   const selectedLogo = useMemo(
     () => logos.find((l) => l.url === value) || null,
     [logos, value]
@@ -472,7 +750,7 @@ export function LogoSelector({
           break;
         case "Enter":
           if (focusedIndex >= 0 && focusedIndex < filtered.length) {
-            onChange(filtered[focusedIndex]);
+            onSelect(filtered[focusedIndex]);
           }
           return;
         case "Escape":
@@ -487,11 +765,18 @@ export function LogoSelector({
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [filtered, focusedIndex, gridCols, onChange]);
+  }, [filtered, focusedIndex, gridCols, onSelect]);
 
   const handleClear = useCallback(() => {
-    onChange({ id: "", url: "", name: "", category: "player" });
-  }, [onChange]);
+    onRemove?.();
+  }, [onRemove]);
+
+  const handleUpload = useCallback(
+    (file: File) => {
+      onUpload?.(file);
+    },
+    [onUpload]
+  );
 
   return (
     <div
@@ -510,107 +795,157 @@ export function LogoSelector({
             <Sparkles className="w-4.5 h-4.5 text-white" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-white">Select Logo</h2>
+            <h2 className="text-base font-bold text-white">Select Image</h2>
             <p className="text-xs text-slate-400">
-              Choose a logo from the {userRole.replace("_", " ")} library
+              {allowUpload
+                ? "Choose from library or upload your own"
+                : `Choose a logo from the ${userRole.replace("_", " ")} library`}
             </p>
           </div>
         </div>
 
         <AnimatePresence>
-          {selectedLogo && selectedLogo.url && (
+          {value && (
             <SelectedBanner
               logo={selectedLogo}
+              url={value}
               onClear={handleClear}
               showUrl={showUrlInPreview}
+              isRemoving={isRemoving}
             />
           )}
         </AnimatePresence>
 
-        <div className="flex flex-col sm:flex-row gap-3">
-          {/* Search */}
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input
-              ref={searchRef}
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search logos..."
-              className={`
-                w-full pl-10 pr-4 py-2.5 rounded-xl
-                bg-slate-800/50 border border-slate-700/50
-                text-sm text-white placeholder-slate-500
-                focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40
-                transition-all duration-300
-              `}
-              aria-label="Search logos"
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:block">
-              <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-slate-800 border border-slate-700">
-                ⌘K
-              </kbd>
-            </div>
+        {/* Mode Toggle */}
+        {allowUpload && onUpload && (
+          <div className="mb-5">
+            <ModeToggle mode={activeMode} onChange={setActiveMode} allowUpload={allowUpload} />
           </div>
+        )}
 
-          {/* Tabs */}
-          {visibleCategories.length > 1 && (
-            <div className="flex gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide" role="tablist">
-              {visibleCategories.map((cat) => (
-                <CategoryTab
-                  key={cat}
-                  category={cat}
-                  active={activeCategory === cat}
-                  onClick={() => setActiveCategory(cat)}
-                  count={counts[cat] || 0}
+        {/* Library Controls */}
+        <AnimatePresence mode="wait">
+          {activeMode === "library" && (
+            <motion.div
+              key="library-controls"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col sm:flex-row gap-3"
+            >
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input
+                  ref={searchRef}
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search logos..."
+                  className={`
+                    w-full pl-10 pr-4 py-2.5 rounded-xl
+                    bg-slate-800/50 border border-slate-700/50
+                    text-sm text-white placeholder-slate-500
+                    focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40
+                    transition-all duration-300
+                  `}
+                  aria-label="Search logos"
                 />
-              ))}
-            </div>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:block">
+                  <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-slate-800 border border-slate-700">
+                    ⌘K
+                  </kbd>
+                </div>
+              </div>
+
+              {visibleCategories.length > 1 && (
+                <div className="flex gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide" role="tablist">
+                  {visibleCategories.map((cat) => (
+                    <CategoryTab
+                      key={cat}
+                      category={cat}
+                      active={activeCategory === cat}
+                      onClick={() => setActiveCategory(cat)}
+                      count={counts[cat] || 0}
+                    />
+                  ))}
+                </div>
+              )}
+            </motion.div>
           )}
-        </div>
+        </AnimatePresence>
       </div>
 
-      {/* Grid */}
-      <div className="p-6" ref={gridRef}>
-        {filtered.length > 0 ? (
-          <motion.div
-            layout
-            className="grid gap-3.5"
-            style={{
-              gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
-            }}
-          >
-            <AnimatePresence mode="popLayout">
-              {filtered.map((logo, i) => (
-                <LogoCard
-                  key={logo.id}
-                  logo={logo}
-                  selected={value === logo.url}
-                  onClick={() => {
-                    onChange(logo);
-                    setFocusedIndex(i);
+      {/* Body */}
+      <div className="p-6">
+        <AnimatePresence mode="wait">
+          {activeMode === "upload" && allowUpload && onUpload ? (
+            <motion.div
+              key="upload"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.25 }}
+            >
+              <UploadZone
+                onUpload={handleUpload}
+                isUploading={isUploading}
+                maxFileSize={maxFileSize}
+                acceptedTypes={acceptedTypes}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="library"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.25 }}
+            >
+              {filtered.length > 0 ? (
+                <motion.div
+                  layout
+                  className="grid gap-3.5"
+                  style={{
+                    gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
                   }}
-                  index={i}
-                  focused={focusedIndex === i}
-                  onFocus={() => setFocusedIndex(i)}
-                />
-              ))}
-            </AnimatePresence>
-          </motion.div>
-        ) : (
-          <EmptyState query={debouncedSearch} message={emptyMessage} />
-        )}
+                >
+                  <AnimatePresence mode="popLayout">
+                    {filtered.map((logo, i) => (
+                      <LogoCard
+                        key={logo.id}
+                        logo={logo}
+                        selected={value === logo.url}
+                        onClick={() => onSelect(logo)}
+                        index={i}
+                        focused={focusedIndex === i}
+                        onFocus={() => setFocusedIndex(i)}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </motion.div>
+              ) : (
+                <EmptyState query={debouncedSearch} message={emptyMessage} />
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Footer */}
       <div className="px-6 py-3.5 border-t border-slate-800/50 flex items-center justify-between text-[11px] text-slate-500">
         <span aria-live="polite">
-          {filtered.length} logo{filtered.length !== 1 ? "s" : ""} in{" "}
-          {activeCategory ? CATEGORY_META[activeCategory].label : "..."}
+          {activeMode === "library" && activeCategory
+            ? `${filtered.length} logo${filtered.length !== 1 ? "s" : ""} in ${
+                CATEGORY_META[activeCategory].label
+              }`
+            : activeMode === "upload"
+            ? "Images are optimized and delivered via Cloudinary CDN"
+            : "..."}
         </span>
         <span className="flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          Click or press Enter to select
+          {activeMode === "library" ? "Click or press Enter to select" : "Drag & drop supported"}
         </span>
       </div>
     </div>
@@ -618,7 +953,7 @@ export function LogoSelector({
 }
 
 // =============================================================================
-// FORM HOOK (Optional convenience)
+// FORM HOOK (Updated for dual-path)
 // =============================================================================
 
 export function useLogoField(
@@ -629,15 +964,19 @@ export function useLogoField(
     initialUrl ? { id: "", url: initialUrl, name: "", category: "player" } : null
   );
 
-  const handleChange = useCallback((logo: Logo) => {
+  const handleSelect = useCallback((logo: Logo) => {
     setSelected(logo.url ? logo : null);
+  }, []);
+
+  const clear = useCallback(() => {
+    setSelected(null);
   }, []);
 
   return {
     value: selected?.url || null,
     logo: selected,
-    onChange: handleChange,
-    clear: () => setSelected(null),
+    onSelect: handleSelect,
+    clear,
   };
 }
 

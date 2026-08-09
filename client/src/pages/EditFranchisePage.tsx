@@ -1,5 +1,5 @@
 // src/pages/EditFranchisePage.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -18,7 +18,13 @@ import { formatDistanceToNow } from "date-fns";
 import { FranchiseForm } from "@/components/franchise/FranchiseForm";
 import { LogoSelector } from "@/components/ui/LogoSelector";
 import { LOGO_LIBRARY, type Logo } from "@/components/ui/logoLibrary";
-import { useMyFranchises, useFranchiseById, useUpdateFranchise } from "@/hooks/useFranchise";
+import {
+  useMyFranchises,
+  useFranchiseById,
+  useUpdateFranchise,
+  useUploadFranchiseLogo,
+  useRemoveFranchiseLogo,
+} from "@/hooks/useFranchise";
 import type { FranchiseFormValues } from "@/lib/validators/franchiseSchema";
 
 export function EditFranchisePage() {
@@ -46,19 +52,15 @@ export function EditFranchisePage() {
   const { data: franchise, isLoading: loadingDetail } = useFranchiseById(selectedId ?? "");
 
   const { mutate: updateFranchise, isPending, isSuccess } = useUpdateFranchise();
+  const uploadLogoMutation = useUploadFranchiseLogo();
+  const removeLogoMutation = useRemoveFranchiseLogo();
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Logo state
-  // ═══════════════════════════════════════════════════════════════════════
-  const [selectedLogo, setSelectedLogo] = useState<Logo | null>(null);
+  // ─── Dual-Path Image State ────────────────────────────────────────────────
+  const [activeImageUrl, setActiveImageUrl] = useState<string | null>(null);
+  const [selectedLibraryLogo, setSelectedLibraryLogo] = useState<Logo | null>(null);
   const [showLogoSelector, setShowLogoSelector] = useState(false);
 
-  // LOGO_LIBRARY stores logos as root-relative paths (e.g.
-  // "/logos/franchises/apex.png"), but Franchise.js's Mongoose validator
-  // requires an absolute http(s) URL, and so does the Zod schema's
-  // `logo: z.string().url()` check. A hidden field failing that check
-  // silently blocks the whole form submit with no visible error — resolve
-  // to absolute at selection time to avoid that entirely.
+  // LOGO_LIBRARY stores root-relative paths. Backend requires absolute URLs.
   const toAbsoluteUrl = (url: string) => {
     if (!url) return url;
     try {
@@ -68,38 +70,63 @@ export function EditFranchisePage() {
     }
   };
 
-  // LogoSelector's "clear" action calls onChange with an empty-but-truthy
-  // Logo object ({ id: "", url: "", ... }), not null — normalize that here.
-  const handleLogoChange = (logo: Logo) => {
-    setSelectedLogo(logo.url ? { ...logo, url: toAbsoluteUrl(logo.url) } : null);
-  };
-
-  // Initialize / reset logo whenever the selected franchise changes (either
-  // on first load, or when switching franchises via the dropdown). Always
-  // sets — including clearing to null — so a previous franchise's logo
-  // selection can't leak into the next one. The saved value is always
-  // absolute (backend enforces http/https), so the library lookup compares
-  // against absolute URLs too.
+  // Sync state when franchise changes (initial load or dropdown switch)
   useEffect(() => {
     if (franchise?.logo) {
+      setActiveImageUrl(franchise.logo);
       const found = LOGO_LIBRARY.find((l) => toAbsoluteUrl(l.url) === franchise.logo);
-      setSelectedLogo(found ? { ...found, url: toAbsoluteUrl(found.url) } : null);
+      setSelectedLibraryLogo(found ? { ...found, url: toAbsoluteUrl(found.url) } : null);
     } else {
-      setSelectedLogo(null);
+      setActiveImageUrl(null);
+      setSelectedLibraryLogo(null);
     }
   }, [selectedId, franchise?.logo]);
 
-  // Reset form values when selected franchise changes
+  // ─── Library Path ─────────────────────────────────────────────────────────
+  const handleLogoSelect = useCallback((logo: Logo) => {
+    const absoluteUrl = logo.url ? toAbsoluteUrl(logo.url) : null;
+    setSelectedLibraryLogo(logo.url ? logo : null);
+    setActiveImageUrl(absoluteUrl);
+  }, []);
+
+  // ─── Custom Upload Path ───────────────────────────────────────────────────
+  const handleLogoUpload = useCallback(
+    async (file: File) => {
+      if (!selectedId) return;
+      try {
+        const result = await uploadLogoMutation.mutateAsync({ id: selectedId, file });
+        setActiveImageUrl(result.logo);
+        setSelectedLibraryLogo(null);
+      } catch {
+        // Error toasted by hook; local preview reverts via LogoSelector
+      }
+    },
+    [selectedId, uploadLogoMutation]
+  );
+
+  // ─── Remove Path ──────────────────────────────────────────────────────────
+  const handleLogoRemove = useCallback(async () => {
+    if (!selectedId) return;
+    try {
+      await removeLogoMutation.mutateAsync({ id: selectedId });
+      setActiveImageUrl(null);
+      setSelectedLibraryLogo(null);
+    } catch {
+      // Error toasted by hook
+    }
+  }, [selectedId, removeLogoMutation]);
+
+  // ─── Form Wiring ──────────────────────────────────────────────────────────
   const defaultValues = useMemo<Partial<FranchiseFormValues>>(() => {
     if (!franchise) return {};
     return {
       name: franchise.name,
       slug: franchise.slug,
-      logo: selectedLogo?.url || franchise.logo || "",
+      logo: activeImageUrl || "",
       city: franchise.city ?? "",
       description: franchise.description ?? "",
     };
-  }, [franchise, selectedLogo]);
+  }, [franchise, activeImageUrl]);
 
   const handleSubmit = (payload: Partial<FranchiseFormValues>) => {
     if (!selectedId) return;
@@ -107,7 +134,7 @@ export function EditFranchisePage() {
       id: selectedId,
       payload: {
         ...payload,
-        logo: selectedLogo?.url || payload.logo,
+        logo: activeImageUrl || payload.logo,
       },
     });
   };
@@ -123,6 +150,15 @@ export function EditFranchisePage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isPending]);
+
+  // ─── Display Helpers ──────────────────────────────────────────────────────
+  const displayName =
+    selectedLibraryLogo?.name || (activeImageUrl ? "Custom Upload" : "No Logo Selected");
+  const displayDescription = selectedLibraryLogo
+    ? "This logo represents your franchise across tournaments, auctions, and public listings."
+    : activeImageUrl
+    ? "Your custom uploaded franchise logo."
+    : "Choose a logo to build your franchise's brand identity on the platform.";
 
   if (loadingList) {
     return (
@@ -244,7 +280,7 @@ export function EditFranchisePage() {
         ) : (
           <>
             {/* ═══════════════════════════════════════════════════════════
-                BRAND IDENTITY CARD — Logo + Expandable selector
+                BRAND IDENTITY CARD — Logo + Expandable dual-path selector
                 ═══════════════════════════════════════════════════════════ */}
             <motion.div
               key={`brand-${selectedId}`}
@@ -290,22 +326,22 @@ export function EditFranchisePage() {
                   layout
                   className={`
                     relative w-28 h-28 rounded-2xl flex items-center justify-center
-                    border-2 transition-all duration-300
-                    ${selectedLogo
+                    border-2 transition-all duration-300 overflow-hidden
+                    ${activeImageUrl
                       ? "border-violet-500/30 bg-gradient-to-br from-violet-50 to-sky-50 shadow-lg shadow-violet-500/10"
                       : "border-slate-200 bg-slate-50"
                     }
                   `}
                 >
                   <AnimatePresence mode="wait">
-                    {selectedLogo ? (
+                    {activeImageUrl ? (
                       <motion.img
-                        key={selectedLogo.id}
+                        key={activeImageUrl}
                         initial={{ opacity: 0, scale: 0.8 }}
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.8 }}
-                        src={selectedLogo.url}
-                        alt={selectedLogo.name}
+                        src={activeImageUrl}
+                        alt="Franchise logo"
                         className="w-20 h-20 object-contain"
                       />
                     ) : (
@@ -320,7 +356,7 @@ export function EditFranchisePage() {
                     )}
                   </AnimatePresence>
 
-                  {selectedLogo && (
+                  {activeImageUrl && (
                     <div className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full bg-violet-500 flex items-center justify-center shadow-md">
                       <Pencil className="w-3 h-3 text-white" />
                     </div>
@@ -328,23 +364,17 @@ export function EditFranchisePage() {
                 </motion.div>
 
                 <div className="text-center sm:text-left flex-1">
-                  <h3 className="font-semibold text-slate-800 text-lg">
-                    {selectedLogo ? selectedLogo.name : "No Logo Selected"}
-                  </h3>
-                  <p className="text-sm text-slate-500 mt-1">
-                    {selectedLogo
-                      ? "This logo represents your franchise across tournaments, auctions, and public listings."
-                      : "Choose a logo to build your franchise's brand identity on the platform."}
-                  </p>
-                  {selectedLogo && (
-                    <p className="text-xs text-slate-400 mt-1 font-mono truncate">
-                      {selectedLogo.url}
+                  <h3 className="font-semibold text-slate-800 text-lg">{displayName}</h3>
+                  <p className="text-sm text-slate-500 mt-1">{displayDescription}</p>
+                  {activeImageUrl && (
+                    <p className="text-xs text-slate-400 mt-1 font-mono truncate max-w-md">
+                      {activeImageUrl}
                     </p>
                   )}
                 </div>
               </div>
 
-              {/* Expandable Logo Selector — Dark section */}
+              {/* Expandable Logo Selector — Dark section with dual-path support */}
               <AnimatePresence>
                 {showLogoSelector && (
                   <motion.div
@@ -371,12 +401,18 @@ export function EditFranchisePage() {
                       </div>
                       <LogoSelector
                         userRole="franchise_owner"
-                        value={selectedLogo?.url || null}
-                        onChange={(logo) => {
-                          handleLogoChange(logo);
+                        value={activeImageUrl}
+                        logos={LOGO_LIBRARY}
+                        onSelect={(logo) => {
+                          handleLogoSelect(logo);
                           setTimeout(() => setShowLogoSelector(false), 400);
                         }}
-                        logos={LOGO_LIBRARY}
+                        onUpload={handleLogoUpload}
+                        onRemove={handleLogoRemove}
+                        isUploading={uploadLogoMutation.isPending}
+                        isRemoving={removeLogoMutation.isPending}
+                        allowUpload={true}
+                        allowRemove={true}
                       />
                     </div>
                   </motion.div>
@@ -393,7 +429,7 @@ export function EditFranchisePage() {
                 onSubmit={handleSubmit}
                 isSubmitting={isPending}
                 submitLabel="Save Changes"
-                logo={selectedLogo?.url || null}
+                logo={activeImageUrl}
               />
             </div>
           </>

@@ -1,3 +1,4 @@
+// src/api/tournamentApi.ts
 import { axiosClient } from "@/api/axiosClient";
 import type { ApiEnvelope } from "@/types/auth";
 import type { Tournament, TournamentPayload, TournamentStatus } from "@/types/tournament";
@@ -7,10 +8,6 @@ interface RawTournament extends Omit<Tournament, "organizerName" | "teamsCount" 
   organizerId: string | { _id: string; name: string };
 }
 
-/**
- * Normalizes a raw backend tournament into a frontend Tournament.
- * Handles populated organizerId, missing counts, and _id → id mapping.
- */
 function toTournament(raw: RawTournament): Tournament {
   const organizerIsPopulated =
     typeof raw.organizerId === "object" && raw.organizerId !== null;
@@ -27,11 +24,6 @@ function toTournament(raw: RawTournament): Tournament {
   } as Tournament;
 }
 
-/**
- * Extracts the payload from an axios response, handling both:
- * 1. Raw axios response (res.data is the envelope)
- * 2. Interceptor-unwrapped response (res IS the envelope)
- */
 function unwrap<T>(res: any): T {
   const envelope = res?.data ?? res;
   return envelope?.data ?? envelope;
@@ -42,6 +34,22 @@ function unwrapList<T>(res: any): T[] {
   const list = Array.isArray(envelope) ? envelope : envelope?.data ?? [];
   return Array.isArray(list) ? list : [];
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEW: Image Upload Types
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface TournamentImageUploadResult {
+  logo: string;
+  meta: {
+    format: string;
+    width: number;
+    height: number;
+    bytes: number;
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export interface ListTournamentsFilters {
   status?: TournamentStatus[];
@@ -65,8 +73,6 @@ export const tournamentApi = {
 
     let results = rawList.map(toTournament);
 
-    // Client-side fallback filtering for multi-status arrays
-    // (backend only accepts single status in query param)
     if (filters.status && filters.status.length > 1) {
       results = results.filter((t) => filters.status!.includes(t.status));
     }
@@ -85,6 +91,9 @@ export const tournamentApi = {
     return toTournament(unwrap<RawTournament>(response));
   },
 
+  /**
+   * LIBRARY PATH: Select a pre-made logo from your asset library.
+   */
   async update(id: string, payload: Partial<TournamentPayload>): Promise<Tournament> {
     const { slug: _slug, ...body } = payload;
     const response = await axiosClient.patch<any>(`/tournaments/${id}`, body);
@@ -128,6 +137,26 @@ export const tournamentApi = {
 
   async cancel(id: string): Promise<Tournament> {
     const response = await axiosClient.post<any>(`/tournaments/${id}/cancel`);
+    return toTournament(unwrap<RawTournament>(response));
+  },
+
+  // ─── NEW: CUSTOM UPLOAD PATH ───────────────────────────────────────────────
+  async uploadLogo(id: string, file: File): Promise<TournamentImageUploadResult> {
+    const formData = new FormData();
+    formData.append("image", file);
+
+    const response = await axiosClient.patch<any>(
+      `/tournaments/${id}/logo`,
+      formData,
+      {
+        headers: { "Content-Type": undefined },
+      }
+    );
+    return unwrap<TournamentImageUploadResult>(response);
+  },
+
+  async removeLogo(id: string): Promise<Tournament> {
+    const response = await axiosClient.delete<any>(`/tournaments/${id}/logo`);
     return toTournament(unwrap<RawTournament>(response));
   },
 };

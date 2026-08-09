@@ -3,32 +3,30 @@ import { axiosClient } from "@/api/axiosClient";
 import type { ApiEnvelope } from "@/types/auth";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Domain Types — derived from Franchise.js schema
+// Domain Types
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export interface Franchise {
-  id: string;               // Mongoose virtual id
-  ownerId: string;          // Ref → User
-  name: string;             // required, trim, maxlength: 120
-  slug: string;             // required, lowercase, regex validated, globally unique
-  logo?: string;            // validated URL
-  city?: string;            // trim, maxlength: 80
-  description?: string;     // maxlength: 1000
-  isActive: boolean;        // default: true
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** POST /franchises payload. ownerId omitted — backend pulls from auth session. */
-export interface FranchisePayload {
+  id: string;
+  ownerId: string;
   name: string;
   slug: string;
   logo?: string;
   city?: string;
   description?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
-/** Query params for GET /franchises/mine */
+export interface FranchisePayload {
+  name: string;
+  slug: string;
+  logo?: string;            // ← LIBRARY PATH: pass a public URL string
+  city?: string;
+  description?: string;
+}
+
 export interface FranchiseListQuery {
   page?: number;
   limit?: number;
@@ -53,30 +51,32 @@ export interface PaginatedResponse<T> {
 export type FranchiseListResult = PaginatedResponse<Franchise>;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// NEW: Image Upload Types
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface FranchiseImageUploadResult {
+  logo: string;
+  meta: {
+    format: string;
+    width: number;
+    height: number;
+    bytes: number;
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // API
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const franchiseApi = {
-  /**
-   * GET /franchises/mine
-   * Authenticated. Returns paginated franchises owned by the current user.
-   * Requires FRANCHISE_OWNER or ADMIN role (enforced by backend).
-   */
   listMine: async (params?: FranchiseListQuery) => {
     const { data } = await axiosClient.get<ApiEnvelope<FranchiseListResult>>(
       "/franchises/mine",
       { params }
     );
-    console.log("Axios response:", data);
-    console.log("Returned to hook:", data.data);
     return data.data;
   },
 
-  /**
-   * POST /franchises
-   * Authenticated. Creates a new franchise.
-   * Requires FRANCHISE_OWNER or ADMIN role.
-   */
   create: async (payload: FranchisePayload) => {
     const { data } = await axiosClient.post<ApiEnvelope<Franchise>>(
       "/franchises",
@@ -85,10 +85,6 @@ export const franchiseApi = {
     return data.data;
   },
 
-  /**
-   * GET /franchises/:id
-   * Public. Fetch a single franchise by ID or slug.
-   */
   getById: async (id: string) => {
     const { data } = await axiosClient.get<ApiEnvelope<Franchise>>(
       `/franchises/${id}`
@@ -97,13 +93,34 @@ export const franchiseApi = {
   },
 
   /**
-   * PATCH /franchises/:id
-   * Authenticated. Partial update of a franchise.
+   * LIBRARY PATH: Select a pre-made logo from your asset library.
    */
   update: async (id: string, payload: Partial<FranchisePayload>) => {
     const { data } = await axiosClient.patch<ApiEnvelope<Franchise>>(
       `/franchises/${id}`,
       payload
+    );
+    return data.data;
+  },
+
+  // ─── NEW: CUSTOM UPLOAD PATH ───────────────────────────────────────────────
+  uploadLogo: async (id: string, file: File) => {
+    const formData = new FormData();
+    formData.append("image", file);
+
+    const { data } = await axiosClient.patch<ApiEnvelope<FranchiseImageUploadResult>>(
+      `/franchises/${id}/logo`,
+      formData,
+      {
+        headers: { "Content-Type": undefined },
+      }
+    );
+    return data.data;
+  },
+
+  removeLogo: async (id: string) => {
+    const { data } = await axiosClient.delete<ApiEnvelope<Franchise>>(
+      `/franchises/${id}/logo`
     );
     return data.data;
   },

@@ -340,7 +340,7 @@ export const auctionRoundApi = {
 
 export const playerApi = {
   listPlayers: async (tournamentId: string) =>
-    (dataOf(await request<any>(`/tournaments/${tournamentId}/players`)) || []).map(mapPlayer),
+    (dataOf(await request<any>(`/tournaments/${tournamentId}/players/approved`)) || []).map(mapPlayer),
   getPlayersByRound: async (roundId: string) =>
     (dataOf(await request<any>(`/auction-rounds/${roundId}/players`)) || []).map(mapPlayer),
   updatePlayer: async (id: string, patch: Partial<Player>) =>

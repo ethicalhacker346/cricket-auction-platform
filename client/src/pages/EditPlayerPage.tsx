@@ -12,7 +12,6 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Save,
   Loader2,
   AlertCircle,
 } from "lucide-react";
@@ -20,26 +19,29 @@ import { formatDistanceToNow } from "date-fns";
 import { PlayerForm } from "@/components/player/PlayerForm";
 import { LogoSelector } from "@/components/ui/LogoSelector";
 import { LOGO_LIBRARY, type Logo } from "@/components/ui/logoLibrary";
-import { usePlayerMe, useUpdatePlayerMe } from "@/hooks/usePlayers";
+import {
+  usePlayerMe,
+  useUpdatePlayerMe,
+  useUploadPlayerProfileImage,
+  useRemovePlayerProfileImage,
+} from "@/hooks/usePlayers";
 import type { PlayerFormValues } from "@/lib/validators/playerSchema";
 
 export function EditPlayerPage() {
   const navigate = useNavigate();
   const { data: player, isLoading, error } = usePlayerMe();
   const { mutate: updatePlayer, isPending, isSuccess } = useUpdatePlayerMe();
+  const uploadMutation = useUploadPlayerProfileImage();
+  const removeMutation = useRemovePlayerProfileImage();
 
-  // Logo state
-  const [selectedLogo, setSelectedLogo] = useState<Logo | null>(null);
+  // ─── Dual-Path Image State ────────────────────────────────────────────────
+  // activeImageUrl: source of truth for the current image (library OR Cloudinary)
+  // selectedLibraryLogo: tracks which library asset is selected (for name display)
+  const [activeImageUrl, setActiveImageUrl] = useState<string | null>(null);
+  const [selectedLibraryLogo, setSelectedLibraryLogo] = useState<Logo | null>(null);
   const [showLogoSelector, setShowLogoSelector] = useState(false);
 
-  // LOGO_LIBRARY stores logos as root-relative paths (e.g.
-  // "/logos/players/image1.png"), but both the Zod schema's
-  // `profileImage: z.string().url()` check and the backend's Player.js
-  // validator (`/^https?:\/\//`) require an *absolute* URL. Left as-is, the
-  // hidden `profileImage` field in PlayerForm silently failed validation on
-  // submit whenever a real logo was picked — react-hook-form just refused
-  // to call onSubmit, with no visible error, which looked like a dead
-  // "Save Changes" button. Resolving to an absolute URL fixes both layers.
+  // LOGO_LIBRARY stores root-relative paths. Backend requires absolute URLs.
   const toAbsoluteUrl = (url: string) => {
     if (!url) return url;
     try {
@@ -49,29 +51,50 @@ export function EditPlayerPage() {
     }
   };
 
-  // LogoSelector's "clear" action calls onChange with an empty-but-truthy
-  // Logo object ({ id: "", url: "", ... }), not null — normalize that here
-  // too, same as CreatePlayerPage.
-  const handleLogoChange = (logo: Logo) => {
-    setSelectedLogo(logo.url ? { ...logo, url: toAbsoluteUrl(logo.url) } : null);
-  };
-
-  // Initialize logo from player data. `profileImage` is the backend field
-  // name (see Player.js) — the form/UI shows it as a "logo" for player
-  // profiles, but the wire format must match `profileImage` exactly or
-  // updates silently get dropped by the service's field whitelist. The
-  // saved value is always absolute (backend enforces http/https), so the
-  // library lookup has to compare against absolute URLs too.
+  // Sync state with player data on load and after cache updates
   useEffect(() => {
     if (player?.profileImage) {
+      setActiveImageUrl(player.profileImage);
       const found = LOGO_LIBRARY.find(
         (l) => toAbsoluteUrl(l.url) === player.profileImage
       );
-      if (found) setSelectedLogo({ ...found, url: toAbsoluteUrl(found.url) });
+      setSelectedLibraryLogo(found ? { ...found, url: toAbsoluteUrl(found.url) } : null);
+    } else {
+      setActiveImageUrl(null);
+      setSelectedLibraryLogo(null);
     }
   }, [player?.profileImage]);
 
-  // Form default values with logo
+  // ─── Library Path ─────────────────────────────────────────────────────────
+  const handleLogoSelect = (logo: Logo) => {
+    const absoluteUrl = logo.url ? toAbsoluteUrl(logo.url) : null;
+    setSelectedLibraryLogo(logo.url ? logo : null);
+    setActiveImageUrl(absoluteUrl);
+  };
+
+  // ─── Custom Upload Path ───────────────────────────────────────────────────
+  const handleLogoUpload = async (file: File) => {
+    try {
+      const result = await uploadMutation.mutateAsync(file);
+      setActiveImageUrl(result.profileImage);
+      setSelectedLibraryLogo(null); // Custom uploads are not in the library
+    } catch {
+      // Error already toasted by the hook; local preview reverts via LogoSelector
+    }
+  };
+
+  // ─── Remove Path ──────────────────────────────────────────────────────────
+  const handleLogoRemove = async () => {
+    try {
+      await removeMutation.mutateAsync();
+      setActiveImageUrl(null);
+      setSelectedLibraryLogo(null);
+    } catch {
+      // Error already toasted by the hook
+    }
+  };
+
+  // ─── Form Wiring ──────────────────────────────────────────────────────────
   const defaultValues = useMemo<Partial<PlayerFormValues>>(() => {
     if (!player) return {};
     return {
@@ -83,15 +106,15 @@ export function EditPlayerPage() {
       primaryRole: player.primaryRole,
       battingStyle: player.battingStyle ?? "",
       bowlingStyle: player.bowlingStyle ?? "",
-      profileImage: selectedLogo?.url || player.profileImage || "",
+      profileImage: activeImageUrl || "",
       bio: player.bio ?? "",
     };
-  }, [player, selectedLogo]);
+  }, [player, activeImageUrl]);
 
   const handleSubmit = (payload: Partial<PlayerFormValues>) => {
     updatePlayer({
       ...payload,
-      profileImage: selectedLogo?.url || payload.profileImage,
+      profileImage: activeImageUrl || payload.profileImage,
     });
   };
 
@@ -107,13 +130,21 @@ export function EditPlayerPage() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isPending]);
 
-  // Auto-hide success toast
+  // Auto-hide success toast timer cleanup
   useEffect(() => {
     if (isSuccess) {
       const t = setTimeout(() => {}, 3000);
       return () => clearTimeout(t);
     }
   }, [isSuccess]);
+
+  // ─── Display Helpers ──────────────────────────────────────────────────────
+  const displayName = selectedLibraryLogo?.name || (activeImageUrl ? "Custom Upload" : "No Logo Selected");
+  const displayDescription = selectedLibraryLogo
+    ? "This logo represents your player profile across all tournaments and auctions."
+    : activeImageUrl
+    ? "Your custom uploaded profile image."
+    : "Choose a logo to build your brand identity on the platform.";
 
   if (isLoading) return <EditPageSkeleton />;
   if (error || !player) return <EditPageError />;
@@ -182,7 +213,7 @@ export function EditPlayerPage() {
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════
-            IDENTITY CARD — Logo + Expandable selector
+            IDENTITY CARD — Logo + Expandable dual-path selector
             ═══════════════════════════════════════════════════════════════ */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -227,22 +258,22 @@ export function EditPlayerPage() {
               layout
               className={`
                 relative w-28 h-28 rounded-2xl flex items-center justify-center
-                border-2 transition-all duration-300
-                ${selectedLogo
+                border-2 transition-all duration-300 overflow-hidden
+                ${activeImageUrl
                   ? "border-indigo-500/30 bg-gradient-to-br from-indigo-50 to-purple-50 shadow-lg shadow-indigo-500/10"
                   : "border-slate-200 bg-slate-50"
                 }
               `}
             >
               <AnimatePresence mode="wait">
-                {selectedLogo ? (
+                {activeImageUrl ? (
                   <motion.img
-                    key={selectedLogo.id}
+                    key={activeImageUrl}
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
-                    src={selectedLogo.url}
-                    alt={selectedLogo.name}
+                    src={activeImageUrl}
+                    alt="Profile"
                     className="w-20 h-20 object-contain"
                   />
                 ) : (
@@ -257,7 +288,7 @@ export function EditPlayerPage() {
                 )}
               </AnimatePresence>
 
-              {selectedLogo && (
+              {activeImageUrl && (
                 <div className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full bg-indigo-500 flex items-center justify-center shadow-md">
                   <Pencil className="w-3 h-3 text-white" />
                 </div>
@@ -265,23 +296,17 @@ export function EditPlayerPage() {
             </motion.div>
 
             <div className="text-center sm:text-left flex-1">
-              <h3 className="font-semibold text-slate-800 text-lg">
-                {selectedLogo ? selectedLogo.name : "No Logo Selected"}
-              </h3>
-              <p className="text-sm text-slate-500 mt-1">
-                {selectedLogo
-                  ? "This logo represents your player profile across all tournaments and auctions."
-                  : "Choose a logo to build your brand identity on the platform."}
-              </p>
-              {selectedLogo && (
-                <p className="text-xs text-slate-400 mt-1 font-mono">
-                  {selectedLogo.url}
+              <h3 className="font-semibold text-slate-800 text-lg">{displayName}</h3>
+              <p className="text-sm text-slate-500 mt-1">{displayDescription}</p>
+              {activeImageUrl && (
+                <p className="text-xs text-slate-400 mt-1 font-mono truncate max-w-md">
+                  {activeImageUrl}
                 </p>
               )}
             </div>
           </div>
 
-          {/* Expandable Logo Selector — Dark section */}
+          {/* Expandable Logo Selector — Dark section with dual-path support */}
           <AnimatePresence>
             {showLogoSelector && (
               <motion.div
@@ -308,12 +333,18 @@ export function EditPlayerPage() {
                   </div>
                   <LogoSelector
                     userRole="player"
-                    value={selectedLogo?.url || null}
-                    onChange={(logo) => {
-                      handleLogoChange(logo);
+                    value={activeImageUrl}
+                    logos={LOGO_LIBRARY}
+                    onSelect={(logo) => {
+                      handleLogoSelect(logo);
                       setTimeout(() => setShowLogoSelector(false), 400);
                     }}
-                    logos={LOGO_LIBRARY}
+                    onUpload={handleLogoUpload}
+                    onRemove={handleLogoRemove}
+                    isUploading={uploadMutation.isPending}
+                    isRemoving={removeMutation.isPending}
+                    allowUpload={true}
+                    allowRemove={true}
                   />
                 </div>
               </motion.div>
@@ -350,7 +381,7 @@ export function EditPlayerPage() {
             onSubmit={handleSubmit}
             isSubmitting={isPending}
             submitLabel="Save Changes"
-            profileImage={selectedLogo?.url || null}
+            profileImage={activeImageUrl}
           />
         </motion.div>
       </div>

@@ -13,6 +13,11 @@ import { createApp } from './app.js';
 import { connectDatabase, registerDatabaseShutdownHooks } from './config/database.js';
 import { env } from './config/env.js';
 import { initSocket } from './socket/index.js';
+import cron from 'node-cron';
+import { cleanupOrphanedImages } from './jobs/cleanupOrphanedImages.js';
+
+// Every Sunday at 3 AM
+cron.schedule('0 3 * * 0', cleanupOrphanedImages);
 
 async function bootstrap() {
   await connectDatabase();
@@ -27,7 +32,7 @@ async function bootstrap() {
   const io = initSocket(httpServer, {
     // Accept multiple dev origins; in prod set CLIENT_URL env
     corsOrigins: env.CLIENT_URL
-      ? [env.CLIENT_URL, 'http://localhost:3000', 'http://localhost:5173']
+      ? [env.CLIENT_URL, 'http://localhost:3000', 'http://localhost:5173','http://192.168.137.1:5173','http://192.168.1.39:5173' ]
       : '*',
     path: '/socket.io',
     allowAnonymous: true, // spectators can join auction rooms without token

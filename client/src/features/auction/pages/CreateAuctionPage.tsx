@@ -395,8 +395,8 @@ export default function CreateAuctionPage() {
     return (
       <div className="mx-auto max-w-5xl space-y-6 py-8">
         <SkeletonHeader />
-        <div className="grid gap-6 md:grid-cols-3">
-          <div className="md:col-span-2 space-y-6">
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2 space-y-6">
             <SkeletonCard />
             <SkeletonCard />
             <SkeletonCard />
@@ -481,18 +481,18 @@ export default function CreateAuctionPage() {
       {/* ── Header ── */}
       <motion.div variants={cardVariants} className="space-y-1">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20">
-            <Gavel className="h-5 w-5 text-amber-400" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20 sm:h-10 sm:w-10">
+            <Gavel className="h-4 w-4 text-amber-400 sm:h-5 sm:w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight text-white">{pageTitle}</h1>
+          <div className="min-w-0">
+            <h1 className="text-xl font-black tracking-tight text-white sm:text-2xl">{pageTitle}</h1>
             <p className="text-sm text-slate-400">{pageSubtitle}</p>
           </div>
           {auctionAlreadyExists && (
             <motion.span
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="ml-auto rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/20"
+              className="ml-auto shrink-0 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/20"
             >
               Exists
             </motion.span>
@@ -667,38 +667,57 @@ export default function CreateAuctionPage() {
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 12, transition: { duration: 0.15 } }}
                     className={cn(
-                      "group relative grid grid-cols-[auto_1fr_1fr_auto] items-start gap-3 rounded-xl border p-3 transition",
+                      "group relative rounded-xl border p-3 transition sm:grid sm:grid-cols-[auto_1fr_1fr_auto] sm:items-start sm:gap-3",
                       needsSort && i > 0 && (tier.upTo ?? Infinity) <= (tiers[i - 1].upTo ?? Infinity)
                         ? "border-rose-500/30 bg-rose-500/[0.04]"
                         : "border-white/5 bg-white/[0.02] hover:border-white/10"
                     )}
                   >
-                    <div className="mt-6 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 text-[11px] font-bold text-slate-500 ring-1 ring-white/5">
+                    {/* Mobile-only header row: tier index + remove button */}
+                    <div className="mb-3 flex items-center justify-between sm:hidden">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 text-[11px] font-bold text-slate-500 ring-1 ring-white/5">
+                        {i + 1}
+                      </div>
+                      <button
+                        onClick={() => removeTier(i)}
+                        disabled={tiers.length <= 1}
+                        className="rounded-lg p-2 text-rose-400 transition hover:bg-rose-500/10 disabled:opacity-30"
+                        title="Remove tier"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* Desktop index badge */}
+                    <div className="mt-6 hidden h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 text-[11px] font-bold text-slate-500 ring-1 ring-white/5 sm:flex">
                       {i + 1}
                     </div>
 
-                    <AmountInput
-                      label="Up to"
-                      value={tier.upTo}
-                      onChange={(v) => updateTier(i, { upTo: v })}
-                      placeholder="∞ (no limit)"
-                      allowNull
-                      helperWhenEmpty="No upper bound — open-ended tier"
-                    />
+                    <div className="grid grid-cols-1 gap-3 sm:contents">
+                      <AmountInput
+                        label="Up to"
+                        value={tier.upTo}
+                        onChange={(v) => updateTier(i, { upTo: v })}
+                        placeholder="∞ (no limit)"
+                        allowNull
+                        helperWhenEmpty="No upper bound — open-ended tier"
+                      />
 
-                    <AmountInput
-                      label="Increment"
-                      value={tier.increment}
-                      onChange={(v) => updateTier(i, { increment: v ?? 0 })}
-                      placeholder="e.g. 50000"
-                      prefix="+"
-                      helperPrefix="Next bid = current + "
-                    />
+                      <AmountInput
+                        label="Increment"
+                        value={tier.increment}
+                        onChange={(v) => updateTier(i, { increment: v ?? 0 })}
+                        placeholder="e.g. 50000"
+                        prefix="+"
+                        helperPrefix="Next bid = current + "
+                      />
+                    </div>
 
+                    {/* Desktop remove button */}
                     <button
                       onClick={() => removeTier(i)}
                       disabled={tiers.length <= 1}
-                      className="mt-6 rounded-lg p-2 text-rose-400 transition hover:bg-rose-500/10 disabled:opacity-30"
+                      className="mt-6 hidden rounded-lg p-2 text-rose-400 transition hover:bg-rose-500/10 disabled:opacity-30 sm:block"
                       title="Remove tier"
                     >
                       <X className="h-4 w-4" />
@@ -808,13 +827,13 @@ export default function CreateAuctionPage() {
 
       {/* ── Sticky Action Bar ── */}
       <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/5 bg-slate-950/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
-          <div className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
+          <div className="min-w-0 flex-1">
             {touched && !saved && (
               <motion.span
                 initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="text-xs text-amber-300"
+                className="block truncate text-xs text-amber-300"
               >
                 Unsaved changes
               </motion.span>
@@ -825,13 +844,13 @@ export default function CreateAuctionPage() {
                 animate={{ opacity: 1, x: 0 }}
                 className="flex items-center gap-1 text-xs text-emerald-300"
               >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Saved successfully
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Saved successfully</span>
               </motion.span>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <Link
               to={`/tournaments/${tournament.id}`}
               className="hidden items-center gap-2 rounded-xl bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/10 sm:flex"
@@ -845,17 +864,19 @@ export default function CreateAuctionPage() {
               onClick={handleSave}
               disabled={saving || auctionLoading || tournamentLoading || !tierValidation.ok}
               className={cn(
-                "flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-6 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100"
+                "flex items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100 sm:px-6"
               )}
             >
               {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
               ) : saved ? (
-                <CheckCircle2 className="h-4 w-4" />
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
               ) : (
-                <Save className="h-4 w-4" />
+                <Save className="h-4 w-4 shrink-0" />
               )}
-              {saving ? "Saving…" : saved ? "Saved" : auctionAlreadyExists ? "Update Auction" : "Create Auction"}
+              <span className="whitespace-nowrap">
+                {saving ? "Saving…" : saved ? "Saved" : auctionAlreadyExists ? "Update Auction" : "Create Auction"}
+              </span>
               <span className="hidden rounded bg-slate-950/20 px-1.5 py-0.5 text-[10px] font-mono text-slate-900/70 sm:inline">
                 ⌘S
               </span>
@@ -887,14 +908,14 @@ function SectionCard({
       variants={cardVariants}
       className="rounded-2xl border border-white/[0.06] bg-white/[0.02] shadow-sm shadow-black/20 backdrop-blur-sm"
     >
-      <div className="flex items-center justify-between border-b border-white/[0.04] px-6 py-4">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-          <span className="text-amber-400">{icon}</span>
-          {title}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/[0.04] px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-200">
+          <span className="shrink-0 text-amber-400">{icon}</span>
+          <span className="truncate">{title}</span>
         </div>
-        {right && <div>{right}</div>}
+        {right && <div className="shrink-0">{right}</div>}
       </div>
-      <div className="p-6">{children}</div>
+      <div className="p-4 sm:p-6">{children}</div>
     </motion.div>
   );
 }

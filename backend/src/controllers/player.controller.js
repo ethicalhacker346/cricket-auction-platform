@@ -1,11 +1,7 @@
-// VERIFIED against services/player.service.js — no changes needed.
-// PlayerService.updateProfile() now whitelists updatable fields internally
-// instead of Object.assign-ing the raw payload; the controller still just
-// forwards req.body as before, which is correct since filtering belongs at
-// the service boundary, not here.
 import { PlayerService } from '../services/player.service.js';
 
 export const playerController = {
+  // ── existing ──
   create: async (req, res) => {
     const player = await PlayerService.createProfile(req.user._id, req.body);
     return res.status(201).json({ success: true, data: player });
@@ -29,5 +25,24 @@ export const playerController = {
   list: async (req, res) => {
     const result = await PlayerService.list(req.query);
     return res.json({ success: true, ...result });
+  },
+
+  // ── NEW: custom upload & removal ───────────────────────────────────────
+  uploadProfileImage: async (req, res, next) => {
+    try {
+      const result = await PlayerService.uploadProfileImage(req.user._id, req.file.buffer);
+      return res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  removeProfileImage: async (req, res, next) => {
+    try {
+      const player = await PlayerService.removeProfileImage(req.user._id);
+      return res.json({ success: true, data: player });
+    } catch (err) {
+      next(err);
+    }
   },
 };

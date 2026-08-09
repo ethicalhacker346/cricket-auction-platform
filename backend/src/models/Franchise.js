@@ -34,6 +34,11 @@ const franchiseSchema = new mongoose.Schema(
         message: 'logo must be a valid URL',
       },
     },
+    logoPublicId: {
+      type: String,
+      trim: true,
+      select: false,
+    },
     colorFrom: {
       type: String,
       trim: true,

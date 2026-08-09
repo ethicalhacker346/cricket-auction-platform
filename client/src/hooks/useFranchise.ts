@@ -15,6 +15,7 @@ import type {
   FranchiseListQuery,
   Franchise,
   FranchiseListResult,
+  FranchiseImageUploadResult,  // ← NEW
 } from "@/api/franchiseApi";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -34,11 +35,6 @@ export const franchiseKeys = {
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Backend returns MongoDB documents with _id (ObjectId).
- * Frontend expects id (string) for React keys and routing.
- * This helper normalizes the shape.
- */
 function normalizeFranchise(doc: any): Franchise {
   return {
     id: doc._id?.toString?.() ?? doc.id ?? doc._id,
@@ -58,17 +54,16 @@ function normalizeFranchise(doc: any): Franchise {
 }
 
 function normalizeFranchiseListResult(result: FranchiseListResult) {
-    return {
-        data: result.data.map(normalizeFranchise),
-        pagination: result.pagination,
-    };
+  return {
+    data: result.data.map(normalizeFranchise),
+    pagination: result.pagination,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // READ HOOKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Fetches the current user's owned franchises (for dashboard / selector). */
 export function useMyFranchises(
   params?: FranchiseListQuery,
   options?: { enabled?: boolean }
@@ -76,8 +71,6 @@ export function useMyFranchises(
   return useQuery({
     queryKey: franchiseKeys.mineList(params ?? {}),
     queryFn: async () => {
-      // FIX: franchiseApi.listMine returns ApiEnvelope { success, data: { data, pagination } }
-      // We need to unwrap the envelope and normalize _id → id
       const raw = await franchiseApi.listMine(params);
       return normalizeFranchiseListResult(raw);
     },
@@ -87,7 +80,6 @@ export function useMyFranchises(
   });
 }
 
-/** Infinite-scrolling variant for owners with many franchises. */
 export function useInfiniteMyFranchises(baseParams?: Omit<FranchiseListQuery, "page">) {
   return useInfiniteQuery({
     queryKey: [...franchiseKeys.mine(), "infinite", baseParams ?? {}],
@@ -104,13 +96,11 @@ export function useInfiniteMyFranchises(baseParams?: Omit<FranchiseListQuery, "p
   });
 }
 
-/** Public franchise detail — used for public pages and edit forms. */
 export function useFranchiseById(id: string) {
   return useQuery({
     queryKey: franchiseKeys.detail(id),
     queryFn: async () => {
       const raw = await franchiseApi.getById(id);
-      // Unwrap envelope if present
       const doc = raw?.data ?? raw;
       return normalizeFranchise(doc);
     },
@@ -131,16 +121,12 @@ export function useCreateFranchise() {
   return useMutation({
     mutationFn: async (payload: FranchisePayload) => {
       const raw = await franchiseApi.create(payload);
-      // Unwrap envelope
       return normalizeFranchise(raw?.data ?? raw);
     },
     onSuccess: (data) => {
-      // Prime cache so the edit view mounts instantly
       queryClient.setQueryData(franchiseKeys.detail(data.id), data);
-      // Invalidate owner's franchise list
       queryClient.invalidateQueries({ queryKey: franchiseKeys.mine() });
       toast.success(`Franchise "${data.name}" created successfully!`);
-
       navigate(`/franchises/${data.id}/edit`, { replace: true });
     },
     onError: (error) => {
@@ -154,6 +140,10 @@ export function useCreateFranchise() {
   });
 }
 
+/**
+ * LIBRARY PATH: Update franchise fields including selecting a pre-made logo URL.
+ * Fully optimistic with automatic rollback.
+ */
 export function useUpdateFranchise() {
   const queryClient = useQueryClient();
 
@@ -163,7 +153,6 @@ export function useUpdateFranchise() {
       return normalizeFranchise(raw?.data ?? raw);
     },
 
-    // ─── Optimistic Phase ───
     onMutate: async ({ id, payload }) => {
       await queryClient.cancelQueries({ queryKey: franchiseKeys.detail(id) });
       const previous = queryClient.getQueryData<Franchise>(franchiseKeys.detail(id));
@@ -176,7 +165,6 @@ export function useUpdateFranchise() {
         });
       }
 
-      // Also optimistically update the mine list if cached
       const mineKey = franchiseKeys.mineList({});
       const mineData = queryClient.getQueryData<FranchiseListResult>(mineKey);
       if (mineData) {
@@ -191,7 +179,6 @@ export function useUpdateFranchise() {
       return { previous, id };
     },
 
-    // ─── Rollback Phase ───
     onError: (error, variables, context) => {
       if (context?.previous) {
         queryClient.setQueryData(franchiseKeys.detail(context.id), context.previous);
@@ -199,7 +186,6 @@ export function useUpdateFranchise() {
       toast.error(getErrorMessage(error));
     },
 
-    // ─── Settlement Phase ───
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: franchiseKeys.detail(variables.id) });
       queryClient.invalidateQueries({ queryKey: franchiseKeys.mine() });
@@ -207,6 +193,70 @@ export function useUpdateFranchise() {
 
     onSuccess: () => {
       toast.success("Franchise updated successfully!");
+    },
+  });
+}
+
+// ─── NEW: CUSTOM UPLOAD PATH ────────────────────────────────────────────────
+/**
+ * CUSTOM PATH: Upload a user-selected logo file for a franchise.
+ * Patches detail + mine-list caches instantly on success.
+ */
+export function useUploadFranchiseLogo() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) =>
+      franchiseApi.uploadLogo(id, file),
+
+    onSuccess: (data, variables) => {
+      // Patch detail cache instantly
+      queryClient.setQueryData<Franchise>(franchiseKeys.detail(variables.id), (old) => {
+        if (!old) return old;
+        return { ...old, logo: data.logo, updatedAt: new Date().toISOString() };
+      });
+
+      // Patch mine list if cached
+      const mineKey = franchiseKeys.mineList({});
+      const mineData = queryClient.getQueryData<FranchiseListResult>(mineKey);
+      if (mineData) {
+        queryClient.setQueryData(mineKey, {
+          ...mineData,
+          data: mineData.data.map((f) =>
+            f.id === variables.id
+              ? { ...f, logo: data.logo, updatedAt: new Date().toISOString() }
+              : f
+          ),
+        });
+      }
+
+      toast.success("Logo uploaded successfully!");
+    },
+
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+}
+
+/**
+ * Remove franchise logo. Clears DB field + deletes Cloudinary asset.
+ */
+export function useRemoveFranchiseLogo() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => franchiseApi.removeLogo(id),
+
+    onSuccess: (_data, variables) => {
+      // Invalidate rather than patch — removal returns raw doc that may need normalization
+      queryClient.invalidateQueries({ queryKey: franchiseKeys.detail(variables.id) });
+      queryClient.invalidateQueries({ queryKey: franchiseKeys.mine() });
+      toast.success("Logo removed");
+    },
+
+    onError: (error) => {
+      toast.error(getErrorMessage(error));
     },
   });
 }

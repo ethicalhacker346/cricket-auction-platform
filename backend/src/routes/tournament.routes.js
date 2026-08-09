@@ -10,6 +10,8 @@ import {
   idParamSchema,
 } from '../validators/schemas.js';
 import { USER_ROLES } from '../config/constants.js';
+import { singleUpload, validateImageBuffer } from '../middleware/upload.middleware.js';
+import { imageUploadLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
 
@@ -32,6 +34,10 @@ router.patch(
   validate(updateTournamentSchema),
   asyncHandler(tournamentController.update)
 );
+
+// library
+router.patch('/:id/logo',   authenticate, imageUploadLimiter, singleUpload('image'), validateImageBuffer, tournamentController.uploadLogo);
+router.delete('/:id/logo',  authenticate, tournamentController.removeLogo);
 
 router.post(
   '/:id/open-player-registration',
@@ -80,6 +86,19 @@ router.get(
   optionalAuthenticate,
   validate(idParamSchema, 'params'),
   asyncHandler(registrationController.listPlayers)
+);
+
+// ============================================================================
+// APPROVED PLAYER POOL — Auction-ready players only
+// ============================================================================
+// Spectators and organizers alike need this list. The auction UI, squad-
+// builder, and public "confirmed participants" page all consume it.
+// ============================================================================
+router.get(
+  '/:id/players/approved',
+  optionalAuthenticate,
+  validate(idParamSchema, 'params'),
+  asyncHandler(registrationController.listApprovedPlayers)
 );
 
 export default router;

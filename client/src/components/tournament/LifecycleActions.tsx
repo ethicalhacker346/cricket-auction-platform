@@ -1,12 +1,9 @@
-import { Ban, CheckCircle2, Clock, Gavel, Play, Users, UserPlus, Trophy } from "lucide-react";
+import { Ban, CheckCircle2, Gavel, Users, UserPlus, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { 
   useOpenPlayerRegistration, 
   useOpenTeamRegistration, 
   useMarkTeamsApproved,
-  useScheduleAuction,
-  useStartAuction,
-  useCompleteAuction,
   useCompleteTournament,
   useCancelTournament 
 } from "@/hooks/useTournaments";
@@ -15,6 +12,11 @@ import type { Tournament, TournamentStatus } from "@/types/tournament";
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"; // Assuming you have a reusable confirm dialog
 
+// Only these five transitions are surfaced as manual organizer actions here.
+// Auction scheduling/starting/completing is driven by the Auction module's
+// own flow (CreateAuctionPage, live room, etc.) — not by a generic button
+// on this bar — so AUCTION_SCHEDULED / AUCTION_RUNNING / AUCTION_COMPLETED
+// are intentionally absent from this map.
 const ACTION_META: Partial<
   Record<TournamentStatus, {
     label: string;
@@ -43,24 +45,10 @@ const ACTION_META: Partial<
     icon: CheckCircle2,
     variant: "default",
     hook: useMarkTeamsApproved,
-  },
-  [TOURNAMENT_STATUS.AUCTION_SCHEDULED]: {
-    label: "Schedule Auction",
-    icon: Clock,
-    variant: "default",
-    hook: useScheduleAuction, // Can pass date if needed
-  },
-  [TOURNAMENT_STATUS.AUCTION_RUNNING]: {
-    label: "Start / Resume Auction",
-    icon: Play,
-    variant: "default",
-    hook: useStartAuction,
-  },
-  [TOURNAMENT_STATUS.AUCTION_COMPLETED]: {
-    label: "Complete Auction",
-    icon: Trophy,
-    variant: "default",
-    hook: useCompleteAuction,
+    needsConfirmation: true,
+    confirmTitle: "Approve Registered Teams?",
+    confirmDescription:
+      "Are you sure you want to approve/reject all the registered teams? This closes team registration and moves the tournament to the next stage — it cannot be undone.",
   },
   [TOURNAMENT_STATUS.TOURNAMENT_COMPLETED]: {
     label: "Mark Tournament Completed",
@@ -90,9 +78,6 @@ export function LifecycleActions({ tournament }: { tournament: Tournament }) {
   const openPlayerReg = useOpenPlayerRegistration(tournament.id);
   const openTeamReg = useOpenTeamRegistration(tournament.id);
   const markTeamsApproved = useMarkTeamsApproved(tournament.id);
-  const scheduleAuction = useScheduleAuction(tournament.id);
-  const startAuction = useStartAuction(tournament.id);
-  const completeAuction = useCompleteAuction(tournament.id);
   const completeTournament = useCompleteTournament(tournament.id);
   const cancelTournament = useCancelTournament(tournament.id);
 
@@ -101,9 +86,6 @@ export function LifecycleActions({ tournament }: { tournament: Tournament }) {
       case TOURNAMENT_STATUS.PLAYER_REGISTRATION_OPEN: return openPlayerReg;
       case TOURNAMENT_STATUS.TEAM_REGISTRATION_OPEN: return openTeamReg;
       case TOURNAMENT_STATUS.TEAMS_APPROVED: return markTeamsApproved;
-      case TOURNAMENT_STATUS.AUCTION_SCHEDULED: return scheduleAuction;
-      case TOURNAMENT_STATUS.AUCTION_RUNNING: return startAuction;
-      case TOURNAMENT_STATUS.AUCTION_COMPLETED: return completeAuction;
       case TOURNAMENT_STATUS.TOURNAMENT_COMPLETED: return completeTournament;
       case TOURNAMENT_STATUS.CANCELLED: return cancelTournament;
       default: return null;
@@ -123,12 +105,9 @@ export function LifecycleActions({ tournament }: { tournament: Tournament }) {
     const mutation = getMutation(status);
     if (mutation) {
       setPendingAction(status);
-      mutation.mutate(
-        status === TOURNAMENT_STATUS.AUCTION_SCHEDULED ? undefined : undefined, // Extend for date picker later
-        {
-          onSettled: () => setPendingAction(null),
-        }
-      );
+      mutation.mutate(undefined, {
+        onSettled: () => setPendingAction(null),
+      });
     }
   };
 
@@ -187,7 +166,7 @@ export function LifecycleActions({ tournament }: { tournament: Tournament }) {
         title={ACTION_META[actionToConfirm!]?.confirmTitle || "Confirm Action"}
         description={ACTION_META[actionToConfirm!]?.confirmDescription || "Are you sure?"}
         onConfirm={confirmAction}
-        confirmVariant="destructive"
+        confirmVariant={ACTION_META[actionToConfirm!]?.variant === "destructive" ? "destructive" : "default"}
       />
     </>
   );

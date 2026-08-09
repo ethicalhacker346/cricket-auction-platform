@@ -1,6 +1,7 @@
 import { Tournament } from '../models/Tournament.js';
 import { AppError, assertFound, slugify, parsePagination, buildPaginatedResponse } from '../utils/helpers.js';
 import { TOURNAMENT_STATUS, USER_ROLES } from '../config/constants.js';
+import * as ImageService from '../services/image.service.js';
 
 export class TournamentService {
   static async create(organizerId, payload) {
@@ -66,9 +67,23 @@ export class TournamentService {
     const tournament = await TournamentService.getById(id);
     TournamentService.assertOrganizerAccess(tournament, user);
 
-    console.log(tournament.organizerId);
+    const oldLogoPublicId = tournament.logoPublicId;
 
-    const { status: _ignoredStatus, ...safePayload } = payload;
+    /* SECURITY: Never let the client inject logoPublicId directly.
+       Also strip status (existing behavior) and any other internal keys. */
+    const {
+      status: _ignoredStatus,
+      logoPublicId: _ignoredPublicId,
+      __v: _ignoredV,
+      ...safePayload
+    } = payload;
+
+    // Handle logo swap explicitly (before Object.assign)
+    if (safePayload.logo !== undefined) {
+      tournament.logo = safePayload.logo || undefined;
+      tournament.logoPublicId = ImageService.extractPublicId(safePayload.logo) || undefined;
+      delete safePayload.logo; // prevent Object.assign from touching it again
+    }
 
     if (safePayload.name) {
       safePayload.slug = slugify(safePayload.name);
@@ -85,8 +100,59 @@ export class TournamentService {
       throw err;
     }
 
+    if (oldLogoPublicId && oldLogoPublicId !== tournament.logoPublicId) {
+      ImageService.destroy(oldLogoPublicId).catch(() => {});
+    }
+
     return tournament;
   }
+  
+  /* ─── CUSTOM UPLOAD PATH: PATCH /tournaments/:id/logo ─────────────────── */
+
+  static async uploadLogo(id, user, fileBuffer) {
+    const tournament = await TournamentService.getById(id);
+    TournamentService.assertOrganizerAccess(tournament, user);
+
+    const oldPublicId = tournament.logoPublicId;
+
+    const uploaded = await ImageService.upload(
+      fileBuffer,
+      'tournament',
+      id,
+      'logo'
+    );
+
+    tournament.logo = uploaded.url;
+    tournament.logoPublicId = uploaded.publicId;
+    await tournament.save();
+
+    if (oldPublicId) {
+      ImageService.destroy(oldPublicId).catch(() => {});
+    }
+
+    return { logo: uploaded.url, meta: uploaded };
+  }
+
+  /* ─── REMOVE PATH: DELETE /tournaments/:id/logo ───────────────────────── */
+
+  static async removeLogo(id, user) {
+    const tournament = await TournamentService.getById(id);
+    TournamentService.assertOrganizerAccess(tournament, user);
+
+    const oldPublicId = tournament.logoPublicId;
+
+    tournament.logo = undefined;
+    tournament.logoPublicId = undefined;
+    await tournament.save();
+
+    if (oldPublicId) {
+      await ImageService.destroy(oldPublicId);
+    }
+
+    return tournament;
+  }
+
+
 
   static async openPlayerRegistration(id, user) {
     const tournament = await TournamentService.getById(id);

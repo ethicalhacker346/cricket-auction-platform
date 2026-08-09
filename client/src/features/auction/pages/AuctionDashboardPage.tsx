@@ -236,19 +236,19 @@ function QuickCard({
   loading?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-400/10 text-amber-300">
-        <Icon className="h-5 w-5" />
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:p-5">
+      <div className="mb-2.5 flex h-9 w-9 items-center justify-center rounded-xl bg-amber-400/10 text-amber-300 sm:mb-3 sm:h-10 sm:w-10">
+        <Icon className="h-4 w-4 sm:h-5 sm:w-5" />
       </div>
-      <p className="text-2xl font-black text-white">
+      <p className="truncate text-xl font-black text-white sm:text-2xl">
         {loading ? (
-          <span className="inline-block h-8 w-16 animate-pulse rounded bg-white/10" />
+          <span className="inline-block h-7 w-16 animate-pulse rounded bg-white/10 sm:h-8" />
         ) : (
           value
         )}
       </p>
-      <p className="text-xs text-slate-500">{label}</p>
-      {sub && <p className="mt-1 text-[11px] text-slate-600">{sub}</p>}
+      <p className="truncate text-xs text-slate-500">{label}</p>
+      {sub && <p className="mt-1 truncate text-[11px] text-slate-600">{sub}</p>}
     </div>
   );
 }
@@ -441,44 +441,44 @@ function DashboardHero({
   return (
     <motion.div
       {...fadeUp}
-      className="overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/10 via-slate-900 to-slate-950 p-6 sm:p-8"
+      className="overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500/10 via-slate-900 to-slate-950 p-4 sm:rounded-3xl sm:p-6 lg:p-8"
     >
-      <div className="flex flex-wrap items-start justify-between gap-6">
+      <div className="flex flex-col gap-5 sm:gap-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="mb-2.5 flex flex-wrap items-center gap-2 sm:mb-3">
             <AuctionStatusBadge status={live.status} />
             <span className="text-xs text-slate-500">Auction Home</span>
             <ConnectionPill connection={live.connection} />
           </div>
 
-          <h1 className="text-2xl font-black tracking-tight text-white sm:text-3xl">
+          <h1 className="break-words text-xl font-black leading-tight tracking-tight text-white sm:text-2xl lg:text-3xl">
             {activeAuction?.name ?? "Auction Dashboard"}
           </h1>
 
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
+          <p className="mt-1.5 max-w-xl text-sm text-slate-400">
             {activeAuction?.tournamentName
-              ? `${activeAuction.tournamentName} • Season ${activeAuction.season}· Organized by ${organizer}`
+              ? `${activeAuction.tournamentName} • Season ${activeAuction.season} · Organized by ${organizer}`
               : "Configure your tournament to get started"}
           </p>
 
-          <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <CalendarClock className="h-3.5 w-3.5" />
-              Scheduled: {scheduledAt}
+          <div className="mt-4 flex flex-col gap-2 text-xs text-slate-400 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Scheduled: {scheduledAt}</span>
             </span>
             <span className="flex items-center gap-1.5">
-              <TrendingUp className="h-3.5 w-3.5" />
+              <TrendingUp className="h-3.5 w-3.5 shrink-0" />
               Increment tiers: {activeAuction?.rules?.bidIncrements?.length ?? 0}
             </span>
             <span className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" />
+              <Clock className="h-3.5 w-3.5 shrink-0" />
               Lot timer: {activeAuction?.rules?.lotTimerSeconds ?? 30}s
             </span>
           </div>
 
           {auctionError && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2">
-              <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
               <p className="text-xs font-medium text-rose-300">{auctionError}</p>
             </div>
           )}
@@ -486,7 +486,7 @@ function DashboardHero({
 
         <Link
           to={routes.live}
-          className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-5 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110"
+          className="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-5 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110 sm:w-auto lg:w-auto"
         >
           <Gavel className="h-4 w-4" />
           Open Live Room
@@ -571,7 +571,7 @@ export default function AuctionDashboardPage() {
       )}
 
       {/* Quick stats */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         <QuickCard
           icon={ListOrdered}
           label="Rounds Configured"
@@ -616,16 +616,16 @@ export default function AuctionDashboardPage() {
               <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-amber-300">
                 <Activity className="h-3.5 w-3.5" /> Current Lot
               </p>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-lg font-bold text-white">{live.currentPlayer.name}</p>
-                  <p className="text-xs text-slate-400">{live.currentPlayer.role}</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-lg font-bold text-white">{live.currentPlayer.name}</p>
+                  <p className="truncate text-xs text-slate-400">{live.currentPlayer.role}</p>
                 </div>
-                <div className="text-right">
+                <div className="shrink-0 text-right">
                   <p className="text-lg font-bold text-amber-300">
                     {formatLakhs(live.currentBid.amount)}
                   </p>
-                  <p className="text-xs text-slate-400">
+                  <p className="truncate text-xs text-slate-400">
                     {live.leadingFranchise?.shortName ?? "No bids yet"}
                   </p>
                 </div>

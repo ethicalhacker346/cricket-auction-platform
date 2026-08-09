@@ -90,6 +90,7 @@ export default function RoundEditorPage() {
       try {
         setPlayersLoading(true);
         const list = await playerApi.listPlayers(tournamentId);
+        
         if (!cancelled) setPlayers(list);
       } catch (e: any) {
         if (!cancelled) setSaveError(e.message || "Failed to load players");

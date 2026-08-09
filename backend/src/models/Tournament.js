@@ -61,6 +61,11 @@ const tournamentSchema = new mongoose.Schema(
         message: 'logo must be a valid URL',
       },
     },
+    logoPublicId: {
+      type: String,
+      trim: true,
+      select: false,
+    },
     playerRegistrationOpen: {
       type: Boolean,
       default: false,

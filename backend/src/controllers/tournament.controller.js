@@ -46,7 +46,28 @@ export const tournamentController = {
       next(err);
     }
   },
+  // ── NEW ────────────────────────────────────────────────────────────────
+  uploadLogo: async (req, res, next) => {
+    try {
+      const result = await TournamentService.uploadLogo(
+        req.params.id,
+        req.user,
+        req.file.buffer
+      );
+      return res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
 
+  removeLogo: async (req, res, next) => {
+    try {
+      const tournament = await TournamentService.removeLogo(req.params.id, req.user);
+      return res.json({ success: true, data: tournament });
+    } catch (err) {
+      next(err);
+    }
+  },
   openPlayerRegistration: async (req, res, next) => {
     try {
       const tournament = await TournamentService.openPlayerRegistration(req.params.id, req.user);

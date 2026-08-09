@@ -12,13 +12,11 @@ import {
   ArrowDown,
   ArrowLeft,
   Loader2,
-  
 } from "lucide-react";
 import { PlayerForm } from "@/components/player/PlayerForm";
 import { LogoSelector } from "@/components/ui/LogoSelector";
 import { LOGO_LIBRARY, type Logo } from "@/components/ui/logoLibrary";
-import { useCreatePlayer } from "@/hooks/usePlayers";
-import { usePlayerMe } from "@/hooks/usePlayers";
+import { useCreatePlayer, usePlayerMe } from "@/hooks/usePlayers";
 import type { PlayerFormValues } from "@/lib/validators/playerSchema";
 import { Link } from "react-router-dom";
 
@@ -38,14 +36,8 @@ export function CreatePlayerPage() {
     }
   }, [existingPlayer, navigate]);
 
-  // LOGO_LIBRARY stores logos as root-relative paths (e.g.
-  // "/logos/players/image1.png"), but both the Zod schema's
-  // `profileImage: z.string().url()` check and the backend's Player.js
-  // validator (`/^https?:\/\//`) require an *absolute* URL. Left as-is, the
-  // hidden `profileImage` field in PlayerForm silently failed validation on
-  // every submit — react-hook-form just refused to call onSubmit, with no
-  // visible error anywhere, which looked exactly like a dead button.
-  // Resolving to an absolute URL here fixes it for both validation layers.
+  // LOGO_LIBRARY stores root-relative paths (e.g. "/logos/players/image1.png"),
+  // but both Zod and the backend require absolute URLs. Resolve here.
   const toAbsoluteUrl = (url: string) => {
     if (!url) return url;
     try {
@@ -55,13 +47,15 @@ export function CreatePlayerPage() {
     }
   };
 
-  // LogoSelector's "clear" action calls onChange with an empty-but-truthy
-  // Logo object ({ id: "", url: "", ... }), not null. Wiring onChange
-  // straight to setSelectedLogo (as before) left selectedLogo truthy after
-  // clearing, which broke the "completed" step badge and showed a blank
-  // "Selected: " summary. Normalize that to a real null here.
-  const handleLogoChange = (logo: Logo) => {
+  // ─── Logo Selection (Library Path Only) ───────────────────────────────────
+  // Create mode has no player entity yet, so custom upload is unavailable.
+  // The upload tab auto-hides when onUpload is omitted.
+  const handleLogoSelect = (logo: Logo) => {
     setSelectedLogo(logo.url ? { ...logo, url: toAbsoluteUrl(logo.url) } : null);
+  };
+
+  const handleLogoRemove = () => {
+    setSelectedLogo(null);
   };
 
   const handleSubmit = (payload: Partial<PlayerFormValues>) => {
@@ -97,7 +91,6 @@ export function CreatePlayerPage() {
           HERO HEADER
           ═══════════════════════════════════════════════════════════════ */}
       <div className="relative overflow-hidden bg-slate-900 text-white">
-        
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/40 via-slate-900/0 to-slate-900/0" />
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wMykiLz48L3N2Zz4=')] opacity-30" />
 
@@ -106,9 +99,7 @@ export function CreatePlayerPage() {
           animate={{ scaleX: 1 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
           className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-emerald-500 to-sky-500 origin-left"
-          
         />
-        
 
         <div className="relative max-w-5xl mx-auto px-6 py-2 md:py-5">
           <Link
@@ -127,7 +118,6 @@ export function CreatePlayerPage() {
             <div className="p-2.5 bg-white/10 backdrop-blur rounded-xl border border-white/10">
               <Trophy className="w-5 h-5 text-amber-400" />
             </div>
-            
             <span className="text-sm font-semibold text-slate-400 uppercase tracking-[0.15em]">
               Player Onboarding
             </span>
@@ -208,8 +198,8 @@ export function CreatePlayerPage() {
                   Choose Your Avatar
                 </h2>
                 <p className="text-slate-400 max-w-lg mx-auto">
-                  Select a logo that represents your playing style. This will be
-                  visible to franchises and fans across the platform.
+                  Select a logo from our library. After creating your profile,
+                  you can upload a custom image from the edit page.
                 </p>
               </div>
 
@@ -221,8 +211,11 @@ export function CreatePlayerPage() {
                 <LogoSelector
                   userRole="player"
                   value={selectedLogo?.url || null}
-                  onChange={handleLogoChange}
                   logos={LOGO_LIBRARY}
+                  onSelect={handleLogoSelect}
+                  onRemove={handleLogoRemove}
+                  // onUpload intentionally omitted — no player entity exists yet
+                  // so the Upload tab auto-hides. Custom upload available after creation.
                 />
               </motion.div>
 

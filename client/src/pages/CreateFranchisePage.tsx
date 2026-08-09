@@ -28,20 +28,13 @@ export function CreateFranchisePage() {
 
   const isAuthorized = user?.role === "FRANCHISE_OWNER" || user?.role === "ADMIN";
 
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // FIX #1: Only fetch franchises if user is authorized
-  // This prevents 403 errors and unnecessary API calls
-  // ═══════════════════════════════════════════════════════════════════════════════
-  const { data: myFranchises, isLoading: checkingFranchises, error: listError } = useMyFranchises(
+  const { data: myFranchisesData, isLoading: checkingFranchises, error: listError } = useMyFranchises(
     { limit: 1 },
-    { enabled: isAuthorized } // Only run query if authorized
+    { enabled: isAuthorized }
   );
 
-  const franchises = myFranchises?.data ?? [];
+  const franchises = myFranchisesData?.data ?? [];
 
-  // If they already have a franchise, show a dismissible heads-up banner
-  // instead of silently redirecting — the user may intentionally want to
-  // create a second franchise.
   useEffect(() => {
     if (franchises.length > 0) {
       // Optionally redirect to their franchise dashboard
@@ -49,17 +42,14 @@ export function CreateFranchisePage() {
     }
   }, [franchises, navigate]);
 
-  // Logo selection — Step 1 of the onboarding flow.
+  // ─── Logo Selection (Library Path Only) ───────────────────────────────────
+  // Create mode has no franchise entity yet, so custom upload is unavailable.
+  // The upload tab auto-hides when onUpload is omitted.
   const [selectedLogo, setSelectedLogo] = useState<Logo | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
 
-  // LOGO_LIBRARY stores logos as root-relative paths (e.g.
-  // "/logos/franchises/apex.png"), but Franchise.js's Mongoose validator
-  // requires an absolute http(s) URL, and so does the Zod schema's
-  // `logo: z.string().url()` check. Resolve to absolute at selection time
-  // so it survives both validation layers — this is the exact issue that
-  // silently blocked the player "Create Profile" button before.
+  // LOGO_LIBRARY stores root-relative paths. Backend requires absolute URLs.
   const toAbsoluteUrl = (url: string) => {
     if (!url) return url;
     try {
@@ -69,10 +59,12 @@ export function CreateFranchisePage() {
     }
   };
 
-  // LogoSelector's "clear" action calls onChange with an empty-but-truthy
-  // Logo object ({ id: "", url: "", ... }), not null — normalize that here.
-  const handleLogoChange = useCallback((logo: Logo) => {
+  const handleLogoSelect = useCallback((logo: Logo) => {
     setSelectedLogo(logo.url ? { ...logo, url: toAbsoluteUrl(logo.url) } : null);
+  }, []);
+
+  const handleLogoRemove = useCallback(() => {
+    setSelectedLogo(null);
   }, []);
 
   const handleContinue = () => {
@@ -84,9 +76,6 @@ export function CreateFranchisePage() {
     }, 300);
   };
 
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // FIX #2: Use useCallback to prevent unnecessary re-renders of FranchiseForm
-  // ═══════════════════════════════════════════════════════════════════════════════
   const handleSubmit = useCallback(
     (payload: Partial<FranchiseFormValues>) => {
       createFranchise({
@@ -97,9 +86,6 @@ export function CreateFranchisePage() {
     [createFranchise, selectedLogo]
   );
 
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // FIX #3: Show loading skeleton only when actually checking
-  // ═══════════════════════════════════════════════════════════════════════════════
   if (checkingFranchises) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -219,7 +205,6 @@ export function CreateFranchisePage() {
         </div>
       ) : (
         <>
-          {/* Heads-up if they already own a franchise — dismissible, not a redirect */}
           {franchises.length > 0 && !showForm && (
             <div className="max-w-5xl mx-auto px-6 pt-8">
               <motion.div
@@ -234,8 +219,8 @@ export function CreateFranchisePage() {
                   </p>
                   <p className="text-xs text-violet-600 mt-1">
                     You can still register another one, or{" "}
-                    <Link to="/franchises/{franchiseID}/edit" className="underline underline-offset-2 font-medium">
-                      manage your existing franchise
+                    <Link to="/franchises/mine" className="underline underline-offset-2 font-medium">
+                      manage your existing franchises
                     </Link>{" "}
                     instead.
                   </p>
@@ -289,8 +274,8 @@ export function CreateFranchisePage() {
                       Choose Your Franchise Logo
                     </h2>
                     <p className="text-slate-400 max-w-lg mx-auto">
-                      Select a crest that represents your team. This will be visible
-                      to players, organizers, and fans across the platform.
+                      Select a crest from our library. After creating your franchise,
+                      you can upload a custom logo from the edit page.
                     </p>
                   </div>
 
@@ -302,8 +287,11 @@ export function CreateFranchisePage() {
                     <LogoSelector
                       userRole="franchise_owner"
                       value={selectedLogo?.url || null}
-                      onChange={handleLogoChange}
                       logos={LOGO_LIBRARY}
+                      onSelect={handleLogoSelect}
+                      onRemove={handleLogoRemove}
+                      // onUpload intentionally omitted — no franchise entity exists yet
+                      // Upload tab auto-hides. Custom upload available after creation.
                     />
                   </motion.div>
 

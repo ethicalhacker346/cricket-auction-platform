@@ -715,6 +715,7 @@ export class AuctionService {
         auction.liveState?.currentTournamentPlayerId
           ? TournamentPlayer.findById(
               auction.liveState.currentTournamentPlayerId,
+              
             ).populate("playerId")
           : null,
         auction.liveState?.currentRoundId
@@ -745,6 +746,7 @@ export class AuctionService {
         AuctionRound.find({ auctionId }).sort({ order: 1 }),
         TournamentPlayer.find({
           tournamentId: auction.tournamentId._id ?? auction.tournamentId,
+          status: REGISTRATION_STATUS.APPROVED,
         }).populate("playerId"),
         TournamentTeam.find({
           tournamentId: auction.tournamentId._id ?? auction.tournamentId,
@@ -949,6 +951,7 @@ export class AuctionService {
   // Defensive invariant: no player may remain in a non-terminal state.
     const dangling = await TournamentPlayer.countDocuments({
       tournamentId: auction.tournamentId,
+      status: REGISTRATION_STATUS.APPROVED,
       lotOutcome: { $in: [LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.IN_PROGRESS, LOT_OUTCOME.UNSOLD] },
     }).session(session ?? null);
 
@@ -1084,6 +1087,7 @@ export class AuctionService {
     // NEW: Manual completion must also respect the terminal invariant.
     const unresolved = await TournamentPlayer.countDocuments({
       tournamentId: auction.tournamentId,
+      status: REGISTRATION_STATUS.APPROVED,
       lotOutcome: { $in: [LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.IN_PROGRESS, LOT_OUTCOME.UNSOLD] },
     });
 

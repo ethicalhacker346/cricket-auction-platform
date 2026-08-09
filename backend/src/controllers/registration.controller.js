@@ -102,4 +102,13 @@ export const registrationController = {
     const squads = await RegistrationService.exportSquads(getTournamentId(req));
     return res.json({ success: true, data: squads });
   },
+
+  listApprovedPlayers: async (req, res) => {
+    const result = await RegistrationService.listApprovedPlayers(
+      getTournamentId(req),
+      req.query,
+      req.user?._id
+    );
+    return res.json({ success: true, ...result });
+  },
 };

@@ -155,18 +155,18 @@ function StatCard({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay }}
-      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
+      className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md sm:p-5"
     >
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-50">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-50">
           <Icon className="h-5 w-5 text-slate-500" />
         </div>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
-          <p className="text-2xl font-bold text-slate-900">{value}</p>
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
+          <p className="truncate text-xl font-bold text-slate-900 sm:text-2xl">{value}</p>
         </div>
       </div>
-      {subtext && <p className="mt-2 text-xs text-slate-500">{subtext}</p>}
+      {subtext && <p className="mt-2 truncate text-xs text-slate-500">{subtext}</p>}
     </motion.div>
   );
 }
@@ -197,16 +197,16 @@ function TournamentCrest({ logo, name }: { logo?: string | null; name: string })
   const showLogo = !!logo && !failed;
 
   return (
-    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-lg backdrop-blur-md md:h-24 md:w-24">
+    <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-lg backdrop-blur-md sm:h-20 sm:w-20 md:h-24 md:w-24">
       {showLogo ? (
         <img
           src={logo!}
           alt={`${name} logo`}
           onError={() => setFailed(true)}
-          className="h-full w-full object-contain p-2.5"
+          className="h-full w-full object-contain p-2 sm:p-2.5"
         />
       ) : (
-        <Trophy className="h-9 w-9 text-white/70 md:h-10 md:w-10" />
+        <Trophy className="h-7 w-7 text-white/70 sm:h-9 sm:w-9 md:h-10 md:w-10" />
       )}
     </div>
   );
@@ -232,7 +232,7 @@ function TournamentHero({ tournament, theme }: { tournament: any; theme: ReturnT
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
       className={cn(
-        "relative overflow-hidden rounded-3xl bg-gradient-to-br p-8 text-white shadow-xl md:p-10",
+        "relative overflow-hidden rounded-2xl bg-gradient-to-br p-5 text-white shadow-xl sm:rounded-3xl sm:p-8 md:p-10",
         theme.gradient,
         theme.glow
       )}
@@ -256,11 +256,11 @@ function TournamentHero({ tournament, theme }: { tournament: any; theme: ReturnT
         />
       )}
 
-      <div className="relative flex items-start gap-5">
+      <div className="relative flex flex-col items-center gap-4 text-center sm:gap-5 md:flex-row md:items-start md:text-left">
         <TournamentCrest logo={tournament.logo} name={tournament.name || "Tournament"} />
 
-        <div className="min-w-0 flex-1">
-          <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="w-full min-w-0 flex-1">
+          <div className="mb-4 flex flex-wrap items-center justify-center gap-2 md:justify-start">
             <span
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1",
@@ -300,7 +300,7 @@ function TournamentHero({ tournament, theme }: { tournament: any; theme: ReturnT
             )}
           </div>
 
-          <h1 className="text-3xl font-bold tracking-tight md:text-4xl lg:text-5xl">
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl lg:text-5xl">
             {tournament.name || "Unnamed Tournament"}
           </h1>
 
@@ -309,7 +309,7 @@ function TournamentHero({ tournament, theme }: { tournament: any; theme: ReturnT
             Organized by {tournament.organizerName || "Unknown"}
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm sm:mt-6 sm:gap-x-6 md:justify-start">
             {tournament.venue && (
               <span className={cn("flex items-center gap-1.5", theme.text)}>
                 <MapPin className="h-4 w-4" />

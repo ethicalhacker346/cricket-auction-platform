@@ -411,4 +411,86 @@ export class RegistrationService {
       })),
     };
   }
+    // ====================== APPROVED PLAYERS (AUCTION POOL) ======================
+
+  /**
+   * Returns only APPROVED registrations for a tournament.
+   * Contract is identical to listPlayers() so the frontend table component
+   * can swap the endpoint without changing its renderer.
+   *
+   * @param {string} tournamentId
+   * @param {object} query   — pagination + optional filters (isSold, lotOutcome, userId, search)
+   * @param {string} [currentUserId] — for 'me' resolution
+   */
+  static async listApprovedPlayers(tournamentId, query = {}, currentUserId) {
+    const { page, limit, skip } = parsePagination(query);
+
+    // ── Core filter: tournament + APPROVED (immutable for this endpoint) ──
+    const filter = {
+      tournamentId,
+      status: REGISTRATION_STATUS.APPROVED,
+    };
+
+    // ── Optional passthrough filters (same as listPlayers) ──
+    if (query.isSold !== undefined) filter.isSold = query.isSold === 'true';
+    if (query.lotOutcome) filter.lotOutcome = query.lotOutcome;
+    if (query.userId) {
+      filter.userId = this.resolveUserId(query.userId, currentUserId);
+    }
+
+    // ── Search by player name (bonus, non-breaking) ──
+    // Because we .populate('playerId'), a regex directly on TournamentPlayer
+    // won't hit the player's name. We do a two-step lookup only when search
+    // is provided, keeping the hot path (no search) as a single indexed query.
+    const search = query.search?.toString().trim();
+    if (search) {
+      const safeSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(safeSearch, 'i');
+
+      const matchingPlayers = await Player
+        .find({ fullName: searchRegex })
+        .select('_id')
+        .lean();
+
+      const playerIds = matchingPlayers.map((p) => p._id);
+      if (playerIds.length === 0) {
+        // Early exit: no players match the search → empty paginated response
+        return buildPaginatedResponse({ data: [], total: 0, page, limit });
+      }
+      filter.playerId = { $in: playerIds };
+    }
+
+    // ── Execution ──
+    const [registrations, total] = await Promise.all([
+      TournamentPlayer.find(filter)
+        .populate({
+          path: 'playerId',
+          select: 'fullName primaryRole profileImage',
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      TournamentPlayer.countDocuments(filter),
+    ]);
+
+    // ── Mapper: IDENTICAL shape to listPlayers() ──
+    const data = registrations.map((registration) => ({
+      id: registration._id.toString(),
+      registrationId: registration._id.toString(),
+      playerId: registration.playerId?._id?.toString(),
+      name: registration.playerId?.fullName ?? '',
+      role: registration.primaryRole,
+      basePrice: registration.basePrice,
+      basePriceUpdatedAt: registration.basePriceUpdatedAt ?? null,
+      status: registration.status,
+      lotOutcome: registration.lotOutcome,
+      isSold: registration.isSold,
+      soldPrice: registration.soldPrice,
+      profileImage: registration.playerId?.profileImage ?? null,
+      createdAt: registration.createdAt,
+    }));
+
+    return buildPaginatedResponse({ data, total, page, limit });
+  }
 }

@@ -50,3 +50,12 @@ export const forgotPasswordEmailLimiter = rateLimit({
   keyGenerator: (req) => `fp_email_${req.body?.email?.toLowerCase()?.trim() || req.ip}`,
   skip: (req) => !req.body?.email, // Skip if no email provided (will fail validation anyway)
 });
+
+
+export const imageUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 uploads per window per IP
+  message: { success: false, error: 'Too many image uploads. Try again later.' },
+  standardHeaders: true,
+  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+});

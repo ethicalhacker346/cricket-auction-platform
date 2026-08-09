@@ -99,14 +99,14 @@ export default function AuctionResultPage() {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mx-auto max-w-6xl space-y-6"
+      className="mx-auto w-full max-w-7xl space-y-6"
     >
       {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="mb-2 flex items-center gap-2">
-            <h1 className="flex items-center gap-2 text-2xl font-black text-white">
-              <Trophy className="h-5 w-5 text-amber-300" /> Auction Results
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h1 className="flex items-center gap-2 text-xl font-black text-white sm:text-2xl">
+              <Trophy className="h-5 w-5 shrink-0 text-amber-300" /> Auction Results
             </h1>
             <AuctionStatusBadge status={status} />
           </div>
@@ -123,7 +123,7 @@ export default function AuctionResultPage() {
         </div>
 
         {/* Summary stats */}
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:w-auto lg:shrink-0 lg:grid-cols-5">
           {[
             { label: "Sold", value: playersSoldCount, color: "text-emerald-400" },
             { label: "Unsold", value: playersUnsoldCount, color: "text-rose-400" },
@@ -137,10 +137,12 @@ export default function AuctionResultPage() {
           ].map((stat) => (
             <div
               key={stat.label}
-              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center"
+              className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-2 text-center sm:px-3 lg:min-w-[92px]"
             >
-              <p className={cn("text-sm font-bold", stat.color)}>{stat.value}</p>
-              <p className="text-[9px] uppercase tracking-wider text-slate-500">{stat.label}</p>
+              <p className={cn("truncate text-sm font-bold", stat.color)}>{stat.value}</p>
+              <p className="truncate text-[9px] uppercase tracking-wider text-slate-500">
+                {stat.label}
+              </p>
             </div>
           ))}
         </div>
@@ -177,34 +179,49 @@ export default function AuctionResultPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-2 rounded-xl bg-white/5 p-1 ring-1 ring-white/10">
-        {(["teams", "sold", "unsold", "permanent_unsold"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn(
-              "flex-1 rounded-lg px-3.5 py-2 text-xs font-semibold capitalize transition",
-              tab === t
-                ? "bg-amber-400 text-slate-950"
-                : "text-slate-300 hover:text-white"
-            )}
-          >
-            {t === "teams"
-              ? "Team Standings"
-              : t === "permanent_unsold"
-              ? "Perm. Unsold"
-              : t}
-            <span className="ml-1.5 rounded-full bg-white/20 px-1.5 py-0.5 text-[9px]">
-              {t === "teams"
-                ? franchises.length
-                : t === "sold"
-                ? sold.length
-                : t === "unsold"
-                ? unsold.length
-                : permanentUnsold.length}
-            </span>
-          </button>
-        ))}
+      <div className="w-full min-w-0">
+        <div
+          className={cn(
+            "flex w-full min-w-0 gap-1.5 overflow-x-auto rounded-2xl border border-white/10 bg-white/[0.03] p-1.5",
+            "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            "sm:grid sm:grid-cols-4 sm:gap-2 sm:overflow-visible"
+          )}
+        >
+          {([
+            { key: "teams", label: "Team Standings", count: franchises.length },
+            { key: "sold", label: "Sold", count: sold.length },
+            { key: "unsold", label: "Unsold", count: unsold.length },
+            { key: "permanent_unsold", label: "Perm. Unsold", count: permanentUnsold.length },
+          ] as const).map(({ key, label, count }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cn(
+                "relative shrink-0 whitespace-nowrap rounded-xl px-4 py-2.5 text-xs font-semibold transition sm:w-full sm:px-3 sm:text-center",
+                tab === key ? "text-slate-950" : "text-slate-300 hover:text-white"
+              )}
+            >
+              {tab === key && (
+                <motion.span
+                  layoutId="resultTabIndicator"
+                  className="absolute inset-0 rounded-xl bg-amber-400 shadow-lg shadow-amber-400/20"
+                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                />
+              )}
+              <span className="relative z-10 inline-flex items-center gap-1.5">
+                {label}
+                <span
+                  className={cn(
+                    "inline-flex min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none",
+                    tab === key ? "bg-slate-950/15 text-slate-950" : "bg-white/10 text-slate-400"
+                  )}
+                >
+                  {count}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Tab content */}
@@ -240,74 +257,100 @@ export default function AuctionResultPage() {
         )}
 
         {tab === "sold" && (
-          <motion.div
-            key="sold"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="overflow-hidden rounded-2xl border border-white/10"
-          >
-            <table className="w-full text-left text-sm">
-              <thead className="bg-white/5 text-[11px] uppercase tracking-wider text-slate-400">
-                <tr>
-                  <th className="px-4 py-3">Player</th>
-                  <th className="px-4 py-3">Role</th>
-                  <th className="px-4 py-3">Franchise</th>
-                  <th className="px-4 py-3 text-right">Sold Price</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {sold.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-xs text-slate-600">
-                      No players sold yet.
+  <motion.div
+    key="sold"
+    initial={{ opacity: 0, y: 8 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, y: -8 }}
+    className="w-full min-w-0 overflow-hidden rounded-2xl border border-white/10"
+  >
+    <div className="w-full max-w-full overflow-x-auto overscroll-x-contain">
+      <table className="w-full min-w-[640px] text-left text-sm">
+        <thead className="bg-white/5 text-[11px] uppercase tracking-wider text-slate-400">
+          <tr>
+            <th className="whitespace-nowrap px-4 py-3">Player</th>
+            <th className="whitespace-nowrap px-4 py-3">Role</th>
+            <th className="whitespace-nowrap px-4 py-3">Franchise</th>
+            <th className="whitespace-nowrap px-4 py-3 text-right">
+              Sold Price
+            </th>
+          </tr>
+        </thead>
+
+        <tbody className="divide-y divide-white/5">
+          {sold.length === 0 ? (
+            <tr>
+              <td
+                colSpan={4}
+                className="px-4 py-10 text-center text-xs text-slate-600"
+              >
+                No players sold yet.
+              </td>
+            </tr>
+          ) : (
+            sold
+              .slice()
+              .sort(
+                (a, b) =>
+                  (b.soldPrice ?? 0) - (a.soldPrice ?? 0)
+              )
+              .map((p) => {
+                const f = franchises.find(
+                  (fr) => fr.id === p.teamId
+                );
+
+                return (
+                  <tr
+                    key={p.id}
+                    className="bg-white/[0.015] transition hover:bg-white/[0.04]"
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="shrink-0 text-xs font-bold text-amber-400">
+                          #{sold.findIndex((s) => s.id === p.id) + 1}
+                        </span>
+
+                        <span className="max-w-[220px] truncate text-slate-200">
+                          {p.name}
+                        </span>
+                      </div>
+                    </td>
+
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                      {p.role}
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {f && (
+                          <span
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                            style={{
+                              background: `linear-gradient(135deg, ${f.colorFrom}, ${f.colorTo})`,
+                            }}
+                          >
+                            {initials(f.shortName)}
+                          </span>
+                        )}
+
+                        <span className="max-w-[220px] truncate text-slate-300">
+                          {f?.name ?? "—"}
+                        </span>
+                      </div>
+                    </td>
+
+                    <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-emerald-400">
+                      {formatLakhs(p.soldPrice ?? 0)}
                     </td>
                   </tr>
-                ) : (
-                  sold
-                    .sort((a, b) => (b.soldPrice ?? 0) - (a.soldPrice ?? 0))
-                    .map((p) => {
-                      const f = franchises.find((fr) => fr.id === p.teamId);
-                      return (
-                        <tr
-                          key={p.id}
-                          className="bg-white/[0.015] transition hover:bg-white/[0.04]"
-                        >
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-amber-400">
-                                #{sold.findIndex((s) => s.id === p.id) + 1}
-                              </span>
-                              <span className="text-slate-200">{p.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-slate-400">{p.role}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              {f && (
-                                <span
-                                  className="flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-white"
-                                  style={{
-                                    background: `linear-gradient(135deg, ${f.colorFrom}, ${f.colorTo})`,
-                                  }}
-                                >
-                                  {initials(f.shortName)}
-                                </span>
-                              )}
-                              <span className="text-slate-300">{f?.name ?? "—"}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right font-semibold text-emerald-400">
-                            {formatLakhs(p.soldPrice ?? 0)}
-                          </td>
-                        </tr>
-                      );
-                    })
-                )}
-              </tbody>
-            </table>
-          </motion.div>
-        )}
+                );
+              })
+          )}
+        </tbody>
+      </table>
+    </div>
+  </motion.div>
+)}
 
         {tab === "unsold" && (
           <motion.div
@@ -333,7 +376,7 @@ export default function AuctionResultPage() {
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {unsold.map((p) => (
                   <div
                     key={p.id}
@@ -384,7 +427,7 @@ export default function AuctionResultPage() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {permanentUnsold.map((p) => (
                     <div
                       key={p.id}

@@ -1,4 +1,5 @@
 import { AppError } from '../utils/helpers.js';
+import multer from 'multer';
 
 export function notFoundHandler(_req, _res, next) {
   next(new AppError('Route not found', 404));
@@ -18,6 +19,32 @@ export function errorHandler(err, _req, res, _next) {
     return res.status(409).json({
       success: false,
       message: `Duplicate value for ${field}`,
+    });
+  }
+  // ── Multer errors ───────────────────────────────────────────────────────
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      const maxMB = (process.env.UPLOAD_MAX_FILE_SIZE || 5 * 1024 * 1024) / 1024 / 1024;
+      return res.status(400).json({
+        success: false,
+        error: `File too large. Maximum allowed: ${maxMB}MB.`,
+      });
+    }
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({
+        success: false,
+        error: 'Unexpected field name. Use "image" as the form field.',
+      });
+    }
+    return res.status(400).json({ success: false, error: err.message });
+  }
+
+  // ── Cloudinary errors ───────────────────────────────────────────────────
+  if (err.http_code || err.message?.includes('Cloudinary')) {
+    console.error('[Cloudinary Error]', err);
+    return res.status(502).json({
+      success: false,
+      error: 'Image processing service temporarily unavailable. Please retry.',
     });
   }
 

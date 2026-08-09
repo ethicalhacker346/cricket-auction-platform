@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { z } from "zod";
@@ -28,6 +28,7 @@ import { LOGO_LIBRARY, type Logo } from "@/components/ui/logoLibrary";
 import { tournamentFormSchema, type TournamentFormValues } from "@/lib/validators/tournament";
 import { slugify } from "@/lib/format";
 import { CURRENCIES } from "@/lib/constants/tournament";
+import { useUploadTournamentLogo, useRemoveTournamentLogo } from "@/hooks/useTournaments";
 
 type TournamentFormInput = z.input<typeof tournamentFormSchema>;
 
@@ -37,6 +38,8 @@ interface TournamentFormProps {
   isSubmitting?: boolean;
   submitLabel: string;
   lockSlug?: boolean;
+  /** If provided, enables custom upload & remove (edit mode). Omit for create mode. */
+  tournamentId?: string;
 }
 
 function toDateInputValue(iso?: string) {
@@ -44,12 +47,7 @@ function toDateInputValue(iso?: string) {
   return iso.slice(0, 10);
 }
 
-// LOGO_LIBRARY stores logos as root-relative paths (e.g.
-// "/logos/tournaments/championship.png"), but Tournament.js's Mongoose
-// validator requires an absolute http(s) URL, and so does the Zod schema's
-// `logo: z.string().url()` check. A hidden field failing that check
-// silently blocks the whole submit with no visible error — this exact bug
-// already bit the player form once. Resolve to absolute at selection time.
+// LOGO_LIBRARY stores root-relative paths. Backend requires absolute URLs.
 function toAbsoluteUrl(url: string) {
   if (!url) return url;
   try {
@@ -62,10 +60,7 @@ function toAbsoluteUrl(url: string) {
 function findLibraryLogo(url?: string): Logo | null {
   if (!url) return null;
   const found = LOGO_LIBRARY.find((l) => toAbsoluteUrl(l.url) === url);
-  if (found) return { ...found, url: toAbsoluteUrl(found.url) };
-  // The saved logo doesn't match a library entry (e.g. was set some other
-  // way) — still show *something* meaningful instead of silently losing it.
-  return { id: "custom", url, name: "Current logo", category: "tournament" };
+  return found ? { ...found, url: toAbsoluteUrl(found.url) } : null;
 }
 
 // =============================================================================
@@ -140,7 +135,14 @@ function CompletionTracker({ total, completed }: { total: number; completed: num
 // MAIN COMPONENT
 // =============================================================================
 
-export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLabel, lockSlug }: TournamentFormProps) {
+export function TournamentForm({
+  defaultValues,
+  onSubmit,
+  isSubmitting,
+  submitLabel,
+  lockSlug,
+  tournamentId,
+}: TournamentFormProps) {
   const {
     register,
     handleSubmit,
@@ -160,40 +162,86 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
   const [slugTouched, setSlugTouched] = useState(lockSlug ? true : !!defaultValues.slug);
   const nameValue = watch("name");
 
+  // Auto-generate slug from name if untouched
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!slugTouched && nameValue) {
       setValue("slug", slugify(nameValue));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nameValue, slugTouched]);
 
-  // ─── Logo / Branding state ───────────────────────────────────────────
-  const [selectedLogo, setSelectedLogo] = useState<Logo | null>(() =>
+  // ─── Dual-Path Image State ────────────────────────────────────────────────
+  // activeImageUrl: source of truth for the current image (library OR Cloudinary)
+  // selectedLibraryLogo: tracks which library asset is selected (for name display)
+  const [activeImageUrl, setActiveImageUrl] = useState<string | null>(
+    defaultValues.logo || null
+  );
+  const [selectedLibraryLogo, setSelectedLibraryLogo] = useState<Logo | null>(() =>
     findLibraryLogo(defaultValues.logo)
   );
   const [showLogoSelector, setShowLogoSelector] = useState(false);
 
-  const handleLogoChange = (logo: Logo) => {
-    // LogoSelector's "clear" action calls onChange with an
-    // empty-but-truthy Logo object ({ id: "", url: "", ... }) — normalize
-    // that to a real null.
-    setSelectedLogo(logo.url ? { ...logo, url: toAbsoluteUrl(logo.url) } : null);
-  };
+  const uploadLogoMutation = useUploadTournamentLogo();
+  const removeLogoMutation = useRemoveTournamentLogo();
 
-  // Sync the hidden `logo` field from selectedLogo. Lives in an effect,
-  // not the render body — calling setValue() directly during render fires
-  // on every render whenever the values don't happen to already match,
-  // which is an infinite render loop for the "nothing selected yet" case.
-  // That exact bug once froze the player create/edit pages.
+  // Sync activeImageUrl to react-hook-form's hidden logo field
   useEffect(() => {
-    const next = selectedLogo?.url || "";
+    const next = activeImageUrl || "";
     if (next !== getValues("logo")) {
       setValue("logo", next, { shouldValidate: true, shouldDirty: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLogo]);
+  }, [activeImageUrl]);
 
-  // ─── Completion tracker ──────────────────────────────────────────────
+  // ─── Library Path ─────────────────────────────────────────────────────────
+  const handleLogoSelect = useCallback((logo: Logo) => {
+    const url = logo.url ? toAbsoluteUrl(logo.url) : null;
+    setSelectedLibraryLogo(logo.url ? logo : null);
+    setActiveImageUrl(url);
+  }, []);
+
+  // ─── Custom Upload Path ───────────────────────────────────────────────────
+  const handleLogoUpload = useCallback(
+    async (file: File) => {
+      if (!tournamentId) return;
+      try {
+        const result = await uploadLogoMutation.mutateAsync({ id: tournamentId, file });
+        setActiveImageUrl(result.logo);
+        setSelectedLibraryLogo(null);
+      } catch {
+        // Error toasted by hook; local preview reverts via LogoSelector
+      }
+    },
+    [tournamentId, uploadLogoMutation]
+  );
+
+  // ─── Remove Path ──────────────────────────────────────────────────────────
+  const handleLogoRemove = useCallback(async () => {
+    if (!tournamentId) {
+      // Create mode: just clear local state
+      setActiveImageUrl(null);
+      setSelectedLibraryLogo(null);
+      return;
+    }
+    try {
+      await removeLogoMutation.mutateAsync({ id: tournamentId });
+      setActiveImageUrl(null);
+      setSelectedLibraryLogo(null);
+    } catch {
+      // Error toasted by hook
+    }
+  }, [tournamentId, removeLogoMutation]);
+
+  // ─── Display Helpers ──────────────────────────────────────────────────────
+  const displayName =
+    selectedLibraryLogo?.name || (activeImageUrl ? "Custom Upload" : "No Logo Selected");
+  const displayDescription = selectedLibraryLogo
+    ? "Shown on the tournament page, brackets, and auction room."
+    : activeImageUrl
+    ? "Your custom uploaded tournament logo."
+    : "Choose a crest to make this tournament instantly recognizable.";
+
+  // ─── Completion tracker ───────────────────────────────────────────────────
   const venueValue = watch("venue");
   const seasonValue = watch("season");
   const descriptionValue = watch("description");
@@ -208,9 +256,9 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
       !!descriptionValue,
       !!registrationDeadlineValue,
       !!auctionDateValue,
-      !!selectedLogo,
+      !!activeImageUrl,
     ],
-    [nameValue, venueValue, seasonValue, descriptionValue, registrationDeadlineValue, auctionDateValue, selectedLogo]
+    [nameValue, venueValue, seasonValue, descriptionValue, registrationDeadlineValue, auctionDateValue, activeImageUrl]
   );
   const completedCount = completionFields.filter(Boolean).length;
 
@@ -275,7 +323,7 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
       </motion.section>
 
       {/* ═══════════════════════════════════════════════════════════════
-          BRANDING — logo via LogoSelector
+          BRANDING — Dual-path logo selector
           ═══════════════════════════════════════════════════════════════ */}
       <motion.section
         initial={{ opacity: 0, y: 16 }}
@@ -296,21 +344,21 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
         <div className="px-6 pb-6 flex flex-col sm:flex-row items-center gap-5">
           <motion.div
             layout
-            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center border-2 shrink-0 transition-all duration-300 ${
-              selectedLogo
+            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center border-2 shrink-0 transition-all duration-300 overflow-hidden ${
+              activeImageUrl
                 ? "border-amber-400/40 bg-gradient-to-br from-amber-50 to-orange-50 shadow-md shadow-amber-500/10"
                 : "border-slate-200 bg-slate-50"
             }`}
           >
             <AnimatePresence mode="wait">
-              {selectedLogo ? (
+              {activeImageUrl ? (
                 <motion.img
-                  key={selectedLogo.url}
+                  key={activeImageUrl}
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
-                  src={selectedLogo.url}
-                  alt={selectedLogo.name}
+                  src={activeImageUrl}
+                  alt="Tournament logo"
                   className="w-14 h-14 object-contain"
                 />
               ) : (
@@ -324,7 +372,7 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
                 </motion.div>
               )}
             </AnimatePresence>
-            {selectedLogo && (
+            {activeImageUrl && (
               <div className="absolute -bottom-2 -right-2 w-6 h-6 rounded-full bg-amber-500 flex items-center justify-center shadow-md">
                 <Pencil className="w-3 h-3 text-white" />
               </div>
@@ -332,14 +380,11 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
           </motion.div>
 
           <div className="flex-1 text-center sm:text-left min-w-0">
-            <h4 className="font-semibold text-slate-800">
-              {selectedLogo ? selectedLogo.name : "No Logo Selected"}
-            </h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {selectedLogo
-                ? "Shown on the tournament page, brackets, and auction room."
-                : "Choose a crest to make this tournament instantly recognizable."}
-            </p>
+            <h4 className="font-semibold text-slate-800">{displayName}</h4>
+            <p className="text-xs text-slate-500 mt-0.5">{displayDescription}</p>
+            {activeImageUrl && (
+              <p className="text-xs text-slate-400 mt-0.5 font-mono truncate">{activeImageUrl}</p>
+            )}
           </div>
 
           <button
@@ -359,7 +404,7 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
             ) : (
               <>
                 <ImageIcon className="w-4 h-4" />
-                {selectedLogo ? "Change Logo" : "Choose Logo"}
+                {activeImageUrl ? "Change Logo" : "Choose Logo"}
               </>
             )}
           </button>
@@ -390,21 +435,25 @@ export function TournamentForm({ defaultValues, onSubmit, isSubmitting, submitLa
                 </div>
                 <LogoSelector
                   userRole="organizer"
-                  value={selectedLogo?.url || null}
-                  onChange={(logo) => {
-                    handleLogoChange(logo);
+                  value={activeImageUrl}
+                  logos={LOGO_LIBRARY}
+                  onSelect={(logo) => {
+                    handleLogoSelect(logo);
                     setTimeout(() => setShowLogoSelector(false), 400);
                   }}
-                  logos={LOGO_LIBRARY}
+                  onUpload={tournamentId ? handleLogoUpload : undefined}
+                  onRemove={handleLogoRemove}
+                  isUploading={uploadLogoMutation.isPending}
+                  isRemoving={removeLogoMutation.isPending}
+                  allowUpload={!!tournamentId}
+                  allowRemove={true}
                 />
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Hidden field, kept visible-on-error so a validation failure is
-            never silent — see toAbsoluteUrl comment above for why this
-            matters. */}
+        {/* Hidden field synced from activeImageUrl */}
         <input type="hidden" {...register("logo")} />
         {errors.logo && (
           <p className="px-6 pb-4 -mt-2 text-xs text-red-500 flex items-center gap-1">

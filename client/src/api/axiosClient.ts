@@ -6,7 +6,8 @@ export const API_BASE_URL =
 
 export const axiosClient = axios.create({
   baseURL: API_BASE_URL,
-  headers: { "Content-Type": "application/json" },
+  withCredentials: true,
+ // headers: { "Content-Type": "application/json" },
   timeout: 15000,
 });
 
@@ -14,7 +15,7 @@ export const axiosClient = axios.create({
 // in its own 401 -> refresh -> 401 loop.
 const refreshClient = axios.create({
   baseURL: API_BASE_URL,
-  headers: { "Content-Type": "application/json" },
+  //headers: { "Content-Type": "application/json" },
 });
 
 axiosClient.interceptors.request.use((config) => {

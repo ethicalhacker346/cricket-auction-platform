@@ -121,6 +121,7 @@ export default function EditTournamentPage() {
             isSubmitting={updateTournament.isPending}
             submitLabel="Save changes"
             lockSlug
+            tournamentId={tournament.id}
           />
         </motion.div>
       </main>
