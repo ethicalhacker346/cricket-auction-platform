@@ -35,7 +35,7 @@ function NotificationRow({
   const inner = (
     <div
       className={cn(
-        "flex gap-3 rounded-xl px-3 py-2.5 transition-colors",
+        "flex min-w-0 gap-3 rounded-xl px-3 py-2.5 transition-colors",
         notification.read
           ? "hover:bg-slate-50"
           : "bg-emerald-50/50 hover:bg-emerald-50"
@@ -63,7 +63,7 @@ function NotificationRow({
             />
           )}
         </div>
-        <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
+        <p className="mt-0.5 line-clamp-2 break-words text-xs text-slate-500">
           {notification.message}
         </p>
         <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
@@ -134,8 +134,13 @@ export function NotificationsDropdown() {
         )}
       </button>
 
-      <DropdownPanel open={open} label="Notifications" width="w-[380px]">
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+      <DropdownPanel
+        open={open}
+        label="Notifications"
+        width="sm:w-[380px]"
+        mobileViewport
+      >
+        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <div>
             <p className="text-sm font-bold text-slate-900">Notifications</p>
             {unreadCount > 0 && (
@@ -146,7 +151,7 @@ export function NotificationsDropdown() {
             <button
               type="button"
               onClick={() => markAllRead.mutate()}
-              className="flex items-center gap-1 text-xs font-semibold text-emerald-600 transition-colors hover:text-emerald-700"
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold text-emerald-600 transition-colors hover:text-emerald-700"
             >
               <CheckCheck className="h-3.5 w-3.5" />
               Mark all read

@@ -39,7 +39,7 @@ const bidSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: Object.values(BID_STATUS),
-      default: BID_STATUS.VALID,
+      default: BID_STATUS.WINNING,
       index: true,
     },
     placedAt: {

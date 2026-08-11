@@ -89,7 +89,11 @@ export function AuctionShell() {
   // useAuctionSocket() again will safely no-op. But by hoisting it here,
   // we guarantee the session is alive before any child asks for data.
   // ========================================================================
-  const { isConnected, latencyMs } = useAuctionSocket({
+  const {
+    isConnected,
+    latencyMs,
+    shouldShowReconnect,
+  } = useAuctionSocket({
     tournamentId,
     auctionId,
   });
@@ -224,7 +228,7 @@ export function AuctionShell() {
         {/* Footer panel */}
         <div className={cn("shrink-0 px-5 py-4", collapsed && "lg:hidden")}>
           <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-[11px] text-slate-500">
-            State-driven live auction engine. No polling, no refetching — every screen reacts to the same real-time snapshot.
+            State-driven live auction engine.Socket.IO = primary realtime transport ,REST snapshot = reconciliation/fallback.
           </div>
         </div>
       </aside>
@@ -254,7 +258,7 @@ export function AuctionShell() {
             If the user is on the Dashboard tab and the socket drops, they
             would otherwise have no idea. This gives universal feedback.
             ================================================================= */}
-        {!isConnected && (
+        {shouldShowReconnect && (
           <div className="bg-amber-600 text-xs font-bold text-center py-1 animate-pulse">
             Reconnecting to auction room… {latencyMs}ms
           </div>

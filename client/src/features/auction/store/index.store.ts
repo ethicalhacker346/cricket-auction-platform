@@ -3,6 +3,18 @@ import { AuctionEngine } from "@/features/auction/engine/AuctionEngine";
 import type { LiveAuctionSnapshot } from "@/features/auction/types/index.types";
 
 let engineInstance: AuctionEngine | null = null;
+let engineUnsubscribe: (() => void) | null = null;
+
+function subscribeEngine(
+  engine: AuctionEngine,
+  set: (state: Partial<LiveAuctionState>) => void,
+) {
+  engineUnsubscribe?.();
+
+  engineUnsubscribe = engine.subscribe((snapshot) => {
+    set(snapshot);
+  });
+}
 
 export function getAuctionEngine() {
   if (!engineInstance) {
@@ -12,6 +24,9 @@ export function getAuctionEngine() {
 }
 
 export function resetAuctionEngine() {
+  engineUnsubscribe?.();
+  engineUnsubscribe = null;
+
   if (engineInstance) {
     engineInstance.destroy();
     engineInstance = null;
@@ -73,20 +88,57 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
 
   bootstrap: (auctionId, tournamentId) => {
     const engine = getAuctionEngine();
+    const state = get();
 
-    const engineIsLiveForThisAuction = engine.getAuctionId() === auctionId && engine.isConnected();
+    const sameAuction =
+      engine.getAuctionId() === auctionId;
 
-    if (get()._initialized && get().auctionId === auctionId && engineIsLiveForThisAuction) {
-      if (!get()._subscribed) {
-        set({ _subscribed: true });
-        engine.subscribe((snapshot) => set(snapshot));
+  /*
+   * Terminal auctions are intentionally offline.
+   * Never reconnect them, even if bootstrap() is called again
+   * by AuctionShell or a child route.
+   */
+    if (sameAuction && engine.isTerminal()) {
+      if (!state._subscribed) {
+        set({
+          auctionId,
+          tournamentId,
+          _initialized: true,
+          _subscribed: true,
+        });
+
+        subscribeEngine(engine, set);
       }
+
       return;
     }
 
-    set({ auctionId, tournamentId, _initialized: true, _subscribed: true });
-    engine.connect(auctionId, tournamentId);
+    const engineIsLiveForThisAuction =
+      sameAuction && engine.isConnected();
+
+    if (
+      state._initialized &&
+      state.auctionId === auctionId &&
+      engineIsLiveForThisAuction
+    ) {
+      if (!state._subscribed) {
+        set({ _subscribed: true });
+        engine.subscribe((snapshot) => set(snapshot));
+      }
+
+      return;
+    }
+
+    set({
+      auctionId,
+      tournamentId,
+      _initialized: true,
+      _subscribed: true,
+    });
+
     engine.subscribe((snapshot) => set(snapshot));
+
+    void engine.connect(auctionId, tournamentId);
   },
 
   setTournamentContext: (tournamentId) => {

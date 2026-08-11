@@ -41,65 +41,65 @@ export function useAuth() {
 // The local countdown timer is still interpolated between server updates.
 // ============================================================================
 export function useAuctionSocket(
-
-options?: ResolveAuctionIdsOptions,
-
+  options?: ResolveAuctionIdsOptions,
 ) {
+  const {
+    auctionId,
+    tournamentId,
+  } = useResolvedAuctionIds(options);
 
-    const {
+  const bootstrap =
+    useLiveAuctionStore(
+      (s) => s.bootstrap
+    );
 
-        auctionId,
+  const connection =
+    useLiveAuctionStore(
+      (s) => s.connection
+    );
 
-        tournamentId,
+  const latency =
+    useLiveAuctionStore(
+      (s) => s.serverLatencyMs
+    );
 
-    } = useResolvedAuctionIds(options);
+  const auctionStatus =
+    useLiveAuctionStore(
+      (s) => s.status
+    );
 
-    const bootstrap =
-        useLiveAuctionStore(
-            s => s.bootstrap
-        );
+  useEffect(() => {
+    if (!auctionId || !tournamentId) {
+      return;
+    }
 
-    const connection =
-        useLiveAuctionStore(
-            s => s.connection
-        );
+    bootstrap(
+      auctionId,
+      tournamentId,
+    );
+  }, [
+    bootstrap,
+    auctionId,
+    tournamentId,
+  ]);
 
-    const latency =
-        useLiveAuctionStore(
-            s => s.serverLatencyMs
-        );
+  const isConnected =
+    connection === "connected";
 
-    useEffect(() => {
+  const isTerminal =
+    auctionStatus === "completed";
 
-        if (!auctionId || !tournamentId)
-            return;
+  const shouldShowReconnect =
+    !isConnected && !isTerminal;
 
-        bootstrap(
-            auctionId,
-            tournamentId,
-        );
-
-    }, [
-
-        bootstrap,
-
-        auctionId,
-
-        tournamentId,
-
-    ]);
-
-    return {
-
-        connection,
-
-        latencyMs: latency,
-
-        isConnected:
-            connection === "connected",
-
-    };
-
+  return {
+    connection,
+    latencyMs: latency,
+    auctionStatus,
+    isTerminal,
+    isConnected,
+    shouldShowReconnect,
+  };
 }
 
 // ============================================================================
@@ -323,6 +323,7 @@ export function useAuction(tournamentId?: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { isAuthenticated } = useAuth();
+  
 
   const refresh = useCallback(() => {
     if (!tournamentId) {

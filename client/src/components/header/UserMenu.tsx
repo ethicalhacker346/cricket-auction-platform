@@ -60,7 +60,7 @@ export function UserMenu() {
           <p className="truncate text-xs text-slate-500">{user.email}</p>
         </div>
 
-        <div role="none" className="p-2">
+        {/*<div role="none" className="p-2">
           <Link
             role="menuitem"
             to="/profile"
@@ -79,7 +79,7 @@ export function UserMenu() {
             <Settings className="h-4 w-4 text-slate-400" />
             Account settings
           </Link>
-        </div>
+        </div> */}
 
         <div role="none" className="border-t border-slate-100 p-2">
           <button

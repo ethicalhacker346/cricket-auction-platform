@@ -52,12 +52,52 @@ export function AuctionHeader({ onMenuClick }: AuctionHeaderProps) {
 
   // Align with new normalized permissions + auth
   const userRole = user?.role ?? permissions.role;
-  const isOrganizer = permissions.ownsAuction || 
-                     permissions.ownsTournament || 
-                     userRole === USER_ROLES.ORGANIZER || 
-                     userRole === USER_ROLES.ADMIN;
-  const roleLabel = isOrganizer ? "Organizer" : "Team Owner";
-  const RoleIcon = isOrganizer ? ShieldCheck : Users2;
+
+const normalizedRole = String(userRole).toUpperCase();
+
+const roleConfig = (() => {
+  switch (normalizedRole) {
+    case USER_ROLES.ADMIN:
+    case USER_ROLES.ORGANIZER:
+      return {
+        label: "Organizer",
+        icon: ShieldCheck,
+        description:
+          "Full control over auction lifecycle, rules, rounds, and participants.",
+        className: "text-amber-400",
+      };
+
+    case USER_ROLES.FRANCHISE_OWNER:
+      return {
+        label: "Team Owner",
+        icon: Users2,
+        description:
+          "Place bids, manage franchise purse and squad.",
+        className: "text-sky-400",
+      };
+
+    case USER_ROLES.PLAYER:
+      return {
+        label: "Player",
+        icon: Users2,
+        description:
+          "View auction activity and your player-related information.",
+        className: "text-emerald-400",
+      };
+
+    default:
+      return {
+        label: "User",
+        icon: Users2,
+        description:
+          "Authenticated user with access to this auction.",
+        className: "text-slate-300",
+      };
+  }
+})();
+
+const roleLabel = roleConfig.label;
+const RoleIcon = roleConfig.icon;
 
   // Rich tournament metadata from auction object (new store shape)
   const tournamentName = auction?.tournamentName || auction?.tournament?.name || "Live Auction";
@@ -193,7 +233,7 @@ export function AuctionHeader({ onMenuClick }: AuctionHeaderProps) {
         <div
           className={cn(
             "group relative flex cursor-help items-center gap-2 rounded-2xl bg-white/5 px-2.5 py-2 text-sm font-medium ring-1 ring-white/10 transition-all hover:bg-white/10 hover:ring-white/20 sm:gap-2.5 sm:px-4",
-            isOrganizer ? "text-amber-400" : "text-sky-400"
+            roleConfig.className
           )}
           onMouseEnter={() => setRoleTooltipOpen(true)}
           onMouseLeave={() => setRoleTooltipOpen(false)}
@@ -204,7 +244,16 @@ export function AuctionHeader({ onMenuClick }: AuctionHeaderProps) {
           <span className="hidden sm:inline">{roleLabel}</span>
 
           {roleTooltipOpen && (
-            <div className="absolute right-0 top-full z-50 mt-2 w-[min(20rem,90vw)] rounded-2xl border border-white/10 bg-slate-900 p-4 shadow-2xl sm:left-1/2 sm:right-auto sm:-translate-x-1/2">
+            <div  className="
+              absolute top-full z-50 mt-2
+              right-0
+              w-[calc(100vw-1.5rem)]
+              max-w-[20rem]
+              rounded-2xl border border-white/10
+              bg-slate-900 p-4 shadow-2xl
+              sm:left-1/2 sm:right-auto sm:-translate-x-1/2
+              sm:w-[20rem]
+            ">
               <div className="flex items-start gap-3">
                 <div className="mt-1">
                   <RoleIcon className="h-5 w-5" />
@@ -212,16 +261,18 @@ export function AuctionHeader({ onMenuClick }: AuctionHeaderProps) {
                 <div className="space-y-1.5 text-sm">
                   <p className="font-semibold text-white">Signed in as <span className="font-mono">{userRole}</span></p>
                   <p className="text-slate-400 leading-snug">
-                    {isOrganizer
-                      ? "Full control over auction lifecycle, rules, rounds, and participants."
-                      : "Team Owner: Place bids, manage franchise purse and squad."}
+                    {roleConfig.description}
                   </p>
-                  <div className="pt-2 text-[10px] uppercase tracking-[0.5px] text-slate-500 border-t border-white/10">
+                  <div className="border-t border-white/10 pt-2 text-[10px] uppercase tracking-[0.5px] text-slate-500">
                     Role from normalized permissions • Server authoritative
                   </div>
                 </div>
               </div>
-              <div className="absolute -top-1 right-6 h-2 w-2 rotate-45 border-l border-t border-white/10 bg-slate-900 sm:left-1/2 sm:right-auto sm:-translate-x-1/2" />
+              <div className="absolute -top-1 right-6 h-2 w-2 rotate-45
+                border-l border-t border-white/10
+                bg-slate-900
+                sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
+              />
             </div>
           )}
         </div>

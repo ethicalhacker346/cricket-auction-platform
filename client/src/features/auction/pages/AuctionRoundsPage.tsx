@@ -75,6 +75,13 @@ export default function AuctionRoundsPage() {
     setActiveRoundId(roundId);
     setDrawerOpen(true);
   }
+  function useAuctionRoutes(tournamentId: string, auctionId: string) {
+    const base = `/tournaments/${tournamentId}/auction/${auctionId}`;
+    return {
+      live: `${base}/live`,
+    };
+  }  
+    
 
   // ── Handlers ─────────────────────────────────────────────────────────
   async function handleAdd() {
@@ -148,7 +155,7 @@ export default function AuctionRoundsPage() {
           Only organizers can create and manage auction rounds.
         </p>
         <Link
-          to="/live"
+          to={useAuctionRoutes(tournamentId, auctionId).live}
           className="rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/20"
         >
           Go to Live Auction

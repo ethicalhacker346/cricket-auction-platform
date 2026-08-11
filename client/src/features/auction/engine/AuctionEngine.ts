@@ -28,6 +28,19 @@ type Listener = (snapshot: LiveAuctionSnapshot) => void;
 const RECONCILE_INTERVAL_MS = 10000;
 const TICK_INTERVAL_MS = 250;
 
+/**
+ * AuctionEngine — Production-hardened live auction state machine.
+ *
+ * Lifecycle guarantees:
+ *   1. Reconciliation is sequential (setTimeout chain), never overlapping.
+ *   2. Terminal state ("completed") stops ALL timers, sockets, and pending
+ *      callbacks via stopForTerminalState().
+ *   3. Connection generation invalidates stale callbacks from previous
+ *      connect() calls (prevents cross-auction races).
+ *   4. Every delayed setTimeout checks generation + destroyed + intentionalDisconnect
+ *      before executing.
+ *   5. connect() aborts immediately if the initial snapshot is already completed.
+ */
 export class AuctionEngine {
   private auctionId: string | null = null;
   private tournamentId: string | null = null;
@@ -54,15 +67,17 @@ export class AuctionEngine {
 
   private soldEvent: LiveAuctionSnapshot["soldEvent"] = null;
   private unsoldEvent: LiveAuctionSnapshot["unsoldEvent"] = null;
-  // NEW: discrete event for permanent-unsold transitions (UI toasts / sounds)
   private permanentUnsoldEvent: { playerId: string; seq: number } | null = null;
   private eventSeq = 0;
   private connection: LiveAuctionSnapshot["connection"] = "connecting";
   private latency = 40;
 
-  private reconcileHandle: ReturnType<typeof setInterval> | null = null;
+  private reconcileHandle: ReturnType<typeof setTimeout> | null = null;
   private tickHandle: ReturnType<typeof setInterval> | null = null;
   private destroyed = false;
+
+  private connectionGeneration = 0;
+  private pendingSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {}
 
@@ -70,14 +85,34 @@ export class AuctionEngine {
     return this.auctionId;
   }
 
+  isTerminal(): boolean {
+    return this.isTerminalStatus(this.auction?.status);
+  }
   isConnected() {
-    return this.connection === "connected" && this.auctionId !== null;
+    return (
+      this.connection === "connected" &&
+      this.auctionId !== null &&
+      !this.isTerminalStatus(this.auction?.status)
+    );
   }
 
   async connect(auctionId: string, tournamentId: string) {
     if (this.destroyed) return;
 
+    // Never resurrect an already-completed auction.
+    if (
+      this.auctionId === auctionId &&
+      this.isTerminal()
+    ) {
+      this.intentionalDisconnect = true;
+      this.connection = "offline";
+      this.emit();
+      return;
+    }
+
     this.disconnect();
+
+    const generation = ++this.connectionGeneration;
 
     this.auctionId = auctionId;
     this.tournamentId = tournamentId;
@@ -86,14 +121,27 @@ export class AuctionEngine {
     this.emit();
 
     try {
-      await this.refreshSnapshot();
+      const shouldContinue = await this.refreshSnapshot();
+
+      if (!shouldContinue || this.destroyed || this.intentionalDisconnect) {
+        return;
+      }
 
       let socketReady = false;
       try {
-        await this.setupSocket(auctionId);
+        await this.setupSocket(auctionId, generation);
         socketReady = true;
       } catch (socketErr: any) {
         this.pushLog("disconnect", `Socket unavailable: ${socketErr.message}`);
+      }
+
+      if (
+        this.destroyed ||
+        this.intentionalDisconnect ||
+        this.isTerminalStatus(this.auction?.status)
+      ) {
+        this.stopForTerminalState();
+        return;
       }
 
       this.connection = "connected";
@@ -103,7 +151,7 @@ export class AuctionEngine {
       );
       this.emit();
 
-      this.reconcileHandle = setInterval(() => this.refreshSnapshot(), RECONCILE_INTERVAL_MS);
+      this.scheduleReconciliation(generation);
       this.tickHandle = setInterval(() => this.tick(), TICK_INTERVAL_MS);
     } catch (err: any) {
       this.connection = "offline";
@@ -112,7 +160,7 @@ export class AuctionEngine {
     }
   }
 
-  private async setupSocket(auctionId: string): Promise<void> {
+  private async setupSocket(auctionId: string, generation: number): Promise<void> {
     const token = useAuthStore.getState().accessToken;
 
     this.socket = io(WS_URL, {
@@ -141,14 +189,15 @@ export class AuctionEngine {
         reject(err);
       });
 
-      this.bindSocketEvents();
+      this.bindSocketEvents(generation);
     });
   }
 
-  private bindSocketEvents() {
+  private bindSocketEvents(generation: number) {
     if (!this.socket) return;
 
     this.socket.on(SOCKET_EVENTS.AUCTION_STARTED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.auction) {
         this.auction = mapAuction(payload.auction);
       } else if (this.auction) {
@@ -159,6 +208,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.AUCTION_PAUSED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.auction) {
         this.auction = mapAuction(payload.auction);
       } else if (this.auction) {
@@ -169,6 +219,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.AUCTION_RESUMED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.auction) {
         this.auction = mapAuction(payload.auction);
       } else if (this.auction) {
@@ -179,17 +230,19 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.AUCTION_COMPLETED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.auction) {
         this.auction = mapAuction(payload.auction);
       } else if (this.auction) {
         this.auction.status = "completed";
       }
       this.pushLog("complete", "Auction completed");
-      this.disconnect();
+      this.stopForTerminalState();
       this.emit();
     });
 
     this.socket.on(SOCKET_EVENTS.RULES_UPDATED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.auction) {
         this.auction = mapAuction(payload.auction);
       }
@@ -198,6 +251,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.ROUND_ADDED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.round) {
         const mapped = mapRound(payload.round);
         if (!this.rounds.find((r) => r.id === mapped.id)) {
@@ -209,6 +263,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.ROUND_UPDATED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.round) {
         const mapped = mapRound(payload.round);
         const idx = this.rounds.findIndex((r) => r.id === mapped.id);
@@ -220,6 +275,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.ROUND_DELETED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       const exists = this.rounds.some((r) => r.id === payload.roundId);
       if (exists) {
         this.rounds = this.rounds.filter((r) => r.id !== payload.roundId);
@@ -229,19 +285,23 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.ROUND_COMPLETED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       const roundId = payload.round?._id || payload.round?.id;
       const round = this.rounds.find((r) => r.id === roundId);
       if (round && round.status !== "completed") {
         round.status = "completed";
         this.pushLog("round_complete", `Round ${round.name || payload.round?.name} completed`);
         this.emit();
-        // NEW: backend may auto-create the unsold round or complete the auction
-        // immediately after the last normal round closes. Refresh to catch it.
-        setTimeout(() => this.refreshSnapshot(), 600);
+        this.pendingSnapshotTimeout = setTimeout(() => {
+          this.pendingSnapshotTimeout = null;
+          if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+          this.refreshSnapshot();
+        }, 600);
       }
     });
 
     this.socket.on(SOCKET_EVENTS.LOT_OPENED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       this.currentPlayerId = payload.tournamentPlayerId;
       this.currentRoundId = payload.roundId;
       this.currentBid = { amount: 0, teamId: null };
@@ -279,6 +339,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.BID_PLACED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       this.currentBid = { amount: payload.amount, teamId: payload.teamId };
 
       if (payload.liveState) {
@@ -308,6 +369,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.LOT_SOLD, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.liveState) {
         this.applyLiveState(payload.liveState);
       }
@@ -343,6 +405,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.LOT_UNSOLD, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.liveState) {
         this.applyLiveState(payload.liveState);
       }
@@ -363,6 +426,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.LIVE_STATE_UPDATED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (payload.liveState) {
         this.applyLiveState(payload.liveState);
         this.emit();
@@ -370,6 +434,7 @@ export class AuctionEngine {
     });
 
     this.socket.on(SOCKET_EVENTS.VIEWER_COUNT_UPDATED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       this.viewerCount = typeof payload === "number" ? payload : payload.count ?? this.viewerCount;
       this.emit();
     });
@@ -382,6 +447,7 @@ export class AuctionEngine {
     });
 
     this.socket.on("reconnect", () => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       this.connection = "connected";
       this.socket?.emit("join:auction", this.auctionId);
       this.pushLog("connect", "Reconnected to live auction room");
@@ -390,6 +456,7 @@ export class AuctionEngine {
     });
 
     this.socket.on("reconnect_failed", () => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       this.connection = "offline";
       this.pushLog("disconnect", "Socket reconnection failed");
       this.emit();
@@ -415,20 +482,49 @@ export class AuctionEngine {
   disconnect() {
     this.intentionalDisconnect = true;
     this.connection = "offline";
+    this._performCleanup(true);
+    this.emit();
+  }
+
+  private stopForTerminalState() {
+    if (this.connection === "offline" && this.intentionalDisconnect) return;
+    this.connectionGeneration++;
+    this.intentionalDisconnect = true;
+    this.connection = "offline";
+    this._performCleanup(true);
+    this.emit();
+  }
+
+  private _performCleanup(clearPendingSnapshot: boolean) {
+    if (clearPendingSnapshot && this.pendingSnapshotTimeout) {
+      clearTimeout(this.pendingSnapshotTimeout);
+      this.pendingSnapshotTimeout = null;
+    }
+
+    if (this.reconcileHandle) {
+      clearTimeout(this.reconcileHandle);
+      this.reconcileHandle = null;
+    }
+
+    if (this.tickHandle) {
+      clearInterval(this.tickHandle);
+      this.tickHandle = null;
+    }
+
     if (this.socket) {
       if (this.auctionId) {
-        this.socket.emit("leave:auction", this.auctionId);
+        try {
+          this.socket.emit("leave:auction", this.auctionId);
+        } catch {
+          // socket may already be disconnected
+        }
       }
       this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
-    if (this.reconcileHandle) clearInterval(this.reconcileHandle);
-    if (this.tickHandle) clearInterval(this.tickHandle);
-    this.reconcileHandle = null;
-    this.tickHandle = null;
-    this.diffEmitter.reset(); 
-    this.emit();
+
+    this.diffEmitter.reset();
   }
 
   destroy() {
@@ -453,7 +549,6 @@ export class AuctionEngine {
   getSnapshot(): LiveAuctionSnapshot {
     const playersSoldCount = this.players.filter((p) => p.status === "sold").length;
     const playersUnsoldCount = this.players.filter((p) => p.status === "unsold").length;
-    // NEW: track permanent unsold separately — backend treats this as terminal
     const playersPermanentUnsoldCount = this.players.filter((p) => p.status === "permanent_unsold").length;
     const totalMoneySpent = this.franchises.reduce((sum, f) => sum + f.spent, 0);
 
@@ -471,7 +566,6 @@ export class AuctionEngine {
       logs: [...this.logs].slice(0, 80),
       soldEvent: this.soldEvent,
       unsoldEvent: this.unsoldEvent,
-      // NEW: discrete event for UI consumption (toasts, sounds, analytics)
       permanentUnsoldEvent: this.permanentUnsoldEvent,
       connection: this.connection,
       serverLatencyMs: this.latency,
@@ -488,7 +582,7 @@ export class AuctionEngine {
   }
 
   private tick() {
-    if (!this.timer.isRunning) return;
+    if (!this.timer.isRunning || this.isTerminalStatus(this.auction?.status)) return;
     const elapsed = (Date.now() - this.timerSyncedAt) / 1000;
     const next = Math.max(0, this.timerSyncedRemaining - elapsed);
     if (next !== this.timer.remaining) {
@@ -503,12 +597,19 @@ export class AuctionEngine {
     this.timerSyncedRemaining = remaining;
   }
 
-  private async refreshSnapshot() {
-    if (!this.auctionId || this.destroyed) return;
+  private async refreshSnapshot(): Promise<boolean> {
+    if (!this.auctionId || this.destroyed || this.intentionalDisconnect) {
+      return false;
+    }
+
     try {
       const start = Date.now();
       const snapshot = await auctionApi.getSnapshot(this.auctionId);
       this.latency = Date.now() - start;
+
+      if (this.destroyed || this.intentionalDisconnect) {
+        return false;
+      }
 
       const unchanged = snapshot.version === this.lastVersion && this.auction !== null;
       this.lastVersion = snapshot.version;
@@ -540,11 +641,60 @@ export class AuctionEngine {
         this.connection = "connected";
       }
       this.emit();
+
+      if (this.isTerminalStatus(snapshot.auction?.status)) {
+        this.stopForTerminalState();
+        return false;
+      }
+
+      return true;
     } catch (err: any) {
       this.connection = "reconnecting";
       this.emit();
+      return true;
     }
   }
+
+  private scheduleReconciliation(generation: number) {
+    if (
+      generation !== this.connectionGeneration ||
+      this.destroyed ||
+      this.intentionalDisconnect ||
+      !this.auctionId ||
+      this.isTerminalStatus(this.auction?.status)
+    ) {
+      return;
+    }
+
+    this.reconcileHandle = setTimeout(async () => {
+      this.reconcileHandle = null;
+
+      if (
+        generation !== this.connectionGeneration ||
+        this.destroyed ||
+        this.intentionalDisconnect ||
+        !this.auctionId
+      ) {
+        return;
+      }
+
+      const shouldContinue = await this.refreshSnapshot();
+
+      if (
+        shouldContinue &&
+        generation === this.connectionGeneration &&
+        !this.destroyed &&
+        !this.intentionalDisconnect
+      ) {
+        this.scheduleReconciliation(generation);
+      }
+    }, RECONCILE_INTERVAL_MS);
+  }
+
+  private isTerminalStatus(status: string | undefined): boolean {
+    return status === "completed";
+  }
+
 
   private detectSoldUnsoldEvents(previousPlayers: Player[]) {
     const prevById = new Map(previousPlayers.map((p) => [p.id, p]));
@@ -629,15 +779,6 @@ export class AuctionEngine {
     }
   }
 
-  /**
-   * Opens the next pending lot respecting round boundaries.
-   * 
-   * CRITICAL FIX: previously this flattened all rounds and auto-completed
-   * the auction when no pending players remained. That bypassed the unsold
-   * round entirely. Now it walks rounds in order, skips completed rounds,
-   * and never auto-completes — terminal completion is owned by the backend
-   * via maybeCompleteAuction() after the unsold round drains.
-   */
   async openNextLot(): Promise<{ success: boolean; error?: string }> {
     if (!this.auctionId || !this.auction) {
       return { success: false, error: "No active auction" };
@@ -706,7 +847,14 @@ export class AuctionEngine {
       }
 
       this.emit();
-      setTimeout(() => this.refreshSnapshot(), 300);
+
+      const timeoutGen = this.connectionGeneration;
+      this.pendingSnapshotTimeout = setTimeout(() => {
+        this.pendingSnapshotTimeout = null;
+        if (timeoutGen !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+        this.refreshSnapshot();
+      }, 300);
+
       return { ok: true };
     } catch (e: any) {
       return { ok: false, reason: e.message || "Bid rejected" };
@@ -747,10 +895,6 @@ export class AuctionEngine {
     }
   }
 
-  /**
-   * NEW: Organizer explicitly retires a player from the unsold pool.
-   * This is the only way a player can reach PERMANENT_UNSOLD state.
-   */
   async markPermanentUnsold(tournamentPlayerId: string): Promise<{ success: boolean; error?: string }> {
     if (!this.auctionId) {
       return { success: false, error: "No active auction" };
