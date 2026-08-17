@@ -6,24 +6,17 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "installCommand": "npm ci",
+
   "rewrites": [
     {
       "source": "/(.*)",
       "destination": "/index.html"
     }
   ],
+
   "headers": [
     {
       "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
-    {
-      "source": "/(.*\\.(js|css|woff2|png|jpg|jpeg|gif|svg|ico))",
       "headers": [
         {
           "key": "Cache-Control",
@@ -53,6 +46,7 @@
       ]
     }
   ],
+
   "github": {
     "enabled": true,
     "silent": true
