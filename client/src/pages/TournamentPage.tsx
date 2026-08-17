@@ -394,7 +394,7 @@ export default function TournamentPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="mx-auto max-w-6xl px-4 py-0.5 md:px-6 md:py-1">
+        <div className="mx-auto max-w-6xl px-2 py-0.5 md:px-3 md:py-1">
           <Skeleton className="h-64 w-full rounded-3xl" />
           <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
             <Skeleton className="h-28 rounded-2xl" />

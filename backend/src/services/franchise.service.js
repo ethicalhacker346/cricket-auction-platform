@@ -49,7 +49,7 @@ export class FranchiseService {
 
     const editableFields = [
       'description', 'logo', 'city', 'state',
-      'country', 'primaryColor', 'secondaryColor',
+      'country', 'primaryColor', 'secondaryColor','colorFrom', 'colorTo',   // ← FIXED
     ];
 
     for (const field of editableFields) {

@@ -206,6 +206,9 @@ export class TournamentService {
   static async completeAuction(id, user) {
     const tournament = await TournamentService.getById(id);
     TournamentService.assertOrganizerAccess(tournament, user);
+     // Once the tournament is completed, no registrations are allowed.
+    tournament.playerRegistrationOpen = false;
+    tournament.teamRegistrationOpen = false;
 
     await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_COMPLETED);
     return tournament;
@@ -214,6 +217,9 @@ export class TournamentService {
   static async completeTournament(id, user) {
     const tournament = await TournamentService.getById(id);
     TournamentService.assertOrganizerAccess(tournament, user);
+     // Once the tournament is completed, no registrations are allowed.
+    tournament.playerRegistrationOpen = false;
+    tournament.teamRegistrationOpen = false;
 
     await tournament.transitionTo(TOURNAMENT_STATUS.TOURNAMENT_COMPLETED);
     return tournament;

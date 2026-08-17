@@ -436,7 +436,7 @@ function LogoCard({
         `}
       />
 
-      <div className="absolute inset-0 flex items-center justify-center p-5">
+      <div className="absolute inset-0 flex items-center justify-center p-1.5">
         {!loaded && !error && (
           <Loader2 className="w-6 h-6 text-slate-600 animate-spin" />
         )}

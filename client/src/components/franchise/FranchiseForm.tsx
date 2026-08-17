@@ -14,6 +14,9 @@ import {
   AlertCircle,
   CheckCircle2,
   Sparkles,
+  Palette,
+  Shuffle,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
@@ -34,11 +37,6 @@ interface FranchiseFormProps {
   isSubmitting: boolean;
   submitLabel: string;
   mode: "create" | "edit";
-  /** Logo URL selected via the parent page's LogoSelector. Matches the
-   * backend `logo` field name (Franchise.js) exactly — must be an
-   * absolute http(s) URL, resolved by the parent page (see
-   * toAbsoluteUrl in Create/EditFranchisePage), or it will silently fail
-   * Zod's `.url()` check on this hidden field with no visible error. */
   logo?: string | null;
 }
 
@@ -217,6 +215,89 @@ function FormProgress({ total, completed }: { total: number; completed: number }
 }
 
 // =============================================================================
+// COLOR PRESETS
+// =============================================================================
+
+const COLOR_PRESETS = [
+  { from: "#4f46e5", to: "#06b6d4", name: "Neon Night" },
+  { from: "#dc2626", to: "#fbbf24", name: "Phoenix" },
+  { from: "#059669", to: "#34d399", name: "Emerald" },
+  { from: "#7c3aed", to: "#c084fc", name: "Galaxy" },
+  { from: "#ea580c", to: "#f97316", name: "Inferno" },
+  { from: "#0f172a", to: "#475569", name: "Shadow" },
+  { from: "#be123c", to: "#fb7185", name: "Rose" },
+  { from: "#1d4ed8", to: "#60a5fa", name: "Ocean" },
+  { from: "#ca8a04", to: "#fde047", name: "Gold" },
+  { from: "#581c87", to: "#a855f7", name: "Mystic" },
+  { from: "#991b1b", to: "#1c1917", name: "Red Devil" },
+  { from: "#1e3a8a", to: "#fbbf24", name: "Royal" },
+];
+
+// =============================================================================
+// BRAND PREVIEW CARD
+// =============================================================================
+
+function BrandPreview({
+  name,
+  city,
+  logo,
+  from,
+  to,
+}: {
+  name: string;
+  city: string;
+  logo?: string | null;
+  from?: string | null;
+  to?: string | null;
+}) {
+  const hasColors = from && to;
+  return (
+    <div
+      className="relative overflow-hidden rounded-2xl p-6 shadow-lg border border-white/10 transition-all duration-500"
+      style={{
+        background: hasColors
+          ? `linear-gradient(135deg, ${from}, ${to})`
+          : "linear-gradient(135deg, #64748b, #94a3b8)",
+      }}
+    >
+      <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2 blur-3xl" />
+      <div className="relative flex items-center gap-4">
+        <div className="w-14 h-14 rounded-xl bg-white/20 backdrop-blur-sm border border-white/20 flex items-center justify-center p-2.5 shrink-0">
+          {logo ? (
+            <img
+              src={logo}
+              alt=""
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          ) : (
+            <Building2 className="w-6 h-6 text-white/80" />
+          )}
+        </div>
+        <div className="min-w-0">
+          <h4 className="font-bold text-lg text-white truncate">
+            {name || "Your Franchise"}
+          </h4>
+          <p className="text-white/70 text-sm truncate">
+            {city || "City, Region"}
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <span className="px-2.5 py-1 rounded-md bg-white/10 text-[10px] font-semibold text-white/80 uppercase tracking-wider backdrop-blur-sm">
+          Active
+        </span>
+        <span className="px-2.5 py-1 rounded-md bg-white/10 text-[10px] font-semibold text-white/80 uppercase tracking-wider backdrop-blur-sm">
+          Auction Ready
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
@@ -237,6 +318,7 @@ export function FranchiseForm({
     watch,
     setValue,
     getValues,
+    reset, // ← ADD
     formState: { errors, isDirty, dirtyFields },
   } = useForm<FranchiseFormValues>({
     resolver: zodResolver(franchiseFormSchema),
@@ -247,16 +329,13 @@ export function FranchiseForm({
       logo: logo || "",
       city: "",
       description: "",
+      colorFrom: null,
+      colorTo: null,
       ...defaultValues,
     },
   });
 
-  // Sync `logo` from the parent's LogoSelector when it changes. This must
-  // live in an effect, not the render body — calling setValue() directly
-  // during render fires on every render whenever `logo` is null and the
-  // field default is "" (null !== "" never resolves), which is an
-  // infinite render loop. That exact bug is what froze the player
-  // create/edit pages before; don't reintroduce it here.
+  // Sync logo from parent
   useEffect(() => {
     if (logo === undefined) return;
     const next = logo || "";
@@ -275,7 +354,14 @@ export function FranchiseForm({
   const nameLength = nameValue.length;
   const descLength = descValue.length;
 
-  // Calculate completion
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NEW: Color Watches
+  // ═══════════════════════════════════════════════════════════════════════════
+  const colorFromValue = watch("colorFrom") || "";
+  const colorToValue = watch("colorTo") || "";
+  const hasColors = !!(colorFromValue && colorToValue);
+
+  // Calculate completion (5 core fields required)
   const completionFields = useMemo(
     () => [
       nameValue.length >= 2,
@@ -309,6 +395,7 @@ export function FranchiseForm({
       </div>
     );
   }
+  
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-10">
@@ -391,11 +478,6 @@ export function FranchiseForm({
         delay={0.1}
       >
         <div className="space-y-5">
-          {/* Logo (hidden, synced from parent). The avatar itself is
-              picked via LogoSelector on the parent page — kept hidden here,
-              but still surfaced visibly on error so a validation failure
-              is never silent (that exact silence is what made "Create
-              Profile" look like a dead button on the player form). */}
           <input type="hidden" {...register("logo")} />
           {errors.logo && (
             <p className="text-xs text-red-500 flex items-center gap-1">
@@ -451,6 +533,224 @@ export function FranchiseForm({
               )}
             />
           </FormField>
+        </div>
+      </FormSection>
+
+      {/* ═══════════════════════════════════════════════════════════════
+          SECTION 3: TEAM COLORS  ← NEW
+          ═══════════════════════════════════════════════════════════════ */}
+      <FormSection
+        icon={Palette}
+        iconColor="text-pink-600"
+        iconBg="bg-pink-50"
+        title="Team Colors"
+        description="Define your franchise's visual identity with gradient colors"
+        delay={0.15}
+      >
+        <div className="space-y-6">
+          {/* Presets */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Quick Presets
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const preset =
+                      COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)];
+                    setValue("colorFrom", preset.from, {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                    });
+                    setValue("colorTo", preset.to, {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                    });
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors"
+                >
+                  <Shuffle className="w-3 h-3" />
+                  Random
+                </button>
+                {hasColors && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setValue("colorFrom", null, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      });
+                      setValue("colorTo", null, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      });
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+              {COLOR_PRESETS.map((preset) => {
+                const isActive =
+                  colorFromValue === preset.from && colorToValue === preset.to;
+                return (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => {
+                      setValue("colorFrom", preset.from, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      });
+                      setValue("colorTo", preset.to, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      });
+                    }}
+                    className="group relative flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-colors"
+                    title={preset.name}
+                  >
+                    <div
+                      className={cn(
+                        "w-full h-10 rounded-lg shadow-sm border-2 transition-all duration-200",
+                        isActive
+                          ? "border-slate-900 scale-105 shadow-md"
+                          : "border-transparent group-hover:border-slate-200"
+                      )}
+                      style={{
+                        background: `linear-gradient(135deg, ${preset.from}, ${preset.to})`,
+                      }}
+                    />
+                    <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider truncate w-full text-center">
+                      {preset.name}
+                    </span>
+                    {isActive && (
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        className="absolute -top-1 -right-1 w-4 h-4 bg-slate-900 rounded-full flex items-center justify-center"
+                      >
+                        <CheckCircle2 className="w-2.5 h-2.5 text-white" />
+                      </motion.div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Color Inputs */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <FormField
+              label="Primary Color"
+              error={errors.colorFrom?.message}
+              hint={
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider">
+                  Gradient start
+                </span>
+              }
+            >
+              <div className="flex items-center gap-3">
+                <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-slate-200 shadow-sm shrink-0 ring-offset-2 transition-all hover:ring-2 hover:ring-slate-200">
+                  <input
+                    type="color"
+                    value={colorFromValue || "#4f46e5"}
+                    onChange={(e) =>
+                      setValue("colorFrom", e.target.value, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      })
+                    }
+                    className="absolute -top-2 -left-2 w-20 h-20 cursor-pointer p-0 border-0 bg-transparent"
+                  />
+                </div>
+                <div className="flex-1">
+                  <input
+                    {...register("colorFrom")}
+                    value={colorFromValue} 
+                    placeholder="#4F46E5"
+                    className={cn(
+                      "w-full px-4 py-3 rounded-xl border bg-white text-sm font-mono uppercase tracking-wider transition-all duration-200",
+                      "placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400",
+                      "hover:border-slate-300",
+                      errors.colorFrom && "border-red-300 focus:ring-red-100 focus:border-red-400"
+                    )}
+                  />
+                </div>
+              </div>
+            </FormField>
+
+            <FormField
+              label="Secondary Color"
+              error={errors.colorTo?.message}
+              hint={
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider">
+                  Gradient end
+                </span>
+              }
+            >
+              <div className="flex items-center gap-3">
+                <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-slate-200 shadow-sm shrink-0 ring-offset-2 transition-all hover:ring-2 hover:ring-slate-200">
+                  <input
+                    type="color"
+                    value={colorToValue || "#06b6d4"}
+                    onChange={(e) =>
+                      setValue("colorTo", e.target.value, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      })
+                    }
+                    className="absolute -top-2 -left-2 w-20 h-20 cursor-pointer p-0 border-0 bg-transparent"
+                  />
+                </div>
+                <div className="flex-1">
+                  <input
+                    {...register("colorTo")}
+                    value={colorToValue} 
+                    placeholder="#06B6D4"
+                    className={cn(
+                      "w-full px-4 py-3 rounded-xl border bg-white text-sm font-mono uppercase tracking-wider transition-all duration-200",
+                      "placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400",
+                      "hover:border-slate-300",
+                      errors.colorTo && "border-red-300 focus:ring-red-100 focus:border-red-400"
+                    )}
+                  />
+                </div>
+              </div>
+            </FormField>
+          </div>
+
+          {/* Live Preview */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Live Preview
+              </span>
+              {hasColors && (
+                <motion.span
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="text-[10px] font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100"
+                >
+                  Brand identity active
+                </motion.span>
+              )}
+            </div>
+            <BrandPreview
+              name={nameValue}
+              city={cityValue}
+              logo={logo}
+              from={colorFromValue}
+              to={colorToValue}
+            />
+          </div>
         </div>
       </FormSection>
 

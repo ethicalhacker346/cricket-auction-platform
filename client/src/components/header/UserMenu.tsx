@@ -1,6 +1,12 @@
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronDown, LogOut, Settings, User as UserIcon } from "lucide-react";
+import {
+  ChevronDown,
+  LogOut,
+  Settings,
+  ShieldCheck,
+  User as UserIcon,
+} from "lucide-react";
 
 import { useAuthStore } from "@/store/authStore";
 import { useLogout } from "@/hooks/useAuth";
@@ -25,6 +31,15 @@ export function UserMenu() {
   useOnClickOutside(containerRef, () => setOpen(false), open);
 
   if (!user) return null;
+
+  // ── Admin gate guard ─────────────────────────────
+  // Defensive: backend may send role as a string or roles as an array.
+  const isAdmin =
+    user.role === "ADMIN" ||
+    user.role === "admin" ||
+    (Array.isArray(user.roles) &&
+      user.roles.some((r) => r.toUpperCase() === "ADMIN"));
+  // ─────────────────────────────────────────────────
 
   return (
     <div className="relative" ref={containerRef}>
@@ -55,11 +70,29 @@ export function UserMenu() {
       </button>
 
       <DropdownPanel open={open} label="Account menu" width="w-64">
+        {/* Identity header */}
         <div className="border-b border-slate-100 px-4 py-3">
           <p className="truncate text-sm font-bold text-slate-900">{user.name}</p>
           <p className="truncate text-xs text-slate-500">{user.email}</p>
         </div>
 
+        {/* ── ADMIN ENTRY GATE ─────────────────────── */}
+        {isAdmin && (
+          <div role="none" className="border-b border-slate-100 p-2">
+            <Link
+              role="menuitem"
+              to="/admin/dashboard"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-emerald-50/60"
+            >
+              <ShieldCheck className="h-4 w-4 text-emerald-500" />
+              <span>Admin dashboard</span>
+            </Link>
+          </div>
+        )}
+        {/* ─────────────────────────────────────────── */}
+
+        {/* Profile / Settings (currently commented out) */}
         {/*<div role="none" className="p-2">
           <Link
             role="menuitem"
@@ -79,8 +112,9 @@ export function UserMenu() {
             <Settings className="h-4 w-4 text-slate-400" />
             Account settings
           </Link>
-        </div> */}
+        </div>*/}
 
+        {/* Logout */}
         <div role="none" className="border-t border-slate-100 p-2">
           <button
             role="menuitem"

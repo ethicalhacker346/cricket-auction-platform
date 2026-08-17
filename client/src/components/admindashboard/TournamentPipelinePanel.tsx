@@ -1,0 +1,13 @@
+import { MoreHorizontal, Trophy } from 'lucide-react';
+import type { AdminOverview } from '@/types/adminDashboard';
+import { formatCount } from '@/lib/formatters';
+
+const labels: Record<string, string> = { DRAFT: 'Draft', PLAYER_REGISTRATION_OPEN: 'Player registration', TEAM_REGISTRATION_OPEN: 'Team registration', TEAMS_APPROVED: 'Teams approved', TEAMS_REJECTED: 'Teams rejected', AUCTION_SCHEDULED: 'Auction scheduled', AUCTION_RUNNING: 'Auction running', AUCTION_COMPLETED: 'Auction completed', TOURNAMENT_COMPLETED: 'Tournament completed', CANCELLED: 'Cancelled', UNKNOWN: 'Unrecognized status' };
+const colors: Record<string, string> = { DRAFT: '#64748b', PLAYER_REGISTRATION_OPEN: '#60a5fa', TEAM_REGISTRATION_OPEN: '#8b7cf6', TEAMS_APPROVED: '#2dd4bf', TEAMS_REJECTED: '#fb7185', AUCTION_SCHEDULED: '#fbbf24', AUCTION_RUNNING: '#36d399', AUCTION_COMPLETED: '#14b8a6', TOURNAMENT_COMPLETED: '#a3e635', CANCELLED: '#94a3b8', UNKNOWN: '#fb7185' };
+const baseKeys = Object.keys(labels).filter((key) => key !== 'UNKNOWN');
+
+export function TournamentPipelinePanel({ overview, onNavigate }: { overview: AdminOverview; onNavigate: (path: string) => void }) {
+  const keys = (overview.tournaments.byStatus.UNKNOWN ?? 0) > 0 ? [...baseKeys, 'UNKNOWN'] : baseKeys;
+  const max = Math.max(...keys.map((key) => overview.tournaments.byStatus[key] ?? 0), 1);
+  return <section className="panel pipeline-panel"><div className="panel-heading"><div><div className="section-kicker"><span className="kicker-mark teal"><Trophy size={13} /></span> Tournament lifecycle</div><h2>Pipeline health</h2></div><div className="pipeline-total"><strong>{formatCount(overview.tournaments.total)}</strong><span>total tournaments</span><button type="button" className="panel-more" aria-label="More pipeline options" onClick={() => onNavigate('/admin/tournaments')}><MoreHorizontal size={18} /></button></div></div><div className="pipeline-grid">{keys.map((key) => { const count = overview.tournaments.byStatus[key] ?? 0; const width = `${Math.max((count / max) * 100, count ? 7 : 0)}%`; return <button type="button" className="pipeline-row pipeline-row-button" key={key} onClick={() => onNavigate(`/admin/tournaments?status=${encodeURIComponent(key)}`)}><div className="pipeline-label"><i style={{ background: colors[key] }} /><span>{labels[key]}</span><strong>{count}</strong></div><div className="pipeline-track"><span style={{ width, background: colors[key] }} /></div></button>; })}</div></section>;
+}

@@ -8,6 +8,7 @@ import notificationRoutes from './notification.routes.js';
 import { tournamentAuctionRouter, auctionRouter } from './auction.routes.js';
 import statsRoutes from './statsRoutes.js';
 import adminRoutes from './admin-dashboard.routes.js';
+import admindashboardRoutes from './admin.routes.js';
 const router = Router();
 
 router.get('/health', (_req, res) => {
@@ -28,5 +29,6 @@ router.use('/franchises', franchiseRoutes);
 router.use('/auctions', auctionRouter);
 router.use('/notifications', notificationRoutes);
 router.use('/admin', adminRoutes);
+router.use('/admin-dashboard', admindashboardRoutes);
 
 export default router;

@@ -125,6 +125,8 @@ export function EditFranchisePage() {
       logo: activeImageUrl || "",
       city: franchise.city ?? "",
       description: franchise.description ?? "",
+      colorFrom: franchise.colorFrom ?? null,
+      colorTo: franchise.colorTo ?? null,
     };
   }, [franchise, activeImageUrl]);
 

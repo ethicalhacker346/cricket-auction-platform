@@ -1,46 +1,49 @@
 // src/lib/validations/franchiseSchema.ts
 import { z } from "zod";
 
+// src/lib/validators/franchiseSchema.ts
+
 export const franchiseFormSchema = z.object({
-  name: z
+  name: z.string().min(2).max(120),
+  slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  logo: z.string().url().optional().nullable(),
+  city: z.string().max(80).optional().nullable(),
+  description: z.string().max(1000).optional().nullable(),
+  
+  // ═══════════════════════════════════════════════════════════════════════
+  // NEW: Team Colors
+  // ═══════════════════════════════════════════════════════════════════════
+  colorFrom: z
     .string()
-    .min(2, "Franchise name must be at least 2 characters")
-    .max(120, "Must be 120 characters or less")
-    .trim(),
-  slug: z
-    .string()
-    .min(1, "Slug is required")
-    .regex(
-      /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
-      "Slug must be lowercase alphanumeric with single hyphens (e.g. 'hyderabad-tigers')"
-    ),
-  logo: z.string().url("Invalid logo URL").optional().or(z.literal("")),
-  city: z
-    .string()
-    .max(80, "Must be 80 characters or less")
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Must be a valid hex color (e.g. #4F46E5)")
     .optional()
-    .or(z.literal("")),
-  description: z
+    .nullable(),
+  colorTo: z
     .string()
-    .max(1000, "Description must be 1,000 characters or less")
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Must be a valid hex color (e.g. #06B6D4)")
     .optional()
-    .or(z.literal("")),
+    .nullable(),
 });
 
 export type FranchiseFormValues = z.infer<typeof franchiseFormSchema>;
- 
-/** Strips empty strings to undefined so the backend receives clean partials. */
-export const sanitizeFranchisePayload = (
-  values: FranchiseFormValues
-): Partial<FranchiseFormValues> => {
-  const payload: Record<string, unknown> = {};
-  Object.entries(values).forEach(([key, value]) => {
-    if (value !== undefined && value !== "") {
-      payload[key] = value;
-    }
-  });
-  return payload as Partial<FranchiseFormValues>;
-};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sanitizer — strips empty strings so the backend doesn't store ""
+// ═══════════════════════════════════════════════════════════════════════════
+export function sanitizeFranchisePayload(values: FranchiseFormValues) {
+  return {
+    ...values,
+    name: values.name.trim(),
+    slug: values.slug.trim().toLowerCase(),
+    city: values.city?.trim() || undefined,
+    description: values.description?.trim() || undefined,
+    logo: values.logo?.trim() || undefined,
+    
+    // NEW: convert empty strings → null so Mongoose stores null, not ""
+    colorFrom: values.colorFrom?.trim() || null,
+    colorTo: values.colorTo?.trim() || null,
+  };
+}
 
 /** Auto-generates a valid slug from a franchise name. */
 export const generateSlug = (name: string) => {

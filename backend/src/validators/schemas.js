@@ -86,6 +86,16 @@ export const createFranchiseSchema = z.object({
   city: z.string().trim().optional(),
   description: z.string().max(1000).optional(),
   logo: z.string().url().optional(),
+  colorFrom: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Must be a valid hex color (e.g. #4F46E5)")
+    .optional()
+    .nullable(),
+  colorTo: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Must be a valid hex color (e.g. #06B6D4)")
+    .optional()
+    .nullable(),
 });
 
 export const registerTournamentPlayerSchema = z.object({

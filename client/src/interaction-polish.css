@@ -1,0 +1,4 @@
+.workspace-switcher { width: calc(100% - 8px); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.topbar-avatar { padding: 0; cursor: pointer; }
+.metric-card.is-clickable { cursor: pointer; }
+.metric-card.is-clickable:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }

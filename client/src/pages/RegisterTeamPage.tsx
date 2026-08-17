@@ -622,7 +622,7 @@ export function RegisterTeamPage() {
     limit: 50,
   });
   const franchises: Franchise[] = franchisesData?.data ?? [];
-  console.log("franchisesData", franchisesData);
+  {/*console.log("franchisesData", franchisesData);
   console.log("franchises", franchises);
   console.log(
     franchises.map(f => ({
@@ -630,7 +630,7 @@ export function RegisterTeamPage() {
         _id: f._id,
         name: f.name
     }))
-  );
+  ); */}
 
   // ─── Fetch ALL team registrations for this tournament (to show which franchises are already registered)
   const { data: allTeamsData, isLoading: loadingAllTeams } = useTeams(tournamentId!, {

@@ -28,10 +28,48 @@ import {
   useMyPlayerRegistration,
   useMyTeamRegistrations,
 } from "@/hooks/useRegistration";
-import { TEAM_STATUS_META } from "@/lib/constants/tournament";
+import { TEAM_STATUS_META, TOURNAMENT_STATUS } from "@/lib/constants/tournament";
 import { formatCurrency } from "@/lib/format";
 import type { Tournament } from "@/types/tournament";
 import type { User } from "@/types/user";
+
+/* ═════════════════════════════════════════════════════════════════
+   REGISTRATION-CLOSED HELPERS
+
+   Registration can only ever happen while the tournament is still in
+   DRAFT or in one of the two registration-open states. Every other
+   status (TEAMS_APPROVED, TEAMS_REJECTED, any AUCTION_* state,
+   TOURNAMENT_COMPLETED, CANCELLED) means the tournament has moved
+   past registration — the `playerRegistrationOpen` /
+   `teamRegistrationOpen` flags alone aren't a safe enough guard
+   since they can lag behind the tournament's actual lifecycle status.
+   ═════════════════════════════════════════════════════════════════ */
+
+const REGISTRATION_CLOSED_STATUSES = new Set<Tournament["status"]>([
+  TOURNAMENT_STATUS.TEAMS_APPROVED,
+  TOURNAMENT_STATUS.TEAMS_REJECTED,
+  TOURNAMENT_STATUS.AUCTION_SCHEDULED,
+  TOURNAMENT_STATUS.AUCTION_RUNNING,
+  TOURNAMENT_STATUS.AUCTION_COMPLETED,
+  TOURNAMENT_STATUS.TOURNAMENT_COMPLETED,
+  TOURNAMENT_STATUS.CANCELLED,
+]);
+
+function isRegistrationClosed(tournament: Tournament) {
+  return REGISTRATION_CLOSED_STATUSES.has(tournament.status);
+}
+
+function registrationClosedMessage(tournament: Tournament, kind: "player" | "franchise") {
+  const label = kind === "player" ? "Player" : "Franchise";
+  switch (tournament.status) {
+    case TOURNAMENT_STATUS.CANCELLED:
+      return "This tournament has been cancelled. Registration is closed.";
+    case TOURNAMENT_STATUS.TOURNAMENT_COMPLETED:
+      return "This tournament has ended. Registration is closed.";
+    default:
+      return `${label} registration has closed — the tournament has moved on to the next stage.`;
+  }
+}
 
 /* ═════════════════════════════════════════════════════════════════
    SHARED COMPONENTS
@@ -79,6 +117,7 @@ function ClosedState({ message }: { message: string }) {
 export function OrganizerPanel({ tournament, isOwner }: { tournament: Tournament; isOwner: boolean }) {
   const openPlayerReg = useOpenPlayerRegistration(tournament.id);
   const openTeamReg = useOpenTeamRegistration(tournament.id);
+  const closed = isRegistrationClosed(tournament);
 
   if (!isOwner) return null;
 
@@ -106,6 +145,10 @@ export function OrganizerPanel({ tournament, isOwner }: { tournament: Tournament
             <Badge className="gap-1 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
               <CheckCircle2 className="h-3 w-3" /> Open
             </Badge>
+          ) : closed ? (
+            <Badge className="gap-1 bg-slate-100 text-slate-500 ring-1 ring-slate-200">
+              Registration closed
+            </Badge>
           ) : (
             <Button
               variant="subtle"
@@ -128,6 +171,10 @@ export function OrganizerPanel({ tournament, isOwner }: { tournament: Tournament
           {tournament.teamRegistrationOpen ? (
             <Badge className="gap-1 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
               <CheckCircle2 className="h-3 w-3" /> Open
+            </Badge>
+          ) : closed ? (
+            <Badge className="gap-1 bg-slate-100 text-slate-500 ring-1 ring-slate-200">
+              Registration closed
             </Badge>
           ) : (
             <Button
@@ -167,7 +214,8 @@ export function FranchisePanel({ tournament, user }: { tournament: Tournament; u
   // Can register if: registration is open AND (teamsCount is undefined OR less than max)
   const currentTeams = typeof tournament.teamsCount === "number" ? tournament.teamsCount : 0;
   const maxTeams = typeof tournament.maxTeams === "number" ? tournament.maxTeams : 8;
-  const canRegister = tournament.teamRegistrationOpen && currentTeams < maxTeams;
+  const closed = isRegistrationClosed(tournament);
+  const canRegister = !closed && tournament.teamRegistrationOpen && currentTeams < maxTeams;
 
   return (
     <PanelCard>
@@ -240,6 +288,8 @@ export function FranchisePanel({ tournament, user }: { tournament: Tournament; u
             </Button>
           </Link>
         </motion.div>
+      ) : closed ? (
+        <ClosedState message={registrationClosedMessage(tournament, "franchise")} />
       ) : (
         <ClosedState message="Franchise registration is not open yet. Check back soon." />
       )}
@@ -260,6 +310,7 @@ export function PlayerPanel({ tournament, user }: { tournament: Tournament; user
 
   // Defensive: treat any truthy object as registered
   const isRegistered = !!myEntry && typeof myEntry === "object";
+  const closed = isRegistrationClosed(tournament);
 
   return (
     <PanelCard>
@@ -297,7 +348,7 @@ export function PlayerPanel({ tournament, user }: { tournament: Tournament; user
             </Badge>
           </div>
 
-          {(myEntry.status === "PENDING" || myEntry.status === "DRAFT") && (
+          {!closed && (myEntry.status === "PENDING" || myEntry.status === "DRAFT") && (
             <Link
               to={`/tournaments/${tournament.id}/register-player`}
               className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
@@ -307,6 +358,8 @@ export function PlayerPanel({ tournament, user }: { tournament: Tournament; user
             </Link>
           )}
         </motion.div>
+      ) : closed ? (
+        <ClosedState message={registrationClosedMessage(tournament, "player")} />
       ) : tournament.playerRegistrationOpen ? (
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-3.5">
           <p className="mb-3 text-sm text-slate-500">
@@ -356,6 +409,8 @@ export function AdminNotice() {
    ═════════════════════════════════════════════════════════════════ */
 
 export function GuestNotice({ tournament }: { tournament: Tournament }) {
+  const closed = isRegistrationClosed(tournament);
+
   return (
     <PanelCard>
       <div className="flex items-center gap-3">
@@ -363,9 +418,13 @@ export function GuestNotice({ tournament }: { tournament: Tournament }) {
           <Users className="h-5 w-5 text-slate-400" />
         </div>
         <div>
-          <p className="text-sm font-semibold text-slate-800">Sign in to participate</p>
+          <p className="text-sm font-semibold text-slate-800">
+            {closed ? "Registration closed" : "Sign in to participate"}
+          </p>
           <p className="text-xs text-slate-500">
-            {tournament.playerRegistrationOpen
+            {closed
+              ? registrationClosedMessage(tournament, "player")
+              : tournament.playerRegistrationOpen
               ? "Player registration is open. Sign in to register."
               : tournament.teamRegistrationOpen
               ? "Franchise registration is open. Sign in to register."

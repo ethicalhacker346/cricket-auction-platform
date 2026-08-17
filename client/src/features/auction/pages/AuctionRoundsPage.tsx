@@ -187,7 +187,7 @@ export default function AuctionRoundsPage() {
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mx-auto max-w-4xl space-y-6"
+        className="mx-auto w-full min-w-0 max-w-4xl space-y-6"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

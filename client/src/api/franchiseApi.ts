@@ -15,6 +15,8 @@ export interface Franchise {
   city?: string;
   description?: string;
   isActive: boolean;
+  colorFrom?: string | null;
+  colorTo?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -25,6 +27,8 @@ export interface FranchisePayload {
   logo?: string;            // ← LIBRARY PATH: pass a public URL string
   city?: string;
   description?: string;
+  colorFrom?: string | null;
+  colorTo?: string | null;
 }
 
 export interface FranchiseListQuery {

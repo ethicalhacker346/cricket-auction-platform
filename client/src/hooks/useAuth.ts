@@ -18,6 +18,7 @@ export function useLogin() {
       setAuth(data);
       toast.success(`Welcome back, ${data.user.name.split(" ")[0]}!`);
       navigate("/dashboard", { replace: true });
+      navigate(data.user.role === "ADMIN" ? "/admin/dashboard" : "/dashboard", { replace: true });
     },
     onError: (error) => {
       toast.error(getErrorMessage(error));

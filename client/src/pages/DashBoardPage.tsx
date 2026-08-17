@@ -29,6 +29,7 @@ import { useTournaments } from "@/hooks/useTournaments";
 import { usePlayerMe } from "@/hooks/usePlayers";
 import { useMyFranchises } from "@/hooks/useFranchise";
 import { isOngoingStatus, isPastStatus } from "@/lib/constants/tournament";
+import { DashboardFooter } from "@/components/dashboard/DashboardFooter";
 
 /* ═════════════════════════════════════════════════════════════════
    THEME
@@ -200,11 +201,12 @@ export default function DashboardPage() {
      RENDER
      ═══════════════════════════════════════════════════════════════ */
   return (
+    <>
     <motion.div
       variants={container}
       initial="hidden"
       animate="visible"
-      className="space-y-8 pb-10 pt-2"
+      className="space-y-8  pt-2"
     >
       {/* ═══════ HERO ═══════ */}
       <motion.div variants={item}>
@@ -460,6 +462,9 @@ export default function DashboardPage() {
           </motion.p>
         )}
       </motion.section>
+     
     </motion.div>
-  );
+    <DashboardFooter /> 
+   </>
+);
 }

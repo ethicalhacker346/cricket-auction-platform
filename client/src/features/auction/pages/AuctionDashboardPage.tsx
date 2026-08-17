@@ -1,4 +1,6 @@
 import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
+import { toast } from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
@@ -259,13 +261,64 @@ function QuickCard({
 function OrganizerControls({
   live,
   permissions,
+  onRefresh,
 }: {
   live: ReturnType<typeof useLiveAuction>;
   permissions: ReturnType<typeof useAuctionPermissions>;
+  onRefresh?: () => void;
 }) {
+  const [pending, setPending] = useState<string | null>(null);
+
+  const handleAction = async (key: string, action: () => unknown) => {
+    // Guard against concurrent state transitions — auction lifecycle
+    // events are mutually exclusive (you cannot pause while starting).
+    if (pending) return;
+
+    setPending(key);
+
+    const verb =
+      key === "start"
+        ? "Starting"
+        : key === "pause"
+        ? "Pausing"
+        : key === "resume"
+        ? "Resuming"
+        : "Completing";
+
+    const toastId = toast.loading(`${verb} auction…`);
+
+    try {
+      const result = action();
+
+      // Defensive: store actions may be sync (fire-and-forget) or async.
+      // If it quacks like a Promise, we await it so the toast stays alive
+      // until the server round-trips.
+      if (result && typeof (result as Promise<void>).then === "function") {
+        await (result as Promise<void>);
+      }
+
+      toast.success(
+        `Auction ${verb.toLowerCase().replace("ing", "ed")} successfully`,
+        { id: toastId }
+      );
+
+      // Reconcile the REST snapshot with the live store so the hero
+      // banner, status badge, and permission gates all flip together.
+      onRefresh?.();
+    } catch (err: any) {
+      // Surface the server message (e.g. "Auction already started")
+      // or fall back to a generic operator-friendly prompt.
+      toast.error(err?.message || `${verb} failed. Please try again.`, {
+        id: toastId,
+      });
+    } finally {
+      setPending(null);
+    }
+  };
+
   const controls: {
     key: string;
-    action: () => void;
+    action: () => unknown;
     icon: React.ElementType;
     label: string;
     allowed: boolean;
@@ -295,21 +348,24 @@ function OrganizerControls({
       allowed: permissions.canResume,
       tone: "bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 ring-sky-500/30",
     },
-    {
-      key: "complete",
-      action: live.actions.complete,
-      icon: Trophy,
-      label: "Complete",
-      allowed: permissions.canComplete,
-      tone: "bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 ring-violet-500/30",
-    },
+   // {
+    //  key: "complete",
+    //  action: live.actions.complete,
+    //  icon: Trophy,
+    //  label: "Complete",
+    //  allowed: permissions.canComplete,
+    //  tone: "bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 ring-violet-500/30",
+   // },
   ];
 
   const visible = controls.filter((c) => c.allowed);
   if (visible.length === 0) return null;
 
   return (
-    <motion.div {...fadeUp} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+    <motion.div
+      {...fadeUp}
+      className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+    >
       <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">
         <Zap className="h-3.5 w-3.5" /> Auction Controls
       </p>
@@ -317,13 +373,20 @@ function OrganizerControls({
         {visible.map((btn) => (
           <button
             key={btn.key}
-            onClick={btn.action}
+            onClick={() => handleAction(btn.key, btn.action)}
+            disabled={pending !== null}
             className={cn(
               "flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-semibold transition ring-1",
-              btn.tone
+              btn.tone,
+              pending === btn.key && "opacity-80 cursor-wait",
+              pending && pending !== btn.key && "opacity-50 cursor-not-allowed"
             )}
           >
-            <btn.icon className="h-3.5 w-3.5" />
+            {pending === btn.key ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <btn.icon className="h-3.5 w-3.5" />
+            )}
             {btn.label}
           </button>
         ))}
@@ -567,7 +630,7 @@ export default function AuctionDashboardPage() {
 
       {/* Organizer controls — only visible when server says so */}
       {ui.showOrganizerPanel && (
-        <OrganizerControls live={live} permissions={permissions} />
+        <OrganizerControls live={live} permissions={permissions} onRefresh={refreshAuction}/>
       )}
 
       {/* Quick stats */}

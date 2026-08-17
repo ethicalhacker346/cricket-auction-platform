@@ -47,6 +47,8 @@ function normalizeFranchise(doc: any): Franchise {
     logo: doc.logo,
     primaryColor: doc.primaryColor,
     secondaryColor: doc.secondaryColor,
+    colorFrom: doc.colorFrom ?? null,
+    colorTo: doc.colorTo ?? null,
     isActive: doc.isActive,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,

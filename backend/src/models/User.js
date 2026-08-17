@@ -86,7 +86,7 @@ const userSchema = new mongoose.Schema(
 
 // Case-insensitive uniqueness relies on lowercase:true above; the unique
 // index is still declared explicitly for clarity when reading this file.
-userSchema.index({ email: 1 }, { unique: true });
+//userSchema.index({ email: 1 }, { unique: true });
 
 userSchema.pre('save', async function hashPassword(next) {
   if (!this.isModified('password')) {

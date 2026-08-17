@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useAuth, useLiveAuction } from "@/features/auction/hooks/index.hook";
 import { useLiveAuctionStore } from "@/features/auction/store/index.store";
 import { TeamBudgetCard, TeamRosterCard } from "@/features/auction/components/TeamCards";
+import { TopBuyShareCard } from "@/features/auction/components/TopBuyShareCard";
 import { AuctionStatusBadge } from "@/features/auction/components/Badges";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
@@ -150,32 +151,11 @@ export default function AuctionResultPage() {
 
       {/* Top buy highlight */}
       {topBuy && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="rounded-2xl border border-amber-400/20 bg-gradient-to-r from-amber-400/10 to-transparent p-5"
-        >
-          <p className="mb-2 text-[10px] uppercase tracking-widest text-amber-400">
-            Top Buy of the Auction
-          </p>
-          <div className="flex flex-wrap items-center gap-4">
-            <div>
-              <p className="text-xl font-black text-white">{topBuy.name}</p>
-              <p className="text-xs text-slate-400">
-                {topBuy.role} · Sold to{" "}
-                {franchises.find((f) => f.id === topBuy.teamId)?.name ?? "Unknown"}
-              </p>
-            </div>
-            <div className="ml-auto text-right">
-              <p className="text-2xl font-black text-emerald-400">
-                {formatLakhs(topBuy.soldPrice ?? 0)}
-              </p>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500">
-                Avg: {formatLakhs(Math.round(avgSoldPrice))}
-              </p>
-            </div>
-          </div>
-        </motion.div>
+        <TopBuyShareCard
+          player={topBuy}
+          franchise={franchises.find((f) => f.id === topBuy.teamId)}
+          avgSoldPrice={avgSoldPrice}
+        />
       )}
 
       {/* Tabs */}

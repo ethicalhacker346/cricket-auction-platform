@@ -31,7 +31,7 @@ import { CreatePlayerPage } from "@/pages/CreatePlayerPage";
 import { EditPlayerPage } from "@/pages/EditPlayerPage";
 import { CreateFranchisePage } from "@/pages/CreateFranchisePage";
 import { EditFranchisePage } from "@/pages/EditFranchisePage";
-import  { NotificationsPage } from "@/pages/NotificationsPage";
+import { NotificationsPage } from "@/pages/NotificationsPage";
 
 // Auction workspace
 import { AuctionShell } from "@/features/auction/layout/AuctionShell";
@@ -47,6 +47,23 @@ import AuctionResultPage from "@/features/auction/pages/AuctionResultPage";
 
 import { AppShell } from "@/components/layout/AppShell";
 
+import { AdminDashboardPage } from "@/pages/AdminDashboardPage";
+import { AdminRoute } from "@/routes/AdminRoute";
+import { AdminSectionPage } from "@/pages/AdminSectionPage";
+
+import HelpShell from "@/components/help/HelpShell";
+import HowAuctionsWorkPage from "@/pages/help/HowAuctionsWorkPage";
+import AuctionGuidelinesPage from "@/pages/help/AuctionGuidelinesPage";
+import BiddingRulesPage from "@/pages/help/BiddingRulesPage";
+import SquadRulesPage from "@/pages/help/SquadRulesPage";
+import HelpCenterPage from "./pages/help/HelpCenterPage";
+import ContactSupportPage from "./pages/help/ContactSupportPage";
+import FAQPage from "./pages/help/FAQPage";
+
+import PrivacyPage from "@/pages/legal/PrivacyPage";
+import TermsPage from "@/pages/legal/TermsPage";
+import CreatorPage from "@/pages/creator/CreatorPage";
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -60,9 +77,7 @@ const OPENING_SEEN_KEY = "app-opening-seen";
 
 function RootRedirect() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  return (
-    <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />
-  );
+  return <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />;
 }
 
 /** Auth-only layout with no visual shell – just <Outlet /> */
@@ -166,8 +181,6 @@ export default function App() {
             }
           />
 
-          
-
           {/* ═══════════════ APPSHELL (only these two) ═══════════════ */}
           <Route
             element={
@@ -183,8 +196,37 @@ export default function App() {
 
           {/* ═══════════════ FULL-PAGE PROTECTED ═══════════════ */}
           <Route element={<ProtectedOutlet />}>
-            <Route path="/tournaments/create" element={<CreateTournamentPage />} />
-            <Route path="/tournaments/:id/edit" element={<EditTournamentPage />} />
+            <Route
+              path="/admin/dashboard"
+              element={
+                <AdminRoute>
+                  <AdminDashboardPage />
+                </AdminRoute>
+              }
+            />
+            <Route path="/admin/tournaments" element={<AdminRoute><AdminSectionPage kind="tournaments" /></AdminRoute>} />
++           <Route path="/admin/auctions" element={<AdminRoute><AdminSectionPage kind="auctions" /></AdminRoute>} />
++           <Route path="/admin/players" element={<AdminRoute><AdminSectionPage kind="players" /></AdminRoute>} />
++           <Route path="/admin/franchises" element={<AdminRoute><AdminSectionPage kind="franchises" /></AdminRoute>} />
++           <Route path="/admin/users" element={<AdminRoute><AdminSectionPage kind="users" /></AdminRoute>} />
++           <Route path="/admin/audit-logs" element={<AdminRoute><AdminSectionPage kind="audit" /></AdminRoute>} />
++           <Route path="/admin/system-health" element={<AdminRoute><AdminSectionPage kind="systemHealth" /></AdminRoute>} />
++           <Route path="/admin/settings" element={<AdminRoute><AdminSectionPage kind="settings" /></AdminRoute>} />
++           <Route path="/admin/attention" element={<AdminRoute><AdminSectionPage kind="attention" /></AdminRoute>} />
++           <Route path="/admin/data-quality" element={<AdminRoute><AdminSectionPage kind="dataQuality" /></AdminRoute>} />
++           <Route path="/admin/analytics" element={<AdminRoute><AdminSectionPage kind="analytics" /></AdminRoute>} />
++           <Route path="/admin/search" element={<AdminRoute><AdminSectionPage kind="search" /></AdminRoute>} />
+
+            
+
+            <Route
+              path="/tournaments/create"
+              element={<CreateTournamentPage />}
+            />
+            <Route
+              path="/tournaments/:id/edit"
+              element={<EditTournamentPage />}
+            />
             <Route
               path="/tournaments/:tournamentId/register-franchise"
               element={<RegisterTeamPage />}
@@ -202,9 +244,22 @@ export default function App() {
             <Route path="/players/:id/edit" element={<EditPlayerPage />} />
 
             <Route path="/create-franchise" element={<CreateFranchisePage />} />
-            <Route path="/franchises/:id/edit" element={<EditFranchisePage />} />
+            <Route
+              path="/franchises/:id/edit"
+              element={<EditFranchisePage />}
+            />
 
-            
+
+            <Route  element={<HelpShell />}>
+              <Route path="/help" element={<HelpCenterPage />} />
+              <Route path="/help/auctions" element={<HowAuctionsWorkPage />} />
+              <Route path="/help/auctions" element={<HowAuctionsWorkPage />} />
+              <Route path="/help/guidelines" element={<AuctionGuidelinesPage />} />
+              <Route path="/help/bidding" element={<BiddingRulesPage />} />
+              <Route path="/help/squads" element={<SquadRulesPage />} />
+              <Route path="/faq" element={<FAQPage />} />
+              <Route path="/contact" element={<ContactSupportPage />} />
+            </Route>
           </Route>
 
           {/* ═══════════════ AUCTION WORKSPACE ═══════════════ */}
@@ -231,6 +286,9 @@ export default function App() {
 
           {/* ═══════════════ FALLBACK ═══════════════ */}
           <Route path="*" element={<NotFoundPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/creator" element={<CreatorPage />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
