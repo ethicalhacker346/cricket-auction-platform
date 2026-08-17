@@ -439,7 +439,7 @@ export default function TournamentPage() {
               We couldn&apos;t locate the tournament you&apos;re looking for.
             </p>
             <Link
-              to="/tournaments"
+              to="/dashboard"
               className="mt-6 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition-colors hover:bg-slate-800"
             >
               Browse Tournaments

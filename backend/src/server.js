@@ -1,67 +1,62 @@
 /**
- * server.js — Bootstrap with Socket.IO integration (non-invasive addition)
- * -------------------------------------------------------------------------
- * Original: app.listen(PORT)
- * New:      httpServer = createServer(app) -> initSocket(httpServer) -> httpServer.listen(PORT)
- *
- * This preserves all existing middleware/routes; socket is additive.
- * No breaking change to REST contracts.
+ * server.js — Production bootstrap
+ * -----------------------------------------------------------------
+ * • Structured env validation (fails fast)
+ * • Async Socket.IO initialization with Redis adapter
+ * • NO in-process cron
+ * • Graceful shutdown with connection draining
+ * • Structured logging
  */
 
 import { createServer } from 'http';
 import { createApp } from './app.js';
 import { connectDatabase, registerDatabaseShutdownHooks } from './config/database.js';
 import { env } from './config/env.js';
-import { initSocket } from './socket/index.js';
-import cron from 'node-cron';
-import { cleanupOrphanedImages } from './jobs/cleanupOrphanedImages.js';
-
-// Every Sunday at 3 AM
-cron.schedule('0 3 * * 0', cleanupOrphanedImages);
+import { initSocket, closeSocketIO } from './socket/index.js';
+import { logger } from './config/logger.js';
+import { setupGracefulShutdown } from './config/gracefulShutdown.js';
 
 async function bootstrap() {
-  await connectDatabase();
-  registerDatabaseShutdownHooks();
+  try {
+    await connectDatabase();
+    registerDatabaseShutdownHooks();
+    logger.info('🗄️  Database connected');
 
-  const app = createApp();
+    const app = createApp();
+    const httpServer = createServer(app);
 
-  // Create HTTP server (required for socket.io attachment)
-  const httpServer = createServer(app);
-
-  // Initialize Socket.IO — all auction realtime logic lives here
-  const io = initSocket(httpServer, {
-    // Accept multiple dev origins; in prod set CLIENT_URL env
-    corsOrigins: env.CLIENT_URL
-      ? [env.CLIENT_URL, 'http://localhost:3000', 'http://localhost:5173','http://192.168.137.1:5173','http://192.168.1.39:5173' ]
-      : '*',
-    path: '/socket.io',
-    allowAnonymous: true, // spectators can join auction rooms without token
-  });
-
-  // Make io available to Express if needed (e.g., for debugging route)
-  app.set('io', io);
-
-  httpServer.listen(env.PORT, () => {
-    console.log(`Server running on port ${env.PORT} [${env.NODE_ENV}]`);
-    console.log(`REST    -> http://localhost:${env.PORT}/api/v1`);
-    console.log(`Socket  -> ws://localhost:${env.PORT}/socket.io`);
-    console.log(`Health  -> http://localhost:${env.PORT}/health`);
-  });
-
-  // Graceful shutdown already handled inside socket/index.js
-  // but also handle httpServer close
-  const shutdown = async () => {
-    console.log('Shutting down gracefully...');
-    httpServer.close(() => {
-      console.log('HTTP server closed');
-      process.exit(0);
+    const io = await initSocket(httpServer, {
+      corsOrigins: env.CLIENT_URL
+        ? [env.CLIENT_URL]
+        : ['http://localhost:3000', 'http://localhost:5173'],
+      path: '/socket.io',
+      allowAnonymous: true,
     });
-  };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+
+    app.set('io', io);
+
+    httpServer.listen(env.PORT, () => {
+      logger.info(`🚀 Server running on port ${env.PORT} [${env.NODE_ENV}]`);
+      logger.info(`   REST    -> http://localhost:${env.PORT}/api/v1`);
+      logger.info(`   Socket  -> ws://localhost:${env.PORT}/socket.io`);
+      logger.info(`   Health  -> http://localhost:${env.PORT}/health`);
+      logger.info(`   Ready   -> http://localhost:${env.PORT}/ready`);
+    });
+
+    setupGracefulShutdown({
+      httpServer,
+      io,
+      dbDisconnect: async () => {
+        const { disconnectDatabase } = await import('./config/database.js');
+        await disconnectDatabase();
+      },
+      cleanupJobs: [closeSocketIO],
+    });
+
+  } catch (error) {
+    logger.fatal(error, '💥 Failed to start server');
+    process.exit(1);
+  }
 }
 
-bootstrap().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+bootstrap();

@@ -79,7 +79,44 @@ export class AuctionEngine {
   private connectionGeneration = 0;
   private pendingSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  private bidInFlight = false;
+  private recoveryListenersBound = false;
+
   constructor() {}
+
+  // Socket.io's own reconnection loop assumes the process keeps running.
+  // Mobile browsers routinely throttle or fully suspend timers and sockets
+  // in backgrounded tabs, and a device coming back online after a tunnel/
+  // elevator/handoff doesn't always trigger socket.io's internal retry in a
+  // timely way. These two browser-level signals force a clean, fresh
+  // connect() (new generation, freshly-read token) rather than trusting the
+  // stale in-flight socket to sort itself out.
+  private handleNetworkRecovery = () => {
+    if (this.destroyed || this.intentionalDisconnect || !this.auctionId || !this.tournamentId) return;
+    if (this.connection === "offline" || this.connection === "reconnecting") {
+      this.connect(this.auctionId, this.tournamentId);
+    }
+  };
+
+  private handleVisibilityChange = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "visible") {
+      this.handleNetworkRecovery();
+    }
+  };
+
+  private bindRecoveryListeners() {
+    if (this.recoveryListenersBound || typeof window === "undefined") return;
+    this.recoveryListenersBound = true;
+    window.addEventListener("online", this.handleNetworkRecovery);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+  }
+
+  private unbindRecoveryListeners() {
+    if (!this.recoveryListenersBound || typeof window === "undefined") return;
+    this.recoveryListenersBound = false;
+    window.removeEventListener("online", this.handleNetworkRecovery);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+  }
 
   getAuctionId() {
     return this.auctionId;
@@ -98,6 +135,8 @@ export class AuctionEngine {
 
   async connect(auctionId: string, tournamentId: string) {
     if (this.destroyed) return;
+
+    this.bindRecoveryListeners();
 
     // Never resurrect an already-completed auction.
     if (
@@ -161,14 +200,26 @@ export class AuctionEngine {
   }
 
   private async setupSocket(auctionId: string, generation: number): Promise<void> {
-    const token = useAuthStore.getState().accessToken;
-
     this.socket = io(WS_URL, {
-      auth: { token },
+      // A static { token } object is captured once and reused verbatim on
+      // every socket.io reconnection attempt, including after the access
+      // token has rotated during a long-running auction — every retry after
+      // rotation would then auth with a dead token. Passing a function makes
+      // socket.io re-read the store immediately before each attempt.
+      auth: (cb) => cb({ token: useAuthStore.getState().accessToken }),
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 10,
+      reconnectionDelayMax: 5000,
+      // Unlimited attempts with a capped, jittered backoff (socket.io's
+      // default randomizationFactor already adds jitter). A finite cap like
+      // 10 exhausts in roughly 30-50s — well within a real 3G/4G handoff or
+      // tunnel/elevator gap — and there was previously no recovery path back
+      // from "offline" once attempts ran out short of a full page reload.
+      // Actual runaway retries are still bounded by the network/visibility
+      // recovery hooks below, which force a clean reconnect() instead of
+      // letting this loop spin forever in a backgrounded tab.
+      reconnectionAttempts: Infinity,
     });
 
     return new Promise((resolve, reject) => {
@@ -350,7 +401,9 @@ export class AuctionEngine {
         const bid = mapBid(payload.bid);
         const exists = this.bidHistory.some((b) => b.id === bid.id);
         if (!exists) {
-          this.bidHistory = [{ ...bid, isUser: false }, ...this.bidHistory];
+          // Capped here too, not just in getSnapshot()'s slice — same
+          // unbounded-growth issue as the logs array above.
+          this.bidHistory = [{ ...bid, isUser: false }, ...this.bidHistory].slice(0, 200);
         }
       }
 
@@ -461,6 +514,23 @@ export class AuctionEngine {
       this.pushLog("disconnect", "Socket reconnection failed");
       this.emit();
     });
+
+    // The connect_error listener registered inside setupSocket()'s promise
+    // only matters for the very first connection attempt — the promise
+    // settles after that, and any connect_error fired by later background
+    // reconnection attempts was previously going nowhere. Auth errors in
+    // particular are worth surfacing distinctly: retrying a dead token in a
+    // tight backoff loop wastes attempts that would otherwise recover from a
+    // transient network blip.
+    this.socket.on("connect_error", (err: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      const isAuthError =
+        err?.message?.toLowerCase().includes("auth") || err?.data?.code === "UNAUTHORIZED";
+      if (isAuthError) {
+        this.pushLog("disconnect", "Socket auth rejected — will retry with refreshed token");
+      }
+      this.emit();
+    });
   }
 
   private applyLiveState(liveState: any) {
@@ -530,6 +600,7 @@ export class AuctionEngine {
   destroy() {
     this.destroyed = true;
     this.disconnect();
+    this.unbindRecoveryListeners();
     this.listeners.clear();
   }
 
@@ -579,6 +650,12 @@ export class AuctionEngine {
 
   private pushLog(type: any, message: string) {
     this.logs.unshift({ id: uid("log"), type, message, timestamp: Date.now() });
+    // getSnapshot() only ever returns the first 80, but the backing array
+    // was never trimmed itself — over a multi-hour auction (thousands of
+    // bid/log events) this grows unbounded in memory for the life of the
+    // tab. Matters most on the lower-RAM phones spectators are likely
+    // watching from.
+    if (this.logs.length > 200) this.logs.length = 200;
   }
 
   private tick() {
@@ -820,6 +897,15 @@ export class AuctionEngine {
     if (this.currentBid.teamId === teamId) {
       return { ok: false, reason: "You are already the highest bidder" };
     }
+    // this.currentBid isn't optimistically updated until the request below
+    // resolves, so a rapid double-tap on the bid button (very plausible
+    // under auction time pressure) can pass every guard above twice before
+    // the first call finishes, sending two requests for the same bid. The
+    // server backstops this with rejection, but that costs a round trip and
+    // a visible UI flicker. Lock out concurrent calls from this client instead.
+    if (this.bidInFlight) {
+      return { ok: false, reason: "Bid already in progress" };
+    }
 
     const franchise = this.franchises.find((f) => f.id === teamId);
     if (!franchise) return { ok: false, reason: "Unknown franchise" };
@@ -835,10 +921,11 @@ export class AuctionEngine {
       if (overseasCount >= franchise.maxOverseas) return { ok: false, reason: "Overseas quota reached" };
     }
 
+    this.bidInFlight = true;
     try {
       const createdBid = await bidApi.placeBid(this.auctionId, { amount: nextAmount, teamId });
       this.currentBid = { amount: nextAmount, teamId };
-      this.bidHistory = [{ ...createdBid, isUser }, ...this.bidHistory];
+      this.bidHistory = [{ ...createdBid, isUser }, ...this.bidHistory].slice(0, 200);
       this.pushLog("bid", `${franchise.shortName} bids ${formatQuick(nextAmount)}${isUser ? " (You)" : ""}`);
 
       const resetSeconds = this.auction.rules.bidResetSeconds;
@@ -858,6 +945,8 @@ export class AuctionEngine {
       return { ok: true };
     } catch (e: any) {
       return { ok: false, reason: e.message || "Bid rejected" };
+    } finally {
+      this.bidInFlight = false;
     }
   }
 

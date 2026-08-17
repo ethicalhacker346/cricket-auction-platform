@@ -18,6 +18,8 @@ const CONNECTION_STATES = {
   DISCONNECTING: 3,
 };
 
+
+
 let isInitialized = false;
 
 /**
@@ -89,6 +91,17 @@ export async function connectDatabase(uri = env.MONGODB_URI) {
 
   registerConnectionEvents();
 
+  const mongooseOptions = {
+    maxPoolSize: 20,
+    minPoolSize: 5,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 10000,
+    retryWrites: true,
+    retryReads: true,
+    heartbeatFrequencyMS: 10000,
+  };
+
   try {
     await mongoose.connect(uri, {
       autoIndex: env.NODE_ENV !== 'production',
@@ -116,11 +129,13 @@ export async function connectDatabase(uri = env.MONGODB_URI) {
  * Disconnect gracefully.
  */
 export async function disconnectDatabase() {
-  if (mongoose.connection.readyState === CONNECTION_STATES.DISCONNECTED) {
-    return;
+  try {
+    await mongoose.disconnect();
+    console.log('[Database] Disconnected gracefully');
+  } catch (err) {
+    console.error('[Database] Disconnect error:', err);
+    throw err;
   }
-
-  await mongoose.disconnect();
 }
 
 /**
@@ -174,16 +189,16 @@ export async function withTransaction(work) {
 /**
  * Database health information.
  */
-export function getDatabaseHealth() {
-  const db = mongoose.connection;
-
-  return {
-    connected: isDatabaseConnected(),
-    readyState: db.readyState,
-    host: db.host,
-    port: db.port,
-    database: db.name,
-  };
+export async function checkDatabaseHealth() {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.connection.db.admin().ping();
+      return true;
+    }
+    return false;
+  } catch (err) {
+    return false;
+  }
 }
 
 /**

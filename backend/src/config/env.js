@@ -24,7 +24,16 @@ const envSchema = z.object({
   SMTP_USER: z.string(),
   SMTP_PASS: z.string(),
   FROM_EMAIL: z.string().email().default('noreply@gullybid.in'),
-  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  CLIENT_URL: z.string().url().default('http://localhost:5173'),
+
+   // Client
+  
+  
+  // Redis (optional for dev, required for prod multi-instance)
+  REDIS_URL: z.string().url().optional(),
+  // Logging
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  
 });
 
 const parsed = envSchema.safeParse(process.env);
