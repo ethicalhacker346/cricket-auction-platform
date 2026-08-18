@@ -71,9 +71,8 @@ export function createApp() {
   ];
   
   const allowedOrigins = env.NODE_ENV === 'production'
-    ? [env.CLIENT_URL].filter(Boolean)
-    : [env.CLIENT_URL, ...devOrigins].filter(Boolean);
-
+    ? [env.CLIENT_URL]
+    : [env.CLIENT_URL, ...devOrigins];
   app.use(cors({
     origin: (origin, callback) => {
       if (!origin || allowedOrigins.includes(origin)) {
