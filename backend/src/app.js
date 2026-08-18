@@ -70,9 +70,10 @@ export function createApp() {
     'http://127.0.0.1:5173',
   ];
   
-  const allowedOrigins = env.NODE_ENV === 'production'
-    ? [env.CLIENT_URL]
-    : [env.CLIENT_URL, ...devOrigins];
+  const allowedOrigins = [
+    env.CLIENT_URL,
+    ...devOrigins,
+  ].filter(Boolean);
   app.use(cors({
     origin: (origin, callback) => {
       if (!origin || allowedOrigins.includes(origin)) {
