@@ -72,7 +72,7 @@ export function createApp() {
   
   const allowedOrigins = [
     env.CLIENT_URL,
-    ...devOrigins,
+    ...env.CORS_ORIGINS,
   ].filter(Boolean);
   app.use(cors({
     origin: (origin, callback) => {
@@ -80,7 +80,7 @@ export function createApp() {
         callback(null, true);
       } else {
         logger.warn({ origin, allowedOrigins }, 'CORS blocked request');
-        callback(new Error('Not allowed by CORS'));
+        return callback(null, false);
       }
     },
     credentials: true,

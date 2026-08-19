@@ -26,9 +26,10 @@ async function bootstrap() {
     const httpServer = createServer(app);
 
     const io = await initSocket(httpServer, {
-      corsOrigins: env.CLIENT_URL
-        ? [env.CLIENT_URL]
-        : ['http://localhost:3000', 'http://localhost:5173'],
+      corsOrigins: [
+        env.CLIENT_URL,
+        ...env.CORS_ORIGINS,
+      ].filter(Boolean),
       path: '/socket.io',
       allowAnonymous: true,
     });

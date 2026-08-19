@@ -8,7 +8,7 @@ export const API_BASE_URL =
 
 // Socket.IO endpoint — now actively used by AuctionEngine.ts.
 export const WS_URL =
-  import.meta.env.VITE_WS_URL || "https://gullybid-api.up.railway.app";
+  import.meta.env.VITE_SOCKET_URL || "https://gullybid-api.up.railway.app";
 
 // ---------------------------------------------------------------------------
 // Navigation

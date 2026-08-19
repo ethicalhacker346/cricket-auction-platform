@@ -25,7 +25,16 @@ const envSchema = z.object({
   SMTP_PASS: z.string(),
   FROM_EMAIL: z.string().email().default('noreply@gullybid.in'),
   CLIENT_URL: z.string().url().default('http://localhost:5173'),
-
+   
+  CORS_ORIGINS: z
+   .string()
+   .default('http://localhost:5173')
+   .transform((value) =>
+     value
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+   ),
    // Client
   
   
