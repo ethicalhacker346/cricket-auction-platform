@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useParams, Link } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 
 import { Logo } from "@/components/auth/Logo";
@@ -20,7 +20,9 @@ export function Header() {
     <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-8">
-          <Logo />
+          <Link to="/dashboard" aria-label="Go to Dashboard">
+            <Logo />
+          </Link>
 
           <nav className="hidden items-center gap-1 md:flex" aria-label="Primary">
             {NAV_ITEMS.map((item) => (

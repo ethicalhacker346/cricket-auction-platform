@@ -219,7 +219,7 @@ export function CreateFranchisePage() {
                   </p>
                   <p className="text-xs text-violet-600 mt-1">
                     You can still register another one, or{" "}
-                    <Link to="/franchises/mine" className="underline underline-offset-2 font-medium">
+                    <Link to="/dashboard" className="underline underline-offset-2 font-medium">
                       manage your existing franchises
                     </Link>{" "}
                     instead.

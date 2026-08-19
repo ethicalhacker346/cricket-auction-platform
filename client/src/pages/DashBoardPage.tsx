@@ -102,11 +102,12 @@ export default function DashboardPage() {
 
   /* ── Role-aware profile data ── */
   const { data: playerProfile } = usePlayerMe();
-  const { data: franchiseData } = useMyFranchises(
-    { limit: 1 },
+  const { data: franchiseData, isLoading: isFranchisesLoading } = useMyFranchises(
+    {},
     { enabled: user?.role === "FRANCHISE_OWNER" || user?.role === "ADMIN" }
   );
-  const myFranchise = franchiseData?.data?.[0];
+  const franchises = franchiseData?.data ?? [];
+  const myFranchise = franchises[0] ?? null;
 
   /* ── Sync store ── */
   useEffect(() => {
@@ -213,7 +214,9 @@ export default function DashboardPage() {
         <RoleHero
           user={user}
           playerProfile={playerProfile}
+          franchises={franchises}
           franchise={myFranchise}
+          isLoading={isFranchisesLoading}
           organizerStats={{ created: myOrganized, drafts: draftCount, live: liveCount }}
         />
       </motion.div>

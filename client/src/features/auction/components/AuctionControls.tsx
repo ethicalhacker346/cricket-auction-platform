@@ -323,7 +323,7 @@ export function AuctionControls() {
 
   /* ---------------- Derived UI state ---------------- */
   const isUnsoldRound = currentRound?.type === "unsold";
-  console.log({
+ {/* console.log({
     currentRound,
     type: currentRound?.type,
     isUnsoldRound,
@@ -337,7 +337,7 @@ export function AuctionControls() {
     role: permissions.role,
     ownsAuction: permissions.ownsAuction,
     auctionStatus: permissions.auctionStatus,
-  }); 
+  }); */}
   const statusColor =
     {
       draft: "bg-slate-500/15 text-slate-300",

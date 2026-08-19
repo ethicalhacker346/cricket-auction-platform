@@ -29,6 +29,25 @@ type ShareState =
   | "fallback-done"
   | "error";
 
+const GULLYBID_URL =
+  typeof window !== "undefined" ? window.location.origin : "";
+
+
+
+function describeCaptureError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/oklch|oklab|color-mix|lab\(|lch\(|color\(/i.test(message)) {
+    return `Modern CSS color parsing failed: ${message}`;
+  }
+
+  if (/taint|cors|cross-origin|security/i.test(message)) {
+    return `External image/CORS capture failed: ${message}`;
+  }
+
+  return message;
+}
+
 /* =============================================================================
    SHARE PREVIEW CARD
    =============================================================================
@@ -58,6 +77,7 @@ function SharePreviewCard({
   return (
     <div
       ref={innerRef}
+      data-share-card-root="true"
       className="relative mx-auto aspect-[4/5] w-full max-w-sm shrink-0 overflow-hidden rounded-3xl"
       style={{
         background: franchise
@@ -67,6 +87,13 @@ function SharePreviewCard({
     >
       <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/10 blur-3xl" />
       <div className="pointer-events-none absolute -left-10 bottom-0 h-40 w-40 rounded-full bg-black/30 blur-2xl" />
+
+      {/* GullyBid brand mark — included in the captured artwork. */}
+      <div className="absolute right-4 top-4 z-10">
+        <div className="rounded-full border border-white/15 bg-black/30 px-3 py-1.5 text-[10px] font-black tracking-[0.18em] text-white/90 shadow-lg backdrop-blur-md">
+          GullyBid
+        </div>
+      </div>
 
       <div className="relative flex h-full flex-col p-6 text-white">
         <div className="flex items-center justify-between gap-2">
@@ -182,9 +209,14 @@ function SharePreviewCard({
           </div>
         )}
 
-        <p className="mt-3 text-center text-[9px] font-semibold uppercase tracking-[0.2em] text-white/30">
-          Auction Results
-        </p>
+        <div className="mt-3 flex flex-col items-center gap-1">
+          <p className="text-center text-[9px] font-semibold uppercase tracking-[0.2em] text-white/30">
+            Auction Results
+          </p>
+          <p className="max-w-full truncate text-center text-[8px] font-semibold tracking-wide text-white/35">
+            {GULLYBID_URL}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -216,9 +248,7 @@ export function TopBuyShareCard({
   const preparedBlobRef = useRef<Blob | null>(null);
   const prepareRunRef = useRef(0);
 
-  const resolvedUrl =
-    shareUrl ??
-    (typeof window !== "undefined" ? window.location.href : "");
+  const resolvedUrl = shareUrl?.trim() || GULLYBID_URL;
 
   const franchiseName = franchise?.name ?? "an unknown franchise";
 
@@ -230,12 +260,14 @@ export function TopBuyShareCard({
       `Sold to ${franchiseName} for ${formatLakhs(
         player.soldPrice ?? 0
       )}.`,
+      `View on GullyBid: ${resolvedUrl}`,
     ].join(" ");
   }, [
     player.name,
     player.soldPrice,
     tournamentName,
     franchiseName,
+    resolvedUrl,
   ]);
 
   /* ---------------------------------------------------------------------------
@@ -338,7 +370,10 @@ export function TopBuyShareCard({
         throw new Error("Share preview is not mounted.");
       }
 
-      const { default: html2canvas } = await import("html2canvas");
+      // html2canvas-pro is intentionally used here instead of html2canvas:
+      // the card inherits modern Tailwind/browser CSS such as oklab/oklch and
+      // color-mix(), which the original parser cannot reliably capture.
+      const { default: html2canvas } = await import("html2canvas-pro");
 
       await waitForImages(cardRef.current);
 
@@ -423,7 +458,7 @@ export function TopBuyShareCard({
         preparedBlobRef.current = null;
         preparedFileRef.current = null;
 
-        console.error("TopBuyShareCard: image preparation failed:", error);
+        console.error("TopBuyShareCard: image preparation failed:", describeCaptureError(error), error);
         setShareState("error");
       }
     };
