@@ -52,6 +52,15 @@ export const AuctionRoutes = {
             auctionId,
         )}/live`;
     },
+    live3D(
+        tournamentId: string,
+        auctionId: string,
+    ) {
+        return `${this.auctionRoot(
+            tournamentId,
+            auctionId,
+        )}/live/3d`;
+    },
 
     history(
         tournamentId: string,

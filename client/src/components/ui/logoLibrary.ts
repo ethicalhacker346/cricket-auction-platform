@@ -37,7 +37,7 @@ export const LOGO_LIBRARY: Logo[] = [
   {
     id: "p-4",
     url: "/logos/players/image4.png",
-    name: "Titan Slayer",
+    name: "ms dhoni",
     category: "player",
   },
   {
@@ -55,12 +55,24 @@ export const LOGO_LIBRARY: Logo[] = [
   {
     id: "p-7",
     url: "/logos/players/image7.png",
-    name: "Blaze Runner",
+    name: "virat kohli",
     category: "player",
   },
   {
     id: "p-8",
     url: "/logos/players/image8.png",
+    name: "Frost Bite",
+    category: "player",
+  },
+  {
+    id: "p-9",
+    url: "/logos/players/image9.png",
+    name: "Frost Bite",
+    category: "player",
+  },
+  {
+    id: "p-10",
+    url: "/logos/players/image10.png",
     name: "Frost Bite",
     category: "player",
   },
@@ -126,6 +138,12 @@ export const LOGO_LIBRARY: Logo[] = [
     id: "t-4",
     url: "/logos/tournaments/image4.png",
     name: "World Open",
+    category: "tournament",
+  },
+  {
+    id: "t-5",
+    url: "/logos/tournaments/image5.png",
+    name: "strikers club",
     category: "tournament",
   },
 ];

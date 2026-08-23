@@ -1,4 +1,4 @@
-import { Loader2, ShieldAlert, Gavel, WifiOff, RadioTower } from "lucide-react";
+import { Loader2, ShieldAlert, Gavel, WifiOff, RadioTower, Boxes } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
 import {
@@ -20,10 +20,15 @@ import { AuctionFooter } from "@/features/auction/components/AuctionFooter";
 import { CurrentRoundBadge, AuctionStatusBadge } from "@/features/auction/components/Badges";
 import { ConnectionDot } from "@/features/auction/components/Badges";
 
+import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
+import { AuctionRoutes } from "@/features/auction/routes/auction.routes";
+
 export default function LiveAuctionPage() {
+  const { tournamentId, auctionId } = useAuctionContext();
   const { isAuthenticated, hasHydrated } = useAuth();
   const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
   const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
+  
 
   const {
     currentRound,
@@ -118,6 +123,25 @@ export default function LiveAuctionPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link
+            to={AuctionRoutes.live3D(tournamentId, auctionId)}
+            className="group flex items-center gap-1.5 rounded-full
+             bg-gradient-to-r from-violet-500/20 to-cyan-500/20
+             px-3 py-1.5 text-xs font-bold text-white
+             ring-1 ring-violet-400/20
+             transition-all duration-300
+             hover:from-violet-500/30 hover:to-cyan-500/30
+             hover:ring-violet-400/50
+             hover:shadow-lg hover:shadow-violet-500/10"
+          >
+            <Boxes className="h-3.5 w-3.5 transition-transform duration-300 group-hover:rotate-6 group-hover:scale-110" />
+            <span className="hidden sm:inline">
+              Enter Immersive 3D
+            </span>
+            <span className="sm:hidden">
+              3D
+            </span>
+          </Link>
           {connection && (
             <div className="flex items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 ring-1 ring-white/10">
               <ConnectionDot connection={connection} />

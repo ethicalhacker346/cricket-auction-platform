@@ -44,8 +44,10 @@ import FranchiseAuctionPage from "@/features/auction/pages/FranchiseAuctionPage"
 import AuctionHistoryPage from "@/features/auction/pages/AuctionHistoryPage";
 import AuctionAnalyticsPage from "@/features/auction/pages/AuctionAnalyticsPage";
 import AuctionResultPage from "@/features/auction/pages/AuctionResultPage";
+import LiveAuction3DPage from "@/features/auction/pages/LiveAuction3DPage";
 
 import { AppShell } from "@/components/layout/AppShell";
+import ConnectionStatus from "@/components/system/ConnectionStatus";
 
 import { AdminDashboardPage } from "@/pages/AdminDashboardPage";
 import { AdminRoute } from "@/routes/AdminRoute";
@@ -127,6 +129,8 @@ export default function App() {
             />
           )}
         </AnimatePresence>
+        
+        {/*{!showOpening && <ConnectionStatus />}*/}
 
         <Toaster
           position="top-right"
@@ -253,7 +257,7 @@ export default function App() {
             <Route  element={<HelpShell />}>
               <Route path="/help" element={<HelpCenterPage />} />
               <Route path="/help/auctions" element={<HowAuctionsWorkPage />} />
-              <Route path="/help/auctions" element={<HowAuctionsWorkPage />} />
+              {/*<Route path="/help/auctions" element={<HowAuctionsWorkPage />} />*/}
               <Route path="/help/guidelines" element={<AuctionGuidelinesPage />} />
               <Route path="/help/bidding" element={<BiddingRulesPage />} />
               <Route path="/help/squads" element={<SquadRulesPage />} />
@@ -277,6 +281,7 @@ export default function App() {
             <Route path="rounds" element={<AuctionRoundsPage />} />
             <Route path="rounds/:roundId" element={<RoundEditorPage />} />
             <Route path="live" element={<LiveAuctionPage />} />
+            <Route path="live/3d" element={<LiveAuction3DPage />} />
             <Route path="team" element={<FranchiseAuctionPage />} />
             <Route path="history" element={<AuctionHistoryPage />} />
             <Route path="analytics" element={<AuctionAnalyticsPage />} />

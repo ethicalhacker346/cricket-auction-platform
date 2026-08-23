@@ -1,5 +1,6 @@
-import { NavLink, Outlet } from "react-router-dom";
+import {Link, NavLink, Outlet } from "react-router-dom";
 import {
+  ArrowLeft,
   BarChart3,
   Gavel,
   History,
@@ -18,6 +19,7 @@ import { AuctionHeader } from "@/features/auction/components/AuctionHeader";
 import { cn } from "@/utils/cn";
 import { useAuctionContext } from "../hooks/useAuctionContext";
 import { resolveAuctionRoute } from "../routes/auction.navigation";
+import { AuctionRoutes } from "../routes/auction.routes";
 // ============================================================================
 // NEW: Import the socket bootstrap and the sound engine
 // ============================================================================
@@ -189,6 +191,36 @@ export function AuctionShell() {
             {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
           </button>
         </div>
+        {/* Universal tournament navigation */}
+<div
+  className={cn(
+    "shrink-0 px-2 pb-3",
+    collapsed && "lg:px-2"
+  )}
+>
+  <Link
+    to={AuctionRoutes.tournament(tournamentId)}
+    onClick={() => setMobileOpen(false)}
+    className={cn(
+      "group relative flex w-full items-center gap-3 rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/20 hover:text-amber-200",
+      collapsed && "lg:justify-center lg:px-0"
+    )}
+    aria-label="Back to Tournament"
+    title={collapsed ? "Back to Tournament" : undefined}
+  >
+    <ArrowLeft className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:-translate-x-0.5" />
+
+    <span className={cn("truncate", collapsed && "lg:hidden")}>
+      Back to Tournament
+    </span>
+
+    {collapsed && (
+      <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 hidden -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-xl transition-opacity lg:group-hover:block lg:group-hover:opacity-100">
+        Back to Tournament
+      </span>
+    )}
+  </Link>
+</div>
 
         {/* Nav */}
         <nav className={cn("min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-2", collapsed && "lg:px-2")}>
