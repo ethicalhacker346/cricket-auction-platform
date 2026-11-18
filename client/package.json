@@ -34,7 +34,7 @@
     "react-router-dom": "^7.18.1",
     "recharts": "^3.10.1",
     "rollup-plugin-visualizer": "^6.0.11",
-    "shadcn": "^4.13.0",
+    "shadcn": "^4.23.0",
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "3.4.0",
     "three": "^0.185.1",
