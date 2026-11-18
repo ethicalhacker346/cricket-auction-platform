@@ -4,9 +4,7 @@ import { AuctionAuthorizationService } from '../services/auction-authorization.s
 
 export const auctionController = {
   create: async (req, res) => {
-    console.log("Controller req.body", req.body);
     const auction = await AuctionService.create(req.params.tournamentId, req.user, req.body);
-    console.log(req.body);
     return res.status(201).json({ success: true, data: auction });
   },
 

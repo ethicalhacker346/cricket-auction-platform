@@ -18,7 +18,7 @@ import {
   mapBid,
   mapPlayer,
 } from "@/features/auction/api/index.api";
-import { SOCKET_EVENTS, WS_URL } from "@/features/auction/constants/index.constants";
+import { SOCKET_EVENTS, SOCKET_CLIENT_EVENTS, WS_URL } from "@/features/auction/constants/index.constants";
 import { io, Socket } from "socket.io-client";
 import { useAuthStore } from "@/store/authStore";
 import { StateDiffEmitter } from '@/features/auction/audio/StateDiffEmitter';
@@ -231,7 +231,7 @@ export class AuctionEngine {
 
       this.socket.on("connect", () => {
         clearTimeout(timeout);
-        this.socket?.emit("join:auction", auctionId);
+        this.joinAuctionRoom(auctionId, generation);
         resolve();
       });
 
@@ -242,6 +242,33 @@ export class AuctionEngine {
 
       this.bindSocketEvents(generation);
     });
+  }
+
+  /**
+   * Join the server-side `auction:{id}` room — without this the socket
+   * receives nothing, since every broadcast is room-scoped. The backend
+   * handler (auction.handler.js) expects `auction:join` with a payload
+   * object and acks with the current viewer count + live state.
+   */
+  private joinAuctionRoom(auctionId: string, generation: number) {
+    if (!this.socket) return;
+    this.socket.emit(
+      SOCKET_CLIENT_EVENTS.JOIN_AUCTION,
+      { auctionId },
+      (res: any) => {
+        if (
+          generation !== this.connectionGeneration ||
+          this.destroyed ||
+          this.intentionalDisconnect
+        ) {
+          return;
+        }
+        if (res?.success && typeof res.data?.viewerCount === "number") {
+          this.viewerCount = res.data.viewerCount;
+          this.emit();
+        }
+      }
+    );
   }
 
   private bindSocketEvents(generation: number) {
@@ -265,6 +292,9 @@ export class AuctionEngine {
       } else if (this.auction) {
         this.auction.status = "paused";
       }
+      // The server freezes its lot timer while paused — mirror that locally
+      // or the countdown keeps running and shows a phantom expiry.
+      this.setTimerBaseline(this.timer.remaining, this.timer.total, false);
       this.pushLog("pause", "Auction paused by organizer");
       this.emit();
     });
@@ -277,6 +307,9 @@ export class AuctionEngine {
         this.auction.status = "live";
       }
       this.pushLog("resume", "Auction resumed");
+      // Re-sync the lot clock — the server's remaining time was frozen at
+      // pause and re-baselined at resume, so our frozen local value is stale.
+      this.refreshSnapshot();
       this.emit();
     });
 
@@ -488,7 +521,55 @@ export class AuctionEngine {
 
     this.socket.on(SOCKET_EVENTS.VIEWER_COUNT_UPDATED, (payload: any) => {
       if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
-      this.viewerCount = typeof payload === "number" ? payload : payload.count ?? this.viewerCount;
+      // Server payload: { auctionId, viewerCount, timestamp } — previously
+      // read `payload.count`, a field that never existed, so live viewer
+      // counts were silently dropped.
+      this.viewerCount =
+        typeof payload === "number"
+          ? payload
+          : payload.viewerCount ?? payload.count ?? this.viewerCount;
+      this.emit();
+    });
+
+    // A player being retired from the unsold pool — mirrors the LOT_SOLD /
+    // LOT_UNSOLD handlers so every client animates it without waiting for
+    // the next reconciliation snapshot.
+    this.socket.on(SOCKET_EVENTS.LOT_PERMANENT_UNSOLD, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      const player = this.players.find((p) => p.id === payload.tournamentPlayerId);
+      if (player && player.status !== "permanent_unsold") {
+        player.status = "permanent_unsold";
+        this.eventSeq++;
+        this.permanentUnsoldEvent = { playerId: player.id, seq: this.eventSeq };
+        this.pushLog(
+          "permanent_unsold_marked",
+          `${player.name || payload.tournamentPlayerId} marked permanently unsold`
+        );
+        this.emit();
+      }
+    });
+
+    // ---------- Server-authoritative lot timer ----------
+    // The server broadcasts a full sync every ~5s (and on every bid reset).
+    // Adopting it as the baseline keeps the local 250ms interpolation
+    // pinned to the server clock instead of drifting for the whole lot.
+    this.socket.on(SOCKET_EVENTS.TIMER_SYNC, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      if (typeof payload?.remaining !== "number") return;
+      const total = payload.total ?? this.timer.total;
+      this.setTimerBaseline(Math.max(0, payload.remaining), total, true);
+      this.emit();
+    });
+
+    this.socket.on(SOCKET_EVENTS.TIMER_EXPIRED, (_payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      this.setTimerBaseline(0, this.timer.total, false);
+      this.emit();
+    });
+
+    this.socket.on(SOCKET_EVENTS.TIMER_STOPPED, (_payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      this.setTimerBaseline(this.timer.remaining, this.timer.total, false);
       this.emit();
     });
 
@@ -502,7 +583,7 @@ export class AuctionEngine {
     this.socket.on("reconnect", () => {
       if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       this.connection = "connected";
-      this.socket?.emit("join:auction", this.auctionId);
+      if (this.auctionId) this.joinAuctionRoom(this.auctionId, generation);
       this.pushLog("connect", "Reconnected to live auction room");
       this.refreshSnapshot();
       this.emit();
@@ -584,7 +665,7 @@ export class AuctionEngine {
     if (this.socket) {
       if (this.auctionId) {
         try {
-          this.socket.emit("leave:auction", this.auctionId);
+          this.socket.emit(SOCKET_CLIENT_EVENTS.LEAVE_AUCTION, { auctionId: this.auctionId });
         } catch {
           // socket may already be disconnected
         }
@@ -660,6 +741,9 @@ export class AuctionEngine {
 
   private tick() {
     if (!this.timer.isRunning || this.isTerminalStatus(this.auction?.status)) return;
+    // While paused the server freezes the lot clock — the local
+    // interpolation must not keep counting down into a phantom expiry.
+    if (this.auction?.status === "paused") return;
     const elapsed = (Date.now() - this.timerSyncedAt) / 1000;
     const next = Math.max(0, this.timerSyncedRemaining - elapsed);
     if (next !== this.timer.remaining) {

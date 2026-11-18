@@ -1,0 +1,599 @@
+# Cricket Auction Platform — Deep Architecture Analysis
+
+> A bottom-up teardown of the auction domain: workflow, state machines,
+> concurrency model, realtime architecture, and the design patterns that
+> hold it together — plus the cracks found along the way.
+
+---
+
+## 1. What This System Is
+
+**GullyBid** — a production-grade, IPL-style live player auction platform.
+Four roles participate:
+
+| Role | What they do |
+|---|---|
+| `ADMIN` | Platform oversight, all capabilities, dashboards |
+| `ORGANIZER` | Creates tournaments, approves players/teams, runs the auction (opens lots, hammers sold/unsold) |
+| `FRANCHISE_OWNER` | Owns a franchise → registers a tournament team → bids with a purse |
+| `PLAYER` | Maintains a player profile → registers into tournaments → gets auctioned |
+
+**Stack**
+
+- **Backend** (~10.7k LOC): Node 20+, Express 5, Mongoose 8 (MongoDB), Socket.IO 4, Zod, Pino, JWT (access+refresh), Redis (optional: Socket.IO adapter + distributed locks), Cloudinary (images), Docker + Railway deploy via GitHub Actions.
+- **Client** (~47k LOC): React 19, TypeScript, Vite 7, Zustand, TanStack Query/Table, socket.io-client, Tailwind 4, **Three.js / react-three-fiber** (an immersive 3D auction arena), jsPDF (squad exports), PWA plugin.
+
+---
+
+## 2. Repository Shape
+
+```
+cricket-auction-platform/
+├── backend/src/
+│   ├── config/        env (fail-fast validation), database, constants ★, logger, shutdown
+│   ├── models/        11 Mongoose models (the domain)
+│   ├── services/      business logic — all money moves here, in transactions
+│   ├── controllers/   thin HTTP adapters (no logic)
+│   ├── routes/        REST surface, /api/v1
+│   ├── middleware/    auth, authorization, zod validation, rate limits, errors
+│   ├── events/        eventBus + auction domain events      ← decoupling layer
+│   ├── publishers/    socket.publisher (events → rooms + timers)
+│   ├── socket/        Socket.IO bootstrap, auth middleware, handlers
+│   └── utils/         jwt, distributedLock (Redis), transport-serializer, helpers
+└── client/src/
+    ├── features/auction/   engine/ store/ hooks/ api/ components/ pages/ audio/ 3d/
+    ├── components/         dashboards, tournament management, auth, ui kit
+    ├── pages/              routed screens
+    └── store/              authStore (zustand)
+```
+
+★ `config/constants.js` is the **single source of truth** for every enum and
+state-machine adjacency list in the system. Both model validators and service
+guards derive from it — nothing hardcodes status strings.
+
+---
+
+## 3. Domain Model
+
+```
+User ─┬─< Player (global profile: role, stats, image)
+      ├─< Franchise (global team brand: name, slug, logo)
+      └─< Tournament.organizerId
+
+Tournament ─┬─< TournamentPlayer ──> Player        (registration + auction outcome)
+            ├─< TournamentTeam  ──> Franchise      (wallet + roster) ★
+            └─1 Auction ──┬─< AuctionRound         (ordered player buckets)
+                          ├─< Bid                  (append-only history)
+                          ├─< AuctionViewer        (presence, TTL'd) ★
+                          └─  liveState (embedded) + logs (embedded, capped 200)
+```
+
+Two deliberate separation decisions stand out:
+
+1. **Registration status vs auction outcome** are separate fields on
+   `TournamentPlayer`: `status` (PENDING/APPROVED/REJECTED — the verification
+   trail) vs `lotOutcome` (NOT_LISTED/IN_PROGRESS/SOLD/UNSOLD/
+   PERMANENT_UNSOLD — the auction trail). A player can be APPROVED yet
+   UNSOLD and re-listed without corrupting verification history.
+2. **Presence lives in its own collection** (`AuctionViewer`), never on the
+   `Auction` document. Auction uses optimistic concurrency; 15s viewer
+   heartbeats × N spectators would constantly collide with bid writes on
+   `liveState.version`. Presence gets its own write path + a Mongo TTL index
+   (45s) as a backstop sweeper.
+
+### The Wallet (TournamentTeam) — the money invariant
+
+```js
+wallet = { initialBudget, spentBudget, remainingBudget, reservedBudget }
+invariant: spent + remaining + reserved === initial   (pre-validate hook)
+```
+
+All wallet math is centralized in three model methods — services never touch
+`wallet.*` fields inline:
+
+| Method | Effect | When |
+|---|---|---|
+| `reserve(amount)` | remaining → reserved | bid placed (holds the money) |
+| `releaseReservation(amount)` | reserved → remaining | outbid, or lot settled unsold |
+| `commitSpend(amount)` | reserved → spent | lot settled sold |
+
+This is a textbook **reservation pattern**: at any instant, a team's
+exposure is fully accounted, a team can never bid money it doesn't have,
+and a crashing mid-auction leaves no ambiguity about where money sits.
+
+---
+
+## 4. The End-to-End Auction Workflow
+
+```
+┌─ TOURNAMENT LIFECYCLE ──────────────────────────────────────────────────┐
+│                                                                         │
+│  DRAFT → PLAYER_REGISTRATION_OPEN → TEAM_REGISTRATION_OPEN              │
+│        → TEAMS_APPROVED → AUCTION_SCHEDULED → AUCTION_RUNNING           │
+│        → AUCTION_COMPLETED → TOURNAMENT_COMPLETED                       │
+│                      (any pre-live state → CANCELLED)                   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+ 1. Organizer creates Tournament (purse, squadSize, minBidIncrement,
+    lotTimerSeconds, currency…)
+ 2. Players register  → TournamentPlayer(status=PENDING)  → organizer approves
+ 3. Franchise owners register teams → TournamentTeam(status=PENDING,
+    wallet.initialBudget = tournament.defaultPurse) → organizer approves
+ 4. AuctionService.create()  [requires TEAMS_APPROVED, 1 auction/tournament]
+      • Snapshots tournament config into auction.auctionConfiguration
+        (copiedAt) — later tournament edits don't mutate a live auction
+      • Builds bidIncrementTiers (default: single open-ended tier at
+        tournament.minBidIncrement)
+ 5. Organizer builds AuctionRounds: ordered buckets of tournamentPlayerIds
+    (e.g. "Marquee", "Batsmen", "Bowlers"), each with optional category
+ 6. AuctionService.start()  [requires ≥2 approved teams]
+      • Auction: DRAFT/SCHEDULED → LIVE ; Tournament → AUCTION_RUNNING
+
+┌─ LIVE LOOP (repeats per lot) ───────────────────────────────────────────┐
+│                                                                         │
+│  openLot(player, round)  ── organizer only, auction must be LIVE        │
+│    • Guards: no other lot BIDDING; player ∈ round.playerIds; player     │
+│      APPROVED + lotOutcome ∈ {NOT_LISTED, UNSOLD}; UNSOLD players may   │
+│      only re-list in the dedicated `unsold` round                       │
+│    • Round PENDING → ACTIVE (first lot), player → IN_PROGRESS           │
+│    • liveState := { currentPlayer, currentRound, highestBid: 0,         │
+│      remainingTime: lotTimerSeconds, lotStatus: BIDDING, version+1 }    │
+│                                                                         │
+│  placeBid(amount)  ── franchise owner only, REST (never socket) ★       │
+│    • Full transactional critical path — see §6                          │
+│                                                                         │
+│  settleLot(sold|unsold)  ── organizer "hammer"                          │
+│    sold:   winner commitSpend, roster.push, player SOLD                 │
+│    unsold: release winner's reservation, player UNSOLD                  │
+│    • liveState reset → PENDING ; then checkRoundCompletion(round)       │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─ ROUND / AUCTION COMPLETION (engine-driven, automatic) ─────────────────┐
+│  checkRoundCompletion: all players in round at terminal outcome?        │
+│    normal round → SOLD|UNSOLD ; unsold round → SOLD|PERMANENT_UNSOLD    │
+│                                                                         │
+│  Last normal round closes →                                             │
+│    • unsold players exist? createUnsoldRound() — engine auto-creates    │
+│      "Unsold Players Round" (order = last, unique partial index),       │
+│      resets those players to NOT_LISTED so openLot can reuse them       │
+│    • none? maybeCompleteAuction()                                       │
+│                                                                         │
+│  Unsold round closes → maybeCompleteAuction():                          │
+│    invariant: ZERO approved players in NOT_LISTED|IN_PROGRESS|UNSOLD    │
+│    → Auction COMPLETED, Tournament AUCTION_COMPLETED                    │
+│                                                                         │
+│  Escape hatch: markPermanentUnsold() retires a player from the unsold   │
+│  round so the terminal invariant can be reached.                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+Every transition is guarded by explicit adjacency lists
+(`TOURNAMENT_TRANSITIONS`, `AUCTION_TRANSITIONS`) evaluated in model methods
+(`transitionTo`) — illegal jumps throw `INVALID_TRANSITION`, they can't
+silently succeed.
+
+### The six state machines
+
+| Aggregate | States |
+|---|---|
+| Tournament | DRAFT → PLAYER_REG_OPEN → TEAM_REG_OPEN → TEAMS_APPROVED → AUCTION_SCHEDULED → AUCTION_RUNNING → AUCTION_COMPLETED → TOURNAMENT_COMPLETED (+CANCELLED) |
+| Auction | DRAFT → SCHEDULED → LIVE ⇄ PAUSED → COMPLETED (DRAFT→LIVE skip allowed) |
+| AuctionRound | PENDING → ACTIVE → COMPLETED |
+| Lot (liveState.lotStatus) | PENDING → BIDDING → SOLD / UNSOLD |
+| Bid | WINNING (current leader / final winner) → OUTBID (terminal), CANCELLED |
+| Player lotOutcome | NOT_LISTED → IN_PROGRESS → SOLD / UNSOLD → (re-list) → PERMANENT_UNSOLD |
+
+Domain rule encoded in schema: the `unsold` round must be **last** (no normal
+round after it), there can be **only one** (unique partial index), and its
+`playerIds` are **engine-managed** (manual tampering rejected in
+pre-validate).
+
+---
+
+## 5. Tiered Bid Increments
+
+Not a flat increment — a ladder, owned by the **auction** (not the
+tournament), because it drives live bidding mechanics and may differ for a
+re-auction:
+
+```js
+bidIncrementTiers: [
+  { upTo: 100,  increment: 5  },   // below 1 Cr: +5L
+  { upTo: 200,  increment: 10 },   // …
+  { upTo: null, increment: 50 },   // "and above" — exactly one, must be last
+]
+```
+
+Schema validation enforces: ascending, no duplicate boundaries, exactly one
+open-ended tier. `auction.getBidIncrement(currentBid)` is the single
+canonical lookup — `BidService` calls it rather than re-deriving.
+
+---
+
+## 6. The Bidding Critical Path (placeBid, annotated)
+
+This is the hottest, most hardened code path in the system — **REST only,
+never socket**, because bids require multi-document transactions:
+
+```
+1. Authorization: AuctionAuthorizationService.assertPermission(PLACE_BID)
+   → identity + ownership + state machine (see §8)
+2. Open MongoDB transaction session
+3. Load auction; must be LIVE, liveState.lotStatus === BIDDING
+4. Re-resolve the acting team INSIDE the tx, by _id + ownerId +
+   tournamentId + status=APPROVED  ★ (never trusts client-sent teamId —
+   closes the "team suspended between authz and commit" gap)
+5. Guards: roster < squadSize · amount ≥ (highestBid==0 ? basePrice :
+   highestBid + tierIncrement) · not already highest bidder ·
+   team.canAfford(amount)
+6. Outbid bookkeeping: previous team releaseReservation(); their WINNING
+   bids → OUTBID
+7. New team reserve(amount); create Bid(status=WINNING)
+8. Anti-snipe: remainingTime = max(trueRemaining, bidResetSeconds)
+   (computed from liveState.updatedAt drift, not blind trust)
+9. liveState.version += 1; append BID_PLACED log; save
+   (optimisticConcurrency: a losing racer gets VersionError → tx aborts)
+10. COMMIT — and only then emit domain events (fire-and-forget) + create
+    notification. Side effects never precede the commit.
+```
+
+Consistency layers stack: **transaction** (atomicity) +
+**optimisticConcurrency** on Auction/TournamentTeam/TournamentPlayer
+(lost-update protection) + **wallet invariant** validator (corruption
+tripwire) + **rate limiter** (`bidRateLimiter`) + client-side
+**bidInFlight lock** (double-tap protection before the network round trip).
+
+---
+
+## 7. Settlement & Auto-Progression
+
+`settleLot` is the organizer's hammer. On SOLD it commits the reservation to
+spent, pushes to the roster, stamps the player (sold state is all-or-nothing
+per validator), and resets liveState. Then the **engine takes over**:
+`checkRoundCompletion` → round lifecycle events → auto-create the unsold
+round or auto-complete the auction — with an idempotency race-guard
+(`findOne` for existing unsold round inside the tx) and graceful swallowing
+of `VersionError`/`INVALID_TRANSITION` in `maybeCompleteAuction` (a second
+worker completing first is fine).
+
+---
+
+## 8. Authorization — a 3-Layer Pipeline
+
+```
+IdentityResolver          OwnershipResolver            PermissionEngine
+(who are you?)            (what do you own?)           (may you act, now?)
+role → capabilities   +   tournament/team facts   +    auction state gates
+─────────────────────────────────────────────────────────────────────────
+user:{role,isActive}      ownsTournament               STATE_RULES:
+capabilities: Set          team.owns / team.approved     PLACE_BID  → [LIVE]
+  ORGANIZER → manage*,     ownershipScope                 OPEN_LOT  → [LIVE]
+    open/settle lot…                                    PAUSE      → [LIVE]
+  FRANCHISE_OWNER →       (pure functions,                RESUME     → [PAUSED]
+    PLACE_BID only          no DB, trivially              …
+    (and only with an       unit-testable)           + OWNER_REQUIRED set
+    owned+APPROVED team;                             + precise denial reasons
+    no admin bypass —       e.g. TOURNAMENT_TEAM_NOT_APPROVED
+    bidding moves a real
+    wallet)
+```
+
+- Context built once per request (`requireAuctionPermission` middleware),
+  cached on `req.authorization`, re-used by the service via a `sameContext`
+  guard — no double DB work, no stale-context trust.
+- The **server is the sole authority**: the frontend fetches
+  `GET /auctions/:id/permissions` and only layers UI-polish constraints on
+  top (`withLiveStateConstraints`) which can narrow but never widen.
+- `POLICY_VERSION` is stamped into every context — policy changes are
+  auditable.
+
+---
+
+## 9. Realtime Architecture
+
+```
+REST service ──(after tx commit)──▶ auction.events emitXxx()
+                                        │  toTransportDTO (Mongoose→plain)
+                                        ▼
+                                   eventBus (in-process EventEmitter,
+                                        safeEmit never throws)
+                                        │
+                          SocketEventPublisher (singleton)
+                                        │
+              ┌─────────────────────────┼──────────────────────────┐
+              ▼                         ▼                          ▼
+   io.to(`auction:{id}`)      server-authoritative            presence events
+   domain broadcasts          LOT TIMER:                       viewer join/leave
+   (lot opened, bid placed,   1s ticks + 5s full sync          + count
+   sold, liveState, logs…)    + expired, pause/resume,
+                              anti-snipe adjustTimer
+```
+
+Design choices worth noting:
+
+- **One-way data flow**: clients *command* over REST, *observe* over sockets.
+  The socket handler exposes only read/subscribe operations (`auction:join`,
+  `heartbeat`, `getLiveState`, `getSnapshot`) — never a mutation.
+- **Room model**: `auction:{auctionId}` rooms; `user:{userId}` personal rooms
+  for direct notifications; anonymous spectators allowed (token optional,
+  downgrade-not-reject on bad token).
+- **Transport hygiene**: events pass `toTransportDTO` upstream and a
+  transport-level sanitizer (circular-ref guard, Date→ISO) at publish time,
+  with a dev-mode `JSON.stringify` smoke test.
+- **Timer authority lives server-side** (tick/sync/expired), clients
+  interpolate between syncs.
+- **Scaling hooks**: Redis adapter for Socket.IO when `REDIS_URL` is set;
+  per-IP connection cap (10/min); per-message deflate; `withDistributedLock`
+  utility for cross-instance cron mutual exclusion.
+- **Presence is dual-tracked**: in-memory map in the socket handler (instant)
+  + `AuctionViewer` TTL collection (durable, REST-visible). Client sends 15s
+  heartbeats + `sendBeacon` on tab close.
+
+---
+
+## 10. Frontend — the AuctionEngine
+
+The client mirrors the server's discipline with a **class-based state machine
+singleton** (`features/auction/engine/AuctionEngine.ts`, ~1k LOC) bridged
+into React through Zustand:
+
+- **Snapshot pattern**: engine holds mutable private state → `getSnapshot()`
+  returns immutable copies → subscribers (the zustand store) re-render.
+- **Connection generations**: every `connect()` increments a generation
+  counter; every socket handler, timeout, and interval checks it — stale
+  callbacks from a previous auction/connection can't corrupt current state.
+- **Terminal-state guarantees**: `completed` stops all timers, sockets, and
+  pending callbacks; a completed auction is never resurrected.
+- **Reconciliation**: socket events are the fast path; a sequential 10s
+  `setTimeout` chain re-fetches the REST snapshot as the correctness floor
+  (compares `version` to detect drift; synthesizes sold/unsold events from
+  player-status diffs if a socket event was missed).
+- **Mobile-hardened**: `online` + `visibilitychange` listeners force a clean
+  reconnect (backgrounded tabs suspend sockets/timers); socket auth reads
+  the token via callback so rotated JWTs are picked up on reconnect;
+  unlimited reconnect attempts with jittered backoff.
+- **Timer**: 250ms local interpolation between server syncs
+  (`setTimerBaseline` + elapsed-since-sync), matching the server's
+  anti-snipe reset.
+- **Server-authoritative permissions** via `/permissions` endpoint
+  (see §8); role→team resolution prefers the server's `tournamentTeamId`.
+- Plus: audio engine driven by a **StateDiffEmitter** (diffs snapshots →
+  sound events), a full **3D auction arena** (react-three-fiber HUD, bid
+  dock, error boundary), sold/unsold animations, squad PDF export,
+  analytics charts.
+
+---
+
+## 11. Operational Posture
+
+- **Hardened HTTP**: Helmet CSP (Cloudinary img allowlist), strict CORS
+  (no wildcard in prod), 10kb body cap, request-ID propagation, pino-http
+  structured logs, `/health` + `/ready` probes.
+- **Fail-fast env** validation; **graceful shutdown** with connection
+  draining (HTTP → Socket.IO → Redis → Mongo).
+- **Testing**: Jest + mongodb-memory-server (no external DB needed);
+  CI runs test+lint before Railway deploy on `main`.
+- **Rate limiting**: global limiter + dedicated bid limiter + socket
+  connection caps.
+
+---
+
+## 12. ⚠️ Critical Findings
+
+### 🔴 F1 — The realtime socket contract is broken end-to-end (live bidding silently runs on REST polling)
+
+Two independent mismatches between `client/.../AuctionEngine.ts` and the
+backend socket layer:
+
+**(a) Room join names don't match.** Engine emits `join:auction` /
+`leave:auction`; backend listens for `auction:join` / `auction:leave`
+(`socket/handlers/auction.handler.js`). There is no `join:auction` handler
+anywhere. **The engine's socket never joins the `auction:{id}` room**, so
+every `io.to(room).emit(...)` broadcast passes it by. (The older
+`lib/socket-client.ts` uses the correct names — but AuctionEngine creates
+its own socket and doesn't use that module.)
+
+**(b) Broadcast event names don't match.** Even if the room join worked:
+
+| Backend publishes | Engine listens for | Match |
+|---|---|---|
+| `auction:started` / `paused` / `resumed` / `completed` / `rules:updated` | same | ✅ |
+| `auction:lot:opened` | `lot:opened` | ❌ |
+| `auction:bid:placed` | `bid:placed` | ❌ |
+| `auction:lot:sold` / `lot:unsold` | `lot:sold` / `lot:unsold` | ❌ |
+| `auction:liveState` | `live:state:updated` | ❌ |
+| `auction:round:added/updated/deleted/completed` | `round:added/…` | ❌ |
+| `auction:viewer:count` | `viewer:count:updated` | ❌ |
+| `auction:timer:tick/sync/expired` | *(no listeners at all)* | ❌ |
+
+**Net effect**: the live auction UI works only through its 10-second REST
+snapshot reconciliation + optimistic local updates — bids from *other* teams
+appear up to 10s late, server timer ticks never arrive, viewer counts never
+update live. The fix is mechanical (align names to the `auction:*`
+namespace, use `auction:join`), but until then the entire carefully-built
+pub/sub realtime layer is dead code in production.
+
+### 🔴 F2 — `markPermanentUnsold` can strand a live lot + leak wallet reservations
+
+In `auction.service.js` the guard rejecting `IN_PROGRESS` players is
+**commented out**, and the allowed source states include `IN_PROGRESS`. If
+the organizer marks the *currently open* player permanent-unsold:
+
+- the leading team's `reservedBudget` is never released (**wallet leak**),
+- `liveState` stays `BIDDING` on a now-terminal player,
+- `openLot` is then blocked ("a lot is already open"), while
+  `settleLot(sold)` would hit the player validator ("permanently unsold
+  cannot carry sold state") — the only recovery is settling it unsold,
+- `checkRoundCompletion` counts the player as resolved, so the round (and
+  auction) can complete **while a lot is still open on it**.
+
+Either reinstate the IN_PROGRESS guard, or make the operation settle the
+open lot (release reservation, reset liveState) atomically first.
+
+### 🟠 F3 — Timer expiry is not enforced on bid placement
+
+`placeBid` validates `lotStatus === BIDDING` but never checks
+`trueRemaining > 0`. A bid landing after the server timer expired (lot still
+open) is accepted and *resets* the clock to `bidResetSeconds`. If the
+intended model is auctioneer-controlled hammer (IPL-style), this is fine but
+should be an explicit, documented choice; if the timer is meant to be
+binding, it's a hole.
+
+### 🟠 F4 — Server timers are instance-local under horizontal scaling
+
+`SocketEventPublisher.activeTimers` is an in-process `Map`. With the Redis
+adapter, room membership is shared, but the **eventBus is in-process** — a
+bid landing on instance B adjusts only B's timer while instance A's timer
+(kept from `openLot`) keeps ticking stale into the same room → clients see
+conflicting ticks; if the timer-owning instance dies, ticks stop entirely.
+Single-instance deployments are unaffected. Multi-instance needs the timer
+moved to a Redis-backed owner (the `withDistributedLock` primitive already
+exists for this).
+
+### 🟡 F5 — Dual presence sources can disagree
+
+Socket joins publish the **in-memory** viewer count; REST/socket heartbeats
+publish the **DB** count — both on the same `viewer:count`-style event.
+Clients can see the number oscillate between the two sources. Pick one
+authority (DB) or reconcile before publishing.
+
+### 🟡 F6 — Hygiene / smaller items
+
+- `console.log(payload.bidIncrementTiers)` and `console.log(req.body)` left
+  in `auction.service.js` / `auction.controller.js` (logs request bodies —
+  noise + potential data exposure); `socket.publisher` logs room internals
+  on every event.
+- Dead code: `TournamentTeam.budgetUtilization` virtual returns `undefined`
+  (body commented out); `lib/socket-client.ts placeBid()` emits a socket
+  `auction:bid` the backend deliberately never handles (bids are REST-only)
+  — a trap for future callers.
+- `.idea/` committed to the repo.
+- Losing bid races surface as raw `VersionError`→500 rather than a clean
+  409/retry hint (the `liveState.version` doc comment describes a
+  read-then-conditional-write retry that the code doesn't actually
+  implement — it relies on Mongoose `optimisticConcurrency` instead).
+
+---
+
+## 13. What's Genuinely Excellent Here
+
+1. **The money protocol** — reserve/release/commit + a schema-enforced
+   invariant is exactly right for auction wallets, and the invariant turns
+   any future wallet bug into a loud validation failure instead of silent
+   drift.
+2. **Events only after commit** — the service layer is rigorously
+   transaction-first, side-effects-second. The eventBus can't be poisoned
+   by rolled-back state.
+3. **Authorization as pure functions** — Identity/Ownership/Permission
+   separation with denial *reasons* (`TOURNAMENT_TEAM_NOT_APPROVED` vs
+   `AUCTION_NOT_LIVE`) is testable, auditable (`POLICY_VERSION`), and the
+   server-authoritative `/permissions` endpoint keeps the client honest.
+4. **Domain rules encoded in the schema** — unsold-round-last, one-unsold-
+   round partial index, sold-fields all-or-nothing, tier-ladder validation,
+   completedAt ≥ startedAt. Bad states are unrepresentable, not just
+   rejected by convention.
+5. **Concurrency is layered, not hoped for** — transactions + optimistic
+   concurrency + separate collections for hot-vs-cold writes (presence vs
+   bids) + client-side in-flight locks.
+6. **The client engine's paranoia** — generation counters, terminal-state
+   seals, reconciliation floor, mobile recovery hooks. This is how you
+   build realtime UIs that survive 3G handoffs.
+7. **Comments that explain *why*** — the codebase documents its own design
+   decisions (and even past bugs, e.g. the `bidResetSeconds` history) at
+   the exact point of confusion. Rare and valuable.
+
+---
+
+## 14. Recommended Fix Order
+
+| # | Action | Effort | Impact |
+|---|---|---|---|
+| 1 | Align socket event names + room join (`auction:*` namespace, `auction:join`) in `AuctionEngine.ts` / constants | S | **Restores the entire realtime layer** |
+| 2 | Reinstate/repair the `IN_PROGRESS` guard in `markPermanentUnsold` (or settle-then-mark atomically) | S | Closes wallet leak + stuck-lot |
+| 3 | Decide & enforce timer-expiry semantics in `placeBid` | XS | Rules integrity |
+| 4 | Single-source viewer counting | S | UI correctness |
+| 5 | Strip console.logs, dead virtual, dead socket `placeBid`; ignore `.idea/` | XS | Production hygiene |
+| 6 | Redis-backed timer ownership for multi-instance | M | Horizontal scaling |
+| 7 | Map `VersionError` on bid race → 409 with retry semantics | S | API polish |
+
+---
+
+# Part 2 — Fixes Applied (this branch)
+
+## ✅ Fixed
+
+**F1 — Realtime socket contract (the big one).**
+- Client `SOCKET_EVENTS` re-aligned to the server's `auction:*` namespace
+  (14 event names corrected: `round:*`, `lot:*`, `bid:placed`,
+  `live:state:updated`, `viewer:count:updated` → their real server names).
+- Room protocol fixed: engine now emits `auction:join` / `auction:leave`
+  with `{ auctionId }` (was `join:auction` / `leave:auction`, which no
+  backend handler existed for — the socket never joined the room). Join ack
+  now adopts the server viewer count.
+- `VIEWER_COUNT_UPDATED` handler now reads `payload.viewerCount` (it read
+  `payload.count`, a field the server never sends — live counts were dropped
+  even after the names were fixed).
+- New client listeners: `auction:timer:sync` / `auction:timer:expired` /
+  `auction:timer:stopped` pin the local 250ms interpolation to the
+  server-authoritative clock instead of drifting between bid events.
+- New `auction:lot:permanent_unsold` event end-to-end: domain event +
+  emitter (`auction.events.js`), publisher handler, service emission after
+  commit, client listener that updates player status + fires the
+  `permanentUnsoldEvent` animation trigger. Previously this state change
+  only surfaced via the 10s snapshot diff.
+- New publisher handlers for `AUCTION_CREATED` and `LOT_PERMANENT_UNSOLD`
+  (both were emitted on the bus with no listener — silent no-ops).
+- Dead `client/src/lib/socket-client.ts` deleted (unused, and its
+  socket-based `placeBid` was a trap — bids are REST-only by design).
+- **Regression guard**: `backend/scripts/verify-socket-contract.mjs`
+  statically cross-checks server broadcasts vs client listeners vs client
+  emits vs server handlers. 20/20 green. Run it in CI to make this class of
+  bug unshippable.
+
+**F2 — `markPermanentUnsold` wallet-leak/stuck-lot.** Reinstated the
+`IN_PROGRESS` guard with a precise error message. An open lot can no longer
+be retired mid-flight; the leader's reservation can't be stranded, and a
+round can no longer "complete" while a lot is open on it.
+
+**F3 — Pause/resume clock truth.**
+- Server: `pause()` now freezes `liveState.remainingTimeSeconds` (drift-
+  adjusted) and `resume()` re-baselines `updatedAt` — `getSnapshot` no longer
+  under-reports remaining time after a pause.
+- Client: local countdown freezes on `auction:paused` (tick() no-ops while
+  paused) and re-syncs from a fresh snapshot on `auction:resumed`.
+
+**F5 — Viewer-count single source.** Socket join/leave now publish the
+DB-backed count (returned by `heartbeatViewer`/`removeViewer`) instead of
+the diverging in-memory map count; in-memory remains fallback-only.
+
+**F6 — Hygiene.** Removed `console.log(req.body)` / tier debug logs from
+controller + service; gated the publisher's per-event log (fired every timer
+tick) behind `DEBUG_SOCKET`; root `.gitignore` added; `.idea/` untracked.
+Also fixed a repo-wide blocker found along the way: `client/tsconfig.json`
+had `ignoreDeprecations: "6.0"`, invalid for the installed TS 5.9.3 — every
+`tsc --noEmit` run failed before typechecking anything. Now `"5.0"`.
+
+## Verified
+
+- `node --check` passes on all modified backend files.
+- `tsc --noEmit`: **zero errors in all touched files** (445 pre-existing
+  errors elsewhere in the repo remain — the project never had a working
+  typecheck gate; worth its own cleanup pass).
+- `vite build` succeeds end-to-end (PWA + 3D bundle).
+- Backend Jest suite can't run in this sandbox: mongodb-memory-server needs
+  `fastdl.mongodb.org` (outside sandbox network allowlist). Suite boots
+  correctly given `SMTP_HOST/SMTP_USER/SMTP_PASS` env vars — another
+  pre-existing gap: `tests/setup.js` doesn't set them though
+  `config/env.js` requires them.
+
+## Still open (by design / needs a product decision)
+
+- **F3 (timer-expiry semantics)**: `placeBid` accepts bids after timer
+  expiry while the lot is open — consistent with an auctioneer-controlled
+  hammer (nothing auto-settles on expiry), but if the timer should be
+  binding, enforce `trueRemaining > 0` server-side. Needs a product call.
+- **F4 (multi-instance timers)**: publisher timers are in-process Maps; with
+  the Redis adapter, cross-instance bids don't adjust the originating
+  instance's timer. Single-instance deploys (current Railway setup) are
+  unaffected.
+- **F7**: bid races surface as `VersionError`/500 rather than a clean 409.

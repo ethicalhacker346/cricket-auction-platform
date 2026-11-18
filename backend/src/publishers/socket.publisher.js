@@ -33,6 +33,9 @@ class SocketEventPublisher {
     this.isListening = true;
 
     // Auction lifecycle
+    eventBus.on(AUCTION_EVENTS.AUCTION_CREATED, (p) =>
+      this.handleAuctionCreated(p),
+    );
     eventBus.on(AUCTION_EVENTS.AUCTION_STARTED, (p) =>
       this.handleAuctionStarted(p),
     );
@@ -65,6 +68,9 @@ class SocketEventPublisher {
     eventBus.on(AUCTION_EVENTS.LOT_OPENED, (p) => this.handleLotOpened(p));
     eventBus.on(AUCTION_EVENTS.LOT_SOLD, (p) => this.handleLotSold(p));
     eventBus.on(AUCTION_EVENTS.LOT_UNSOLD, (p) => this.handleLotUnsold(p));
+    eventBus.on(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, (p) =>
+      this.handleLotPermanentUnsold(p),
+    );
     eventBus.on(AUCTION_EVENTS.LIVE_STATE_UPDATED, (p) =>
       this.handleLiveStateUpdated(p),
     );
@@ -148,19 +154,17 @@ class SocketEventPublisher {
 
       this.io.to(room).emit(socketEvent, safePayload);
 
-      const roomInfo = this.io.sockets.adapter.rooms.get(room);
-
-      const connectedClients = roomInfo ? roomInfo.size : 0;
-
-      console.log({
-        room,
-        event: socketEvent,
-        connectedClients,
-        payloadKeys: Object.keys(safePayload),
-      });
-
-
+      // This fires on every publish — including timer ticks every second —
+      // so keep it behind the debug flag instead of spamming production logs.
       if (process.env.DEBUG_SOCKET) {
+        const roomInfo = this.io.sockets.adapter.rooms.get(room);
+        const connectedClients = roomInfo ? roomInfo.size : 0;
+        console.log({
+          room,
+          event: socketEvent,
+          connectedClients,
+          payloadKeys: Object.keys(safePayload),
+        });
         console.log(
           `[SocketPublisher] -> ${room} :: ${socketEvent}`,
           safePayload?.auctionId || "",
@@ -187,6 +191,22 @@ class SocketEventPublisher {
   }
 
   // ---------- Auction handlers ----------
+  handleAuctionCreated({
+    auctionId,
+    auction,
+    tournamentId,
+    createdBy,
+    _emittedAt,
+  }) {
+    this.publishToAuction(auctionId, "auction:created", {
+      auctionId,
+      auction,
+      tournamentId,
+      createdBy,
+      timestamp: _emittedAt,
+    });
+  }
+
   handleAuctionStarted({
     auctionId,
     auction,
@@ -385,6 +405,30 @@ class SocketEventPublisher {
       liveState,
       trigger: "LOT_UNSOLD",
       timestamp: _emittedAt,
+    });
+  }
+
+  handleLotPermanentUnsold({
+    auctionId,
+    tournamentPlayerId,
+    roundId,
+    markedBy,
+    _emittedAt,
+  }) {
+    this.publishToAuction(auctionId, "auction:lot:permanent_unsold", {
+      auctionId,
+      tournamentPlayerId,
+      roundId,
+      markedBy,
+      timestamp: _emittedAt,
+    });
+    this.publishToAuction(auctionId, "auction:log", {
+      auctionId,
+      action: "PERMANENT_UNSOLD_MARKED",
+      message: `Player ${tournamentPlayerId} marked permanently unsold`,
+      metadata: { tournamentPlayerId, roundId },
+      timestamp: _emittedAt,
+      userId: markedBy,
     });
   }
 

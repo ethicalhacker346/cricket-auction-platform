@@ -34,6 +34,7 @@ export const AUCTION_EVENTS = Object.freeze({
   LOT_OPENED: 'auction:lot:opened',
   LOT_SOLD: 'auction:lot:sold',
   LOT_UNSOLD: 'auction:lot:unsold',
+  LOT_PERMANENT_UNSOLD: 'auction:lot:permanent_unsold',
   LIVE_STATE_UPDATED: 'auction:liveState:updated',
 
   // Bidding
@@ -201,6 +202,18 @@ export function emitLotUnsold(auctionId, {
     roundId,
     liveState,
     settledBy,
+  });
+}
+
+export function emitLotPermanentUnsold(auctionId, {
+  tournamentPlayerId,
+  roundId,
+  markedBy,
+} = {}) {
+  return emitAuctionEvent(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, auctionId, {
+    tournamentPlayerId,
+    roundId,
+    markedBy,
   });
 }
 

@@ -98,12 +98,14 @@ export function handleAuctionEvents(io, socket) {
       if (!socket.data.viewerIds) socket.data.viewerIds = new Map();
       socket.data.viewerIds.set(auctionId, finalViewerId);
 
-      const viewerCount = getViewerCount(auctionId);
-
-      // Try DB persistence if service exists (so REST getViewerCount stays consistent)
+      // The DB heartbeat is the single source of truth for the viewer count
+      // (REST pollers and socket clients must agree); the in-memory map is
+      // only a fallback when the DB write path is unavailable. Publishing
+      // both counts on the same event made the number oscillate.
+      let viewerCount = getViewerCount(auctionId);
       if (AuctionService?.heartbeatViewer) {
         try {
-          await AuctionService.heartbeatViewer(
+          viewerCount = await AuctionService.heartbeatViewer(
             auctionId,
             finalViewerId,
             socket.userId || null,
@@ -203,11 +205,11 @@ export function handleAuctionEvents(io, socket) {
       socket.data.auctions?.delete(auctionId);
       socket.data.viewerIds?.delete(auctionId);
 
-      const viewerCount = getViewerCount(auctionId);
+      let viewerCount = getViewerCount(auctionId);
 
       if (AuctionService?.removeViewer) {
         try {
-          await AuctionService.removeViewer(auctionId, finalViewerId);
+          viewerCount = await AuctionService.removeViewer(auctionId, finalViewerId);
         } catch (_) {}
       }
 

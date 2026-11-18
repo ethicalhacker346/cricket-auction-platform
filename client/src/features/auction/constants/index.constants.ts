@@ -124,7 +124,13 @@ export const BID_RESET_SECONDS = 12;
 export const CRORE = 100; // 1 crore = 100 lakh
 
 // ---------------------------------------------------------------------------
-// Socket.IO event names — aligned with backend AUCTION_EVENTS
+// Socket.IO event names — aligned with backend AUCTION_EVENTS +
+// SocketEventPublisher (backend/src/publishers/socket.publisher.js).
+//
+// Every server broadcast is namespaced `auction:*`. These constants were
+// previously a mix of `round:*` / `lot:*` / `bid:*` that matched nothing the
+// server emits — the mismatch silently killed the entire realtime path and
+// left the UI running on the 10s REST reconciliation fallback.
 // ---------------------------------------------------------------------------
 export const SOCKET_EVENTS = {
   // Auction lifecycle
@@ -136,19 +142,30 @@ export const SOCKET_EVENTS = {
   RULES_UPDATED: "auction:rules:updated",
 
   // Round management
-  ROUND_ADDED: "round:added",
-  ROUND_UPDATED: "round:updated",
-  ROUND_DELETED: "round:deleted",
-  ROUND_COMPLETED: "round:completed",
+  ROUND_ADDED: "auction:round:added",
+  ROUND_UPDATED: "auction:round:updated",
+  ROUND_DELETED: "auction:round:deleted",
+  ROUND_COMPLETED: "auction:round:completed",
 
   // Live bidding
-  LOT_OPENED: "lot:opened",
-  BID_PLACED: "bid:placed",
-  LOT_SOLD: "lot:sold",
-  LOT_UNSOLD: "lot:unsold",
-  LOT_PERMANENT_UNSOLD: "lot:permanent_unsold",
-  LIVE_STATE_UPDATED: "live:state:updated",
+  LOT_OPENED: "auction:lot:opened",
+  BID_PLACED: "auction:bid:placed",
+  LOT_SOLD: "auction:lot:sold",
+  LOT_UNSOLD: "auction:lot:unsold",
+  LOT_PERMANENT_UNSOLD: "auction:lot:permanent_unsold",
+  LIVE_STATE_UPDATED: "auction:liveState",
 
-  // Presence
-  VIEWER_COUNT_UPDATED: "viewer:count:updated",
+  // Presence — server payload shape: { auctionId, viewerCount, timestamp }
+  VIEWER_COUNT_UPDATED: "auction:viewer:count",
+
+  // Server-authoritative lot timer
+  TIMER_SYNC: "auction:timer:sync",
+  TIMER_EXPIRED: "auction:timer:expired",
+  TIMER_STOPPED: "auction:timer:stopped",
+} as const;
+
+// Room management events the client EMITS (backend auction.handler.js).
+export const SOCKET_CLIENT_EVENTS = {
+  JOIN_AUCTION: "auction:join",
+  LEAVE_AUCTION: "auction:leave",
 } as const;

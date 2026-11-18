@@ -48,6 +48,7 @@ import {
   emitRoundDeleted,
   emitRoundCompleted,
   emitLotOpened,
+  emitLotPermanentUnsold,
   emitLiveStateUpdated,
   emitViewerCountUpdated,
 } from "../events/auction.events.js";
@@ -128,15 +129,11 @@ export class AuctionService {
         { session },
       );
 
-      console.log(payload.bidIncrementTiers);
-
       await tournament.transitionTo(
         TOURNAMENT_STATUS.AUCTION_SCHEDULED,
         session,
       );
       await session.commitTransaction();
-
-      console.log(payload.bidIncrementTiers);
 
       // --- SOCKET EVENT: AFTER commit ---
       emitAuctionCreated(auction._id, {
@@ -502,6 +499,23 @@ export class AuctionService {
       existingContext: authorization,
     });
 
+    // Freeze the lot clock into liveState before saving. Without this the
+    // snapshot endpoint keeps subtracting elapsed wall-clock time during the
+    // pause, so late-joining/polling clients see a smaller remaining time
+    // than the server's (in-memory) paused timer actually holds.
+    const pauseLiveState = auction.liveState;
+    if (pauseLiveState && pauseLiveState.lotStatus === LOT_STATUS.BIDDING) {
+      const elapsed = pauseLiveState.updatedAt
+        ? (Date.now() - new Date(pauseLiveState.updatedAt).getTime()) / 1000
+        : 0;
+      pauseLiveState.remainingTimeSeconds = Math.max(
+        0,
+        (pauseLiveState.remainingTimeSeconds ?? 0) - elapsed
+      );
+      pauseLiveState.updatedAt = new Date();
+      pauseLiveState.version = (pauseLiveState.version ?? 0) + 1;
+    }
+
     await auction.transitionTo(AUCTION_STATUS.PAUSED);
     auction.logs.push({
       action: AUCTION_LOG_ACTIONS.AUCTION_PAUSED,
@@ -528,6 +542,16 @@ export class AuctionService {
     });
 
     await auction.transitionTo(AUCTION_STATUS.LIVE);
+
+    // Re-baseline the lot clock: remainingTimeSeconds was frozen at pause
+    // time, so the drift computation (remaining - elapsed since updatedAt)
+    // must restart from now.
+    const resumeLiveState = auction.liveState;
+    if (resumeLiveState && resumeLiveState.lotStatus === LOT_STATUS.BIDDING) {
+      resumeLiveState.updatedAt = new Date();
+      resumeLiveState.version = (resumeLiveState.version ?? 0) + 1;
+    }
+
     auction.logs.push({
       action: AUCTION_LOG_ACTIONS.AUCTION_RESUMED,
       userId: user._id,
@@ -1031,11 +1055,21 @@ export class AuctionService {
       return player; // Idempotent
     }
 
-   // if //(player.lotOutcome === LOT_OUTCOME.IN_PROGRESS) {
-   //   throw new AppError('Cannot mark player as permanent unsold while their lot is in progress', 400);
-   // }
+    // An IN_PROGRESS lot means liveState.lotStatus is BIDDING and the
+    // leading team holds a wallet reservation against this player. Marking
+    // permanent-unsold here would strand the open lot (openLot refuses to
+    // open another while one is live), leak the reservation, and let
+    // checkRoundCompletion count the player as resolved while bids are
+    // still attached. Settle the open lot first (sold/unsold), then retire
+    // the player from the unsold pool.
+    if (player.lotOutcome === LOT_OUTCOME.IN_PROGRESS) {
+      throw new AppError(
+        'Cannot mark player as permanent unsold while their lot is in progress — settle the open lot first',
+        400
+      );
+    }
 
-    if (![LOT_OUTCOME.NOT_LISTED,LOT_OUTCOME.IN_PROGRESS, LOT_OUTCOME.UNSOLD].includes(player.lotOutcome)) {
+    if (![LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.UNSOLD].includes(player.lotOutcome)) {
       throw new AppError(
         `Player state ${player.lotOutcome} cannot transition to PERMANENT_UNSOLD`,
         400
@@ -1060,6 +1094,13 @@ export class AuctionService {
       await auction.save({ session });
 
       await session.commitTransaction();
+
+    // Realtime broadcast after commit — same rule as every other mutation.
+      emitLotPermanentUnsold(auctionId, {
+        tournamentPlayerId,
+        roundId: round._id,
+        markedBy: user._id,
+      });
 
     // After commit, evaluate whether the unsold round (and therefore the auction) is done.
       await AuctionService.checkRoundCompletion(round._id);
