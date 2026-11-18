@@ -697,3 +697,61 @@ close at TEAMS_APPROVED.
 - Tournament rename regenerates the slug without a friendly 409 on
   collision (raw duplicate-key → handled as generic 409 by errorHandler).
 - The 445 pre-existing client type errors remain a separate cleanup.
+
+---
+
+# Part 4 — World-Class Presentation & Realtime Polish
+
+## R4.1 — Activity-timeline error loop: "Socket unavailable: Invalid namespace"
+
+**Root cause:** socket.io-client parses any path in the connection URL as a
+**namespace**, not a transport path. If `VITE_SOCKET_URL` carries a path
+(`/api/v1`, `/socket.io`, a trailing slash combo), the server rejects the
+handshake with `Invalid namespace`, the client falls back to REST, retries,
+and the timeline fills with the alternating error/connected loop.
+
+**Fix (`client/src/features/auction/engine/AuctionEngine.ts`):** the socket
+now connects to `resolveSocketOrigin(WS_URL)` — the stripped origin only —
+with the transport path pinned explicitly via `path: "/socket.io"`. A
+comment records the invariant. Additionally, `pushLog` collapses
+consecutive duplicate messages into one entry with a `×N` counter, so even
+if a future transport failure retries, the timeline stays readable.
+
+## R4.2 — World-class sound (`audio/AuctionAudioManager.ts`)
+
+Replaced the file-based engine (per-play `new Audio()` clones — latency,
+overlap glitches, 13 network dependencies) with a **fully synthesized
+WebAudio engine**: zero assets, sample-accurate scheduling on the
+AudioContext clock, and a mastered signal chain
+`voice → masterGain → compressor → destination` with a generated
+impulse-response convolver reverb bus. Voices: layered paddle-tap+coin bid,
+FM opening bell, triple-gavel + applause swell + C-major fanfare for SOLD,
+detuned descending sigh for UNSOLD, riser→impact auction start, woodblock
+urgency ticks (pitch rises ≤5s, heartbeat thump at 1s), soft closing buzzer
+on expiry. Gesture unlock on first interaction; unified mute key
+(`auction_audio_muted`) with smooth gain ramping.
+
+## R4.3 — World-class verdict card (`components/SoldUnsoldAnimation.tsx`)
+
+Full cinematic rebuild: letter-cascade verdict with landing bounce, corner
+ribbon, three gavel-rap marks, shockwave rings, film grain, spotlight,
+scrolling SOLD ticker, 48-piece confetti (sold) / falling price-tag rain
+(unsold), sweep shine, animated INR amount counter, backdrop/Escape/button
+dismissal. Its old parallel sound engine was replaced by the same
+synthesized-score approach (shared AudioContext + reverb) with the TTS
+announcer kept as an opt-in garnish under the score. Mute state now shares
+the unified `auction_audio_muted` key.
+
+## R4.4 — World-class timer (`components/AuctionClock.tsx`)
+
+Rebuilt as an instrument-grade dial: gradient arc + blurred glow underlay +
+travelling comet head + 60 tick marks, per-digit vertical slide transitions
+with blur, four urgency bands (calm/warn/hot/critical) that escalate color
+and glow, an expanding heartbeat ring + pulsing inset vignette in the final
+5 seconds, and an accessible `role="timer"` with live-region labelling.
+Digits remain server-authoritative from the live store; the arc animates on
+a crisp 1-second linear beat so depletion is legible rather than drifty.
+
+**Verification:** scoped `tsc --noEmit` clean on all touched files (0 new
+errors; repo-wide count unchanged), `vite build` green (1m15s),
+`verify-socket-contract.mjs` 20/20 green.

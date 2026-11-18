@@ -1,50 +1,46 @@
-import { useEffect, useRef } from 'react';
-import { useLiveAuctionStore } from '@/features/auction/store/index.store';
-import { AuctionAudioManager } from './AuctionAudioManager';
+import { useCallback, useEffect, useRef } from "react";
+import { AuctionAudioManager } from "./AuctionAudioManager";
+import { useLiveAuctionStore } from "../store/index.store";
 
-let globalManager: AuctionAudioManager | null = null;
-
+/**
+ * Mount once near the auction UI root (via <AuctionSoundEngine />).
+ *
+ * Owns a single AuctionAudioManager: a fully-synthesized WebAudio engine —
+ * no audio-file assets, sample-accurate scheduling, a mastered signal chain
+ * (compressor + generated-impulse reverb), and user-gesture unlock. Feeds
+ * it timer updates from the live store so urgency ticks stay aligned with
+ * the authoritative server clock.
+ */
 export function useAuctionSounds() {
-  const remaining = useLiveAuctionStore((s) => s.timer.remaining);
-  const initRef = useRef(false);
+  const managerRef = useRef<AuctionAudioManager | null>(null);
+
+  if (!managerRef.current && typeof window !== "undefined") {
+    managerRef.current = new AuctionAudioManager();
+  }
 
   useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
-    if (!globalManager) {
-      globalManager = new AuctionAudioManager({
-        sounds: {
-          hammer:       { src: '/sounds/hammer.mp3', volume: 0.8 },
-          bell:         { src: '/sounds/bell.mp3', volume: 0.7 },
-          gavel:        { src: '/sounds/gavel.mp3', volume: 1.0 },
-          applause:     { src: '/sounds/applause.mp3', volume: 0.5 },
-          lowTone:      { src: '/sounds/low-tone.mp3', volume: 0.8 },
-          openingTheme: { src: '/sounds/opening.mp3', volume: 0.6 },
-          softBell:     { src: '/sounds/soft-bell.mp3', volume: 0.5 },
-          resumeBell:   { src: '/sounds/resume-bell.mp3', volume: 0.6 },
-          success:      { src: '/sounds/success.mp3', volume: 0.7 },
-          tick:         { src: '/sounds/tick.mp3', volume: 0.4 },
-          tickFast:     { src: '/sounds/tick-fast.mp3', volume: 0.5 },
-          tickFinal:    { src: '/sounds/tick-final.mp3', volume: 0.8 },
-          crowd:        { src: '/sounds/crowd.mp3', volume: 0.3 },
-        },
-        masterVolume: 0.85,
-        muted: JSON.parse(localStorage.getItem('auction_audio_muted') ?? 'false'),
-      });
-    }
-
-    // We intentionally do NOT destroy on unmount.
-    // The manager is global per auction session.
+    const manager = managerRef.current;
+    if (!manager) return;
+    const unsub = useLiveAuctionStore.subscribe(
+      (s) => manager.onTimerUpdate(s.timer.remaining),
+    );
+    return () => {
+      unsub();
+      manager.destroy();
+      managerRef.current = null;
+    };
   }, []);
 
-  useEffect(() => {
-    globalManager?.onTimerUpdate(remaining);
-  }, [remaining]);
+  const toggleMute = useCallback(() => {
+    const manager = managerRef.current;
+    if (!manager) return;
+    manager.setMuted(!manager.muted);
+  }, []);
 
   return {
-    setMuted: (v: boolean) => globalManager?.setMuted(v),
-    setVolume: (v: number) => globalManager?.setMaster(v),
-    get muted() { return globalManager?.muted ?? false; },
+    toggleMute,
+    get muted() {
+      return managerRef.current?.muted ?? false;
+    },
   };
 }

@@ -201,7 +201,14 @@ export class AuctionEngine {
   }
 
   private async setupSocket(auctionId: string, generation: number): Promise<void> {
-    this.socket = io(WS_URL, {
+    this.socket = io(resolveSocketOrigin(WS_URL), {
+      // Always pin the transport path explicitly. Without this, a
+      // VITE_SOCKET_URL that carries any path segment (e.g. the API URL's
+      // "/api/v1", or someone pasting ".../socket.io") is parsed by
+      // socket.io-client as a NAMESPACE — the server has no such namespace
+      // and every attempt fails with "Invalid namespace" (the exact error
+      // that used to spam the activity timeline and force REST fallback).
+      path: "/socket.io",
       // A static { token } object is captured once and reused verbatim on
       // every socket.io reconnection attempt, including after the access
       // token has rotated during a long-running auction — every retry after
@@ -731,6 +738,19 @@ export class AuctionEngine {
   }
 
   private pushLog(type: any, message: string) {
+    // Collapse consecutive duplicates (socket reconnect loops, repeated
+    // failures) into one entry with a repeat counter — a timeline that
+    // shows the same line ten times is noise, not information.
+    const last = this.logs[0];
+    if (last && last.type === type) {
+      const dupMatch = last.message.match(/^(.*) \(×(\d+)\)$/);
+      const base = dupMatch ? dupMatch[1] : last.message;
+      if (base === message) {
+        last.message = `${message} (×${(dupMatch ? parseInt(dupMatch[2], 10) : 1) + 1})`;
+        last.timestamp = Date.now();
+        return;
+      }
+    }
     this.logs.unshift({ id: uid("log"), type, message, timestamp: Date.now() });
     // getSnapshot() only ever returns the first 80, but the backing array
     // was never trimmed itself — over a multi-hour auction (thousands of
@@ -1085,5 +1105,18 @@ export class AuctionEngine {
       this.pushLog("permanent_unsold_marked", `Mark permanent unsold failed: ${msg}`);
       return { success: false, error: msg };
     }
+  }
+}
+
+/**
+ * Socket.IO treats any path in the connection URL as a *namespace*, not an
+ * HTTP path. The only correct connection target is the origin — the actual
+ * transport path is pinned via the `path` option in setupSocket().
+ */
+function resolveSocketOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
   }
 }
