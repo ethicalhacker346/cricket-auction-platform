@@ -179,6 +179,12 @@ export class TournamentService {
     const tournament = await TournamentService.getById(id);
     TournamentService.assertOrganizerAccess(tournament, user);
 
+    // Approving the team cohort ends the registration phase. Without this,
+    // the flags stayed open and brand-new teams (full purse, empty roster)
+    // could register and even be approved while the auction was live.
+    tournament.playerRegistrationOpen = false;
+    tournament.teamRegistrationOpen = false;
+
     await tournament.transitionTo(TOURNAMENT_STATUS.TEAMS_APPROVED);
     return tournament;
   }
@@ -191,6 +197,15 @@ export class TournamentService {
     if (auctionDate) {
       tournament.auctionDate = auctionDate;
     }
+
+    // Idempotent: AuctionService.create() drives this same transition when
+    // the auction aggregate is created. If the organizer scheduled via this
+    // endpoint first, that path must not fail with INVALID_TRANSITION.
+    if (tournament.status === TOURNAMENT_STATUS.AUCTION_SCHEDULED) {
+      await tournament.save();
+      return tournament;
+    }
+
     await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_SCHEDULED);
     return tournament;
   }
@@ -198,6 +213,13 @@ export class TournamentService {
   static async startAuction(id, user) {
     const tournament = await TournamentService.getById(id);
     TournamentService.assertOrganizerAccess(tournament, user);
+
+    // Idempotent: the auction aggregate (AuctionService.start) is the real
+    // entry point and performs this same transition — a duplicate call here
+    // must not invalidate that path.
+    if (tournament.status === TOURNAMENT_STATUS.AUCTION_RUNNING) {
+      return tournament;
+    }
 
     await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_RUNNING);
     return tournament;
@@ -209,6 +231,14 @@ export class TournamentService {
      // Once the tournament is completed, no registrations are allowed.
     tournament.playerRegistrationOpen = false;
     tournament.teamRegistrationOpen = false;
+
+    // Idempotent: the auction engine auto-completes the tournament when the
+    // last round resolves (maybeCompleteAuction) — a manual completion after
+    // that is a no-op, not an INVALID_TRANSITION.
+    if (tournament.status === TOURNAMENT_STATUS.AUCTION_COMPLETED) {
+      await tournament.save();
+      return tournament;
+    }
 
     await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_COMPLETED);
     return tournament;

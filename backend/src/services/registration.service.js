@@ -4,11 +4,21 @@ import { TournamentPlayer } from '../models/TournamentPlayer.js';
 import { TournamentTeam } from '../models/TournamentTeam.js';
 import { Player } from '../models/Player.js';
 import { Tournament } from '../models/Tournament.js';
+import { AuctionRound } from '../models/AuctionRound.js';
 import { AppError, assertFound, parsePagination, buildPaginatedResponse } from '../utils/helpers.js';
-import { REGISTRATION_STATUS, NOTIFICATION_TYPES, LOT_OUTCOME } from '../config/constants.js';
+import { REGISTRATION_STATUS, NOTIFICATION_TYPES, LOT_OUTCOME, TOURNAMENT_STATUS } from '../config/constants.js';
 import { TournamentService } from './tournament.service.js';
 import { FranchiseService } from './franchise.service.js';
 import { NotificationService } from './notification.service.js';
+
+// Notifications are a side effect, never a failure mode: a notification
+// write failing must not turn an otherwise-successful registration
+// lifecycle operation into a 500 (or worse, a client retry that double-
+// submits).
+const notifySafely = (payload) =>
+  NotificationService.create(payload).catch((e) =>
+    console.error('[RegistrationService] notification failed', e)
+  );
 
 export class RegistrationService {
 
@@ -66,21 +76,34 @@ export class RegistrationService {
       throw new AppError('Already registered for this tournament', 409);
     }
 
-    const registration = await TournamentPlayer.create({
-      tournamentId,
-      playerId: player._id,
-      userId,
-      basePrice: payload.basePrice ?? 100_000,
-      category: payload.category,
-      primaryRole: payload.primaryRole ?? player.primaryRole,
-      status: REGISTRATION_STATUS.PENDING,
-      lotOutcome: LOT_OUTCOME.NOT_LISTED,
-    });
+    // Registration + denormalized counter must succeed or fail together —
+    // a count that drifts from reality poisons every dashboard using it.
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let registration;
+    try {
+      [registration] = await TournamentPlayer.create([{
+        tournamentId,
+        playerId: player._id,
+        userId,
+        basePrice: payload.basePrice ?? 100_000,
+        category: payload.category,
+        primaryRole: payload.primaryRole ?? player.primaryRole,
+        status: REGISTRATION_STATUS.PENDING,
+        lotOutcome: LOT_OUTCOME.NOT_LISTED,
+      }], { session });
 
-    // Increment count on every new registration (counts PENDING + APPROVED + REJECTED)
-    await RegistrationService.incrementPlayersCount(tournamentId);
+      // Increment count on every new registration (counts PENDING + APPROVED + REJECTED)
+      await RegistrationService.incrementPlayersCount(tournamentId, session);
+      await session.commitTransaction();
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
 
-    await NotificationService.create({
+    await notifySafely({
       userId: tournament.organizerId,
       type: NOTIFICATION_TYPES.REGISTRATION_UPDATE,
       title: 'New player registration',
@@ -107,7 +130,7 @@ export class RegistrationService {
     // Count was already incremented at registration time.
     // No additional increment here — prevents double-counting.
 
-    await NotificationService.create({
+    await notifySafely({
       userId: registration.userId,
       type: NOTIFICATION_TYPES.REGISTRATION_UPDATE,
       title: 'Registration verified',
@@ -127,6 +150,37 @@ export class RegistrationService {
       'Registration not found'
     );
 
+    // Idempotent: re-rejecting an already-rejected player must not
+    // decrement playersCount a second time (count drift).
+    if (registration.status === REGISTRATION_STATUS.REJECTED) {
+      return registration;
+    }
+
+    // Once the player has entered the auction funnel (listed, on the
+    // block, sold, unsold...) rejection would corrupt the auction record —
+    // e.g. rejecting the IN_PROGRESS lot would let the winning team buy a
+    // rejected player, and rejecting an UNSOLD player leaves the unsold
+    // round unresolvable forever.
+    if (registration.lotOutcome !== LOT_OUTCOME.NOT_LISTED || registration.isSold) {
+      throw new AppError(
+        'Player is already part of the auction and can no longer be rejected',
+        400
+      );
+    }
+
+    // Even a never-listed player blocks round completion if they're
+    // referenced in a round's playerIds: the round completes only when
+    // every member reaches a terminal lotOutcome, and a rejected player
+    // can never be listed. The organizer must remove them from the round
+    // first (possible while the round is still PENDING).
+    const inRound = await AuctionRound.exists({ playerIds: registration._id });
+    if (inRound) {
+      throw new AppError(
+        'Player is assigned to an auction round — remove them from the round before rejecting',
+        400
+      );
+    }
+
     registration.status = REGISTRATION_STATUS.REJECTED;
     registration.rejectedReason = reason;
     await registration.save();
@@ -134,7 +188,7 @@ export class RegistrationService {
     // Decrement on every rejection (count was incremented at registration)
     await RegistrationService.decrementPlayersCount(tournamentId);
 
-    await NotificationService.create({
+    await notifySafely({
       userId: registration.userId,
       type: NOTIFICATION_TYPES.REGISTRATION_UPDATE,
       title: 'Registration rejected',
@@ -179,7 +233,7 @@ export class RegistrationService {
     registration.basePriceUpdatedAt = new Date();
     await registration.save();
 
-    await NotificationService.create({
+    await notifySafely({
       userId: registration.userId,
       type: NOTIFICATION_TYPES.REGISTRATION_UPDATE,
       title: 'Base price updated',
@@ -306,7 +360,7 @@ export class RegistrationService {
     // Count was already incremented at registration time.
     // No additional increment here — prevents double-counting.
 
-    await NotificationService.create({
+    await notifySafely({
       userId: team.ownerId,
       type: NOTIFICATION_TYPES.TEAM_UPDATE,
       title: 'Team approved',
@@ -325,6 +379,28 @@ export class RegistrationService {
       await TournamentTeam.findOne({ _id: teamId, tournamentId }),
       'Team not found'
     );
+
+    // Idempotent: re-rejecting must not decrement teamsCount twice.
+    if (team.status === REGISTRATION_STATUS.REJECTED) {
+      return team;
+    }
+
+    // Once the auction is running (or done), rejecting a team would strand
+    // its wallet: an outstanding highest-bid reservation would stay
+    // reserved, and settling a lot into a rejected team's roster corrupts
+    // the auction record.
+    if (
+      [
+        TOURNAMENT_STATUS.AUCTION_RUNNING,
+        TOURNAMENT_STATUS.AUCTION_COMPLETED,
+        TOURNAMENT_STATUS.TOURNAMENT_COMPLETED,
+      ].includes(tournament.status)
+    ) {
+      throw new AppError(
+        'Teams cannot be rejected once the auction has started',
+        400
+      );
+    }
 
     team.status = REGISTRATION_STATUS.REJECTED;
     team.rejectedReason = reason;
@@ -347,7 +423,10 @@ export class RegistrationService {
 
     const [teams, total] = await Promise.all([
       TournamentTeam.find(filter)
-        .populate({ path: 'franchiseId', select: 'name  logo brandColor shortCode city' })
+        // Select only fields that exist on Franchise (colorFrom/colorTo,
+        // not the ghost fields brandColor/shortCode this used to request —
+        // Mongoose silently returns those as undefined).
+        .populate({ path: 'franchiseId', select: 'name logo colorFrom colorTo city' })
         .populate({ path: 'ownerId', select: 'fullName name email' })
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -364,8 +443,10 @@ export class RegistrationService {
       franchiseId: team.franchiseId?._id?.toString?.() ?? team.franchiseId,
       name: team.name ?? team.franchiseId?.name ?? 'Unnamed Team',
       status: team.status,
-      brandColor: team.franchiseId?.brandColor ?? '#6366f1',
-      shortCode: team.franchiseId?.shortCode ?? team.name?.slice(0, 2).toUpperCase() ?? 'NA',
+      brandColor: team.franchiseId?.colorFrom ?? '#6366f1',
+      shortCode: team.name?.slice(0, 2).toUpperCase() ?? 'NA',
+      colorFrom: team.franchiseId?.colorFrom ?? null,
+      colorTo: team.franchiseId?.colorTo ?? null,
       ownerId: team.ownerId?._id?.toString?.() ?? team.ownerId,
       ownerName: team.ownerId?.fullName ?? team.ownerId?.name ?? 'Unknown Owner',
       logo: team.franchiseId?.logo ?? null,

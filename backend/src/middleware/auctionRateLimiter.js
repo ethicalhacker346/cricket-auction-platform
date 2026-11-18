@@ -18,7 +18,8 @@ export const bidRateLimiter = rateLimit({
   handler: (req, res, next, options) => {
     logger.warn({ userId: req.user?.id, ip: req.ip }, 'Bid rate limit exceeded');
     res.status(429).json({
-      error: 'Too many bids. Please wait a moment.',
+      success: false,
+      message: 'Too many bids. Please wait a moment.',
       retryAfter: Math.ceil(options.windowMs / 1000),
     });
   },

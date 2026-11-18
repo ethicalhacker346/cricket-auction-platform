@@ -165,13 +165,20 @@ export class BidService {
       finalLiveState = { ...auction.liveState.toObject?.() || auction.liveState };
       finalTeam = team;
 
-      await NotificationService.create({
-        userId: user._id,
-        type: NOTIFICATION_TYPES.BID_UPDATE,
-        title: 'Bid placed',
-        message: `Your bid of ${amount} is currently leading`,
-        data: { auctionId, bidId: bid[0]._id },
-      });
+      // Best-effort: the bid is already committed — a notification failure
+      // must not turn this into a 500 (the client would retry against the
+      // "already highest bidder" guard and see a phantom rejection).
+      try {
+        await NotificationService.create({
+          userId: user._id,
+          type: NOTIFICATION_TYPES.BID_UPDATE,
+          title: 'Bid placed',
+          message: `Your bid of ${amount} is currently leading`,
+          data: { auctionId, bidId: bid[0]._id },
+        });
+      } catch (e) {
+        console.error('[BidService] bid notification failed', e);
+      }
 
       try {
         emitBidPlaced(auctionId, {
@@ -267,16 +274,6 @@ export class BidService {
           soldToTeamName: winningTeam.name,
           ownerId: winningTeam.ownerId,
         };
-
-        
-
-        await NotificationService.create({
-          userId: winningTeam.ownerId,
-          type: NOTIFICATION_TYPES.AUCTION_UPDATE,
-          title: 'Player acquired',
-          message: `${winningTeam.name} won the bid for ${soldPrice}`,
-          data: { auctionId, tournamentPlayerId: tournamentPlayer._id },
-        });
       } else {
         if (liveState.highestBidderTeamId) {
           const team = await TournamentTeam.findById(liveState.highestBidderTeamId).session(session);
@@ -327,10 +324,40 @@ export class BidService {
       };
 
       await auction.save({ session });
-      await AuctionService.checkRoundCompletion(roundIdToCheck, session);
+
+      // Round-completion chain runs inside this transaction; it defers its
+      // domain events (round completed / unsold round created / auction
+      // completed) into this outbox so nothing is published before commit.
+      const outbox = [];
+      await AuctionService.checkRoundCompletion(roundIdToCheck, session, outbox);
       await session.commitTransaction();
 
       resultAuction = auction;
+
+      // Drain deferred domain events now that the transaction is durable.
+      for (const emit of outbox) {
+        try {
+          emit();
+        } catch (e) {
+          console.error('[BidService] post-commit event emission failed', e);
+        }
+      }
+
+      // Best-effort winner notification — a notification failure must never
+      // roll back or fail an already-settled lot.
+      if (sold && soldInfo) {
+        try {
+          await NotificationService.create({
+            userId: soldInfo.ownerId,
+            type: NOTIFICATION_TYPES.AUCTION_UPDATE,
+            title: 'Player acquired',
+            message: `${soldInfo.soldToTeamName} won the bid for ${soldInfo.soldPrice}`,
+            data: { auctionId, tournamentPlayerId },
+          });
+        } catch (e) {
+          console.error('[BidService] settleLot notification failed', e);
+        }
+      }
 
       // ---- SOCKET EVENTS AFTER COMMIT ----
       try {

@@ -2,7 +2,9 @@ import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-import { bidRateLimiter } from '../middleware/rateLimiter.js';
+// Strict per-user bid limiter (5 bids / 2s) — the auction-specific limiter,
+// not the loose global-shaped one in rateLimiter.js (6000/min per IP).
+import { bidRateLimiter } from '../middleware/auctionRateLimiter.js';
 import { auctionController } from '../controllers/auction.controller.js';
 import {
   createAuctionSchema, // UPDATE — body shape changed: bidIncrement (number) is gone,

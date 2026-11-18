@@ -129,10 +129,15 @@ export class AuctionService {
         { session },
       );
 
-      await tournament.transitionTo(
-        TOURNAMENT_STATUS.AUCTION_SCHEDULED,
-        session,
-      );
+      // May already be AUCTION_SCHEDULED if the organizer used the
+      // tournament-level schedule endpoint first — transition only when
+      // needed so the two lifecycle entry points can't collide.
+      if (tournament.status !== TOURNAMENT_STATUS.AUCTION_SCHEDULED) {
+        await tournament.transitionTo(
+          TOURNAMENT_STATUS.AUCTION_SCHEDULED,
+          session,
+        );
+      }
       await session.commitTransaction();
 
       // --- SOCKET EVENT: AFTER commit ---
@@ -205,11 +210,17 @@ export class AuctionService {
       throw new AppError("Cannot modify a completed auction", 400);
     }
 
+    // The unsold round is engine-managed — created automatically when the
+    // last normal round closes with unsold players (createUnsoldRound resets
+    // their lotOutcome so openLot can re-list them). Accepting a client-
+    // supplied type: 'unsold' here would create an unmanaged round whose
+    // players are never reset, leaving the auction unable to reach its
+    // terminal state.
     const round = await AuctionRound.create({
       auctionId,
       name: payload.name,
       order: payload.order,
-      type: payload.type ?? "normal",
+      type: ROUND_TYPE.NORMAL,
       playerIds: payload.playerIds ?? [],
       category: payload.category ?? null,
       status: ROUND_STATUS.PENDING,
@@ -367,8 +378,18 @@ export class AuctionService {
       );
     }
 
+    // Round type is engine-managed: flipping normal↔unsold by hand can
+    // violate the unsold-round-last invariant, collide with the unique
+    // partial index on (auctionId, type=unsold), and bypass the player
+    // reset the engine performs when it creates the unsold round.
+    if (patch.type !== undefined && patch.type !== round.type) {
+      throw new AppError(
+        "Round type is managed by the auction engine and cannot be changed",
+        400,
+      );
+    }
+
     if (patch.name !== undefined) round.name = patch.name;
-    if (patch.type !== undefined) round.type = patch.type;
     if (patch.order !== undefined) round.order = patch.order;
     if (patch.playerIds !== undefined) round.playerIds = patch.playerIds;
     if (patch.category !== undefined) {
@@ -471,7 +492,11 @@ export class AuctionService {
         message: "Auction started",
       });
       await auction.save({ session });
-      await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_RUNNING, session);
+      // Tolerate the tournament already being AUCTION_RUNNING (the
+      // tournament-level start endpoint performs the same transition).
+      if (tournament.status !== TOURNAMENT_STATUS.AUCTION_RUNNING) {
+        await tournament.transitionTo(TOURNAMENT_STATUS.AUCTION_RUNNING, session);
+      }
       await session.commitTransaction();
 
       // --- SOCKET AFTER COMMIT ---
@@ -832,7 +857,7 @@ export class AuctionService {
     };
   }
 
-  static async checkRoundCompletion(roundId, session = null) {
+  static async checkRoundCompletion(roundId, session = null, outbox = null) {
     const round = await AuctionRound.findById(roundId).session(session ?? null);
     if (!round || round.status === ROUND_STATUS.COMPLETED) return round;
 
@@ -854,19 +879,25 @@ export class AuctionService {
       round.completedAt = new Date();
       await round.save({ session });
 
-      emitRoundCompleted(round._id, round.auctionId, { round });
+    // Domain events must only fire AFTER the owning transaction commits.
+    // When this runs inside someone else's transaction (settleLot), the
+    // caller passes an outbox array that it drains post-commit; when this
+    // runs standalone (markPermanentUnsold path), we're already outside
+    // any transaction, so emitting immediately is safe.
+      const emitNowOrDefer = (fn) => (outbox ? outbox.push(fn) : fn());
+      emitNowOrDefer(() => emitRoundCompleted(round._id, round.auctionId, { round }));
 
     // Dispatch post-completion workflow
       if (round.type === ROUND_TYPE.NORMAL) {
-        await AuctionService.handleNormalRoundClosed(round, session);
+        await AuctionService.handleNormalRoundClosed(round, session, outbox);
       } else {
-        await AuctionService.handleUnsoldRoundClosed(round, session);
+        await AuctionService.handleUnsoldRoundClosed(round, session, outbox);
       }
     }
     return round;
   }
 
-  static async handleNormalRoundClosed(closedRound, session = null) {
+  static async handleNormalRoundClosed(closedRound, session = null, outbox = null) {
   // Idempotency: if any normal round is still open, do nothing.
     const pendingNormal = await AuctionRound.countDocuments({
       auctionId: closedRound.auctionId,
@@ -889,13 +920,13 @@ export class AuctionService {
 
     if (unsoldPlayers.length === 0) {
     // No residual inventory → auction can close immediately.
-      await AuctionService.maybeCompleteAuction(auction, session);
+      await AuctionService.maybeCompleteAuction(auction, session, outbox);
     } else {
-      await AuctionService.createUnsoldRound(auction, unsoldPlayers.map((p) => p._id), session);
+      await AuctionService.createUnsoldRound(auction, unsoldPlayers.map((p) => p._id), session, outbox);
     }
   }
 
-  static async createUnsoldRound(auction, unsoldPlayerIds, session = null) {
+  static async createUnsoldRound(auction, unsoldPlayerIds, session = null, outbox = null) {
     const ownsSession = !session;
     const sess = session ?? (await mongoose.startSession());
 
@@ -955,7 +986,13 @@ export class AuctionService {
 
       if (ownsSession) await sess.commitTransaction();
 
-      emitRoundAdded(auction._id, { round: unsoldRound, addedBy: 'SYSTEM' });
+      // Only publish once the round actually exists in the committed
+      // transaction — if we joined a caller's transaction, hand the
+      // emission to their post-commit outbox.
+      const publish = () =>
+        emitRoundAdded(auction._id, { round: unsoldRound, addedBy: 'SYSTEM' });
+      if (ownsSession) publish();
+      else if (outbox) outbox.push(publish);
 
       return unsoldRound;
     } catch (error) {
@@ -966,12 +1003,12 @@ export class AuctionService {
     }
   }
 
-  static async handleUnsoldRoundClosed(closedRound, session = null) {
+  static async handleUnsoldRoundClosed(closedRound, session = null, outbox = null) {
     const auction = await Auction.findById(closedRound.auctionId).session(session ?? null);
-    await AuctionService.maybeCompleteAuction(auction, session);
+    await AuctionService.maybeCompleteAuction(auction, session, outbox);
   }
 
-  static async maybeCompleteAuction(auction, session = null) {
+  static async maybeCompleteAuction(auction, session = null, outbox = null) {
   // Defensive invariant: no player may remain in a non-terminal state.
     const dangling = await TournamentPlayer.countDocuments({
       tournamentId: auction.tournamentId,
@@ -1005,10 +1042,13 @@ export class AuctionService {
 
       if (ownsSession) await sess.commitTransaction();
 
-      emitAuctionCompleted(auction._id, {
-        auction,
-        completedBy: 'SYSTEM',
-      });
+      const publish = () =>
+        emitAuctionCompleted(auction._id, {
+          auction,
+          completedBy: 'SYSTEM',
+        });
+      if (ownsSession) publish();
+      else if (outbox) outbox.push(publish);
 
       return auction;
     } catch (error) {

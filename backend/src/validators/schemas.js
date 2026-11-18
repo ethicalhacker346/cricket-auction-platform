@@ -134,7 +134,10 @@ export const createAuctionRoundSchema = z.object({
 });
 
 export const placeBidSchema = z.object({
-  amount: z.number().min(1),
+  // Integer-only: the Bid model enforces integer minor units — catch
+  // fractional amounts here with a clean 400 instead of a Mongoose
+  // ValidationError.
+  amount: z.number().int().min(1),
 });
 
 export const openLotSchema = z.object({
@@ -156,7 +159,7 @@ export const updateAuctionRulesSchema = z.object({
       upTo: z.number().min(0).nullable(),
       increment: z.number().min(1),
     })
-  ).optional(),
+  ).min(1, 'bidIncrementTiers must contain at least one tier').optional(),
 
   lotTimerSeconds: z.number().min(5).max(600).optional(),
 

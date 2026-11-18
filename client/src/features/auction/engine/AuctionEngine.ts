@@ -9,6 +9,7 @@ import type {
 } from "../types/index.types";
 import { getNextBidAmount } from "@/features/auction/utils/index.utils";
 import { uid } from "@/features/auction/utils/index.utils";
+import { formatLakhs } from "@/features/auction/utils/index.utils";
 import {
   auctionApi,
   bidApi,
@@ -443,7 +444,7 @@ export class AuctionEngine {
       const franchise = this.franchises.find((f) => f.id === payload.teamId);
       this.pushLog(
         "bid",
-        `${franchise?.shortName || payload.teamName || "Unknown"} bids ${formatQuick(payload.amount)}`
+        `${franchise?.shortName || payload.teamName || "Unknown"} bids ${formatLakhs(payload.amount)}`
       );
 
       const resetSeconds = this.auction?.rules?.bidResetSeconds ?? 12;
@@ -484,7 +485,7 @@ export class AuctionEngine {
 
         this.pushLog(
           "sold",
-          `${player.name || payload.tournamentPlayerId} sold to ${franchise?.name || payload.soldToTeamName} for ${formatQuick(payload.soldPrice)}`
+          `${player.name || payload.tournamentPlayerId} sold to ${franchise?.name || payload.soldToTeamName} for ${formatLakhs(payload.soldPrice)}`
         );
         this.emit();
       }
@@ -1010,7 +1011,7 @@ export class AuctionEngine {
       const createdBid = await bidApi.placeBid(this.auctionId, { amount: nextAmount, teamId });
       this.currentBid = { amount: nextAmount, teamId };
       this.bidHistory = [{ ...createdBid, isUser }, ...this.bidHistory].slice(0, 200);
-      this.pushLog("bid", `${franchise.shortName} bids ${formatQuick(nextAmount)}${isUser ? " (You)" : ""}`);
+      this.pushLog("bid", `${franchise.shortName} bids ${formatLakhs(nextAmount)}${isUser ? " (You)" : ""}`);
 
       const resetSeconds = this.auction.rules.bidResetSeconds;
       if (this.timer.remaining < resetSeconds) {
@@ -1033,6 +1034,7 @@ export class AuctionEngine {
       this.bidInFlight = false;
     }
   }
+
 
   async forceSold(): Promise<{ success: boolean; error?: string }> {
     if (!this.auctionId || !this.currentPlayerId || !this.currentBid.teamId) {
@@ -1084,9 +1086,4 @@ export class AuctionEngine {
       return { success: false, error: msg };
     }
   }
-}
-
-function formatQuick(amount: number) {
-  if (amount >= 100) return `₹${(amount / 100).toFixed(amount % 100 === 0 ? 0 : 2)} Cr`;
-  return `₹${amount} L`;
 }

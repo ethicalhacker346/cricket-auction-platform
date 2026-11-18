@@ -597,3 +597,103 @@ had `ignoreDeprecations: "6.0"`, invalid for the installed TS 5.9.3 — every
   instance's timer. Single-instance deploys (current Railway setup) are
   unaffected.
 - **F7**: bid races surface as `VersionError`/500 rather than a clean 409.
+
+---
+
+# Part 3 — Auction Lifecycle Deep Dive (second pass)
+
+This pass went under the happy path: transaction boundaries, lifecycle
+entry-point collisions, and the registration → auction funnel invariants.
+
+## 🔴 Found & fixed
+
+**L1 — Domain events fired *inside* uncommitted transactions.**
+`settleLot` called `checkRoundCompletion` mid-transaction, and that chain
+(`handleNormalRoundClosed` → `createUnsoldRound` / `maybeCompleteAuction`)
+emitted `ROUND_COMPLETED`, `ROUND_ADDED`, and `AUCTION_COMPLETED` **before
+the outer commit**. If the outer transaction then aborted (e.g.
+VersionError on the auction save), clients were told about rounds and
+completions that never happened — the exact invariant the codebase works
+to keep everywhere else. Fixed with an **outbox pattern**: the completion
+chain accepts an `outbox` array; when running inside a caller's
+transaction it defers emissions, and `settleLot` drains the outbox
+immediately after `commitTransaction()`. Standalone callers
+(`markPermanentUnsold`) emit directly as before.
+
+**L2 — A notification failure could roll back a financial settlement or
+fake-fail a placed bid.** `NotificationService.create` was awaited
+*inside* `settleLot`'s transaction (its failure would abort the sale) and
+unprotected *after* `placeBid`'s commit (its failure returned a 500 for a
+bid that existed — a client retry would then hit "already highest bidder"
+and look like a phantom rejection). Notifications are now best-effort,
+post-commit, and log-then-swallow everywhere (bid service + registration
+service `notifySafely`).
+
+**L3 — Parallel tournament-lifecycle entry points collided.** The client
+calls `POST /tournaments/:id/schedule-auction` and `start-auction`, which
+drive the *tournament* state machine directly — while
+`AuctionService.create()`/`start()` drive the *same* transitions. Calling
+schedule-auction before creating the auction made auction creation throw
+`INVALID_TRANSITION` (AUCTION_SCHEDULED → AUCTION_SCHEDULED is not in the
+adjacency list). Both tournament-level methods and the auction
+create/start paths are now idempotent against already-achieved states.
+
+**L4 — Mid-auction rejections corrupted the auction.**
+- `rejectPlayer` had no guards: rejecting the **IN_PROGRESS** player let a
+  team buy a rejected player; rejecting any round-referenced player left
+  the round unresolvable forever (rounds complete only when every member
+  reaches a terminal outcome, and a rejected player can never be listed) —
+  a **permanently stuck auction**. Now: rejection is idempotent (no double
+  count-decrement), blocked once `lotOutcome ≠ NOT_LISTED`, and blocked
+  while the player is referenced by any auction round.
+- `rejectTeam` had no guards: rejecting a team mid-auction stranded its
+  wallet reservation and allowed settlements into a rejected roster. Now
+  idempotent and blocked once the tournament reaches AUCTION_RUNNING.
+
+**L5 — Client-supplied round `type` could wedge the engine.**
+`addRound` accepted `type: 'unsold'` from the API, creating an *unmanaged*
+unsold round (its players never reset to NOT_LISTED) — the engine's own
+`createUnsoldRound` would then no-op on the existing round, and the
+auction could never reach terminal state. The service now forces
+`type: NORMAL`, and `updateRound` rejects any type change with a 400
+(type is engine-managed).
+
+**L6 — Registration never actually closed.** `markTeamsApproved`
+transitioned the tournament but left `playerRegistrationOpen` /
+`teamRegistrationOpen` true — brand-new teams with full purses could
+register and be approved *while the auction was live*. Both flags now
+close at TEAMS_APPROVED.
+
+**L7 — Smaller hardening.**
+- `placeBidSchema.amount` now requires `.int()` (clean 400 instead of a
+  Mongoose ValidationError); `updateAuctionRulesSchema.bidIncrementTiers`
+  rejects empty arrays at the edge.
+- The strict per-user bid limiter (`auctionRateLimiter.js`, 5 bids/2s)
+  existed but was dead code — routes used the 6000/min global-shaped one.
+  Now wired in; its 429 payload returns `{ success: false, message }`
+  like every other API error.
+- `registerPlayer` now wraps registration + counter increment in a
+  transaction (matching `registerTeam`), so `playersCount` can't drift.
+- `listTeams` populated ghost fields `brandColor`/`shortCode` that don't
+  exist on Franchise (silently undefined) — now selects the real
+  `colorFrom`/`colorTo` and maps them through.
+- Client engine's `formatQuick` rendered raw-rupee amounts as lakhs
+  (a ₹1 Cr bid logged as "₹100000 Cr") — replaced with the codebase's
+  canonical `formatLakhs`.
+
+## Verified
+
+- `node --check` green on every touched backend file.
+- Socket contract verifier still 20/20 green.
+- `tsc --noEmit`: zero errors in touched files (the one new-looking hit
+  was a pre-existing unused import in an untouched file).
+- `vite build` succeeds.
+
+## Still open
+
+- `TEAMS_REJECTED` tournament status is defined but unreachable in
+  TOURNAMENT_TRANSITIONS — dead state, decide whether rejection of the
+  whole cohort should be a real transition or the enum entry dropped.
+- Tournament rename regenerates the slug without a friendly 409 on
+  collision (raw duplicate-key → handled as generic 409 by errorHandler).
+- The 445 pre-existing client type errors remain a separate cleanup.
