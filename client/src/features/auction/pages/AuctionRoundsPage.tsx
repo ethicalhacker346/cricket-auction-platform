@@ -11,7 +11,7 @@ import {
 import { RoundList } from "@/features/auction/components/RoundList";
 import type { AuctionRoundCategory } from "@/features/auction/types/index.types";
 import { resolveAuctionRoute } from "../routes/auction.navigation";
-import { AuctionSegments } from "../routes/auction.routes";
+import { AuctionRoutes, AuctionSegments } from "../routes/auction.routes";
 import { useAuctionContext } from "../hooks/useAuctionContext";
 import { PlayerPoolDrawer } from "../components/player-pool/PlayerPoolDrawer";
 
@@ -75,13 +75,6 @@ export default function AuctionRoundsPage() {
     setActiveRoundId(roundId);
     setDrawerOpen(true);
   }
-  function useAuctionRoutes(tournamentId: string, auctionId: string) {
-    const base = `/tournaments/${tournamentId}/auction/${auctionId}`;
-    return {
-      live: `${base}/live`,
-    };
-  }  
-    
 
   // ── Handlers ─────────────────────────────────────────────────────────
   async function handleAdd() {
@@ -155,7 +148,7 @@ export default function AuctionRoundsPage() {
           Only organizers can create and manage auction rounds.
         </p>
         <Link
-          to={useAuctionRoutes(tournamentId, auctionId).live}
+          to={AuctionRoutes.live(tournamentId, auctionId)}
           className="rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/20"
         >
           Go to Live Auction

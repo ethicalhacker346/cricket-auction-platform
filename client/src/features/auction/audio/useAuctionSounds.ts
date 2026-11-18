@@ -1,46 +1,31 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import { AuctionAudioManager } from "./AuctionAudioManager";
 import { useLiveAuctionStore } from "../store/index.store";
+import { getAuctionAudioMuted, setAuctionAudioMuted, useAuctionAudioMuted } from "./audioPreference";
 
 /**
  * Mount once near the auction UI root (via <AuctionSoundEngine />).
- *
- * Owns a single AuctionAudioManager: a fully-synthesized WebAudio engine —
- * no audio-file assets, sample-accurate scheduling, a mastered signal chain
- * (compressor + generated-impulse reverb), and user-gesture unlock. Feeds
- * it timer updates from the live store so urgency ticks stay aligned with
- * the authoritative server clock.
+ * Owns one live manager/subscription, created ONLY in an effect. React
+ * StrictMode replays setup → cleanup → setup; render-time construction
+ * leaked a manager and left the committed tree with a destroyed one.
  */
 export function useAuctionSounds() {
-  const managerRef = useRef<AuctionAudioManager | null>(null);
-
-  if (!managerRef.current && typeof window !== "undefined") {
-    managerRef.current = new AuctionAudioManager();
-  }
+  const muted = useAuctionAudioMuted();
 
   useEffect(() => {
-    const manager = managerRef.current;
-    if (!manager) return;
-    const unsub = useLiveAuctionStore.subscribe(
-      (s) => manager.onTimerUpdate(s.timer.remaining),
+    const manager = new AuctionAudioManager();
+    const unsubscribe = useLiveAuctionStore.subscribe(
+      (state) => manager.onTimerUpdate(state.timer.remaining),
     );
     return () => {
-      unsub();
+      unsubscribe();
       manager.destroy();
-      managerRef.current = null;
     };
   }, []);
 
   const toggleMute = useCallback(() => {
-    const manager = managerRef.current;
-    if (!manager) return;
-    manager.setMuted(!manager.muted);
+    setAuctionAudioMuted(!getAuctionAudioMuted());
   }, []);
 
-  return {
-    toggleMute,
-    get muted() {
-      return managerRef.current?.muted ?? false;
-    },
-  };
+  return { toggleMute, muted };
 }

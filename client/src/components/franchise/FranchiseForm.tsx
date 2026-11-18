@@ -381,7 +381,14 @@ export function FranchiseForm({
     [onSubmit]
   );
 
-  // Authorization guard for create mode
+  const handleSlugChange = useCallback(
+    (value: string) => {
+      setValue("slug", value, { shouldValidate: true, shouldDirty: true });
+    },
+    [setValue]
+  );
+
+  // Authorization guard for create mode. All hooks must stay above it.
   if (mode === "create" && !isAuthorized) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center space-y-4">
@@ -440,12 +447,7 @@ export function FranchiseForm({
 
           <SlugField
             value={watch("slug") ?? ""}
-            onChange={useCallback(
-              (val: string) => {
-                setValue("slug", val, { shouldValidate: true, shouldDirty: true });
-              },
-              [setValue]
-            )}
+            onChange={handleSlugChange}
             nameValue={nameValue}
             error={errors.slug?.message}
           />
