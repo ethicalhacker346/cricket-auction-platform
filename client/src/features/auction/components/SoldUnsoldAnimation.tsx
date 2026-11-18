@@ -1,668 +1,691 @@
-import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, animate, motion } from "framer-motion";
-import { useLiveAuction } from "@/features/auction/hooks/index.hook";
-import type { Franchise, Player } from "@/features/auction/types/index.types";
-import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
-import { Globe2, Gavel, XCircle, TrendingUp, Volume2, VolumeX } from "lucide-react";
-import { cn } from "@/utils/cn";
+import React, { useEffect, useMemo, useState } from "react";
+import { motion, AnimatePresence, useAnimationControls } from "framer-motion";
+import { Trophy, ArrowRight, Ban, Volume2, VolumeX, X } from "lucide-react";
 
-/* ─── Constants ─── */
-const CONFETTI_COLORS = ["#fbbf24", "#f59e0b", "#34d399", "#38bdf8", "#f472b6", "#a78bfa", "#fb7185"];
-const SOLD_DURATION_MS = 3600;
-const UNSOLD_DURATION_MS = 2400;
+/* ═══════════════════════════════════════════════════════════════════════
+   SoldUnsoldAnimation — the auction's moment of truth.
 
-/* =============================================================================
-   SOUND ENGINE — WebAudio chime + SpeechSynthesis announcer
-   =============================================================================
-   No audio files to ship or fetch: the "gavel knock" / "soft thud" cues are
-   synthesized on the fly with WebAudio, and the "X sold to Y for Z" / "X
-   unsold" line is read out with the browser's built-in speech synthesis.
-   Both are best-effort — browsers can block audio before any user gesture
-   has happened on the page, and some environments have no TTS voices
-   installed — so every call here is wrapped defensively and just no-ops
-   rather than throwing if audio isn't available.
-   ============================================================================= */
+   A full-screen cinematic reveal: the gavel falls in three deliberate
+   strikes, a shockwave ring fires, film-grain + confetti for a SOLD
+   verdict, or a rain of falling tags for UNSOLD. All sound is fully
+   synthesized WebAudio (mastered, reverberant); the TTS announcer is an
+   opt-in layer underneath the score rather than instead of it.
+   ═══════════════════════════════════════════════════════════════════════ */
 
-const SOUND_PREF_KEY = "gullybid-auction-sound-muted";
+const MUTE_KEY = "auction_audio_muted";
+const TICKER = "SOLD • SOLD • SOLD • SOLD • SOLD • SOLD • SOLD • SOLD • ";
 
-function readSoundPref(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(SOUND_PREF_KEY) === "1";
-  } catch {
-    return false;
-  }
+const EASE_OUT = [0.16, 1, 0.3, 1] as const;
+const EASE_IN = [0.55, 0, 1, 0.45] as const;
+
+/* ─────────────────────────── types ─────────────────────────── */
+
+export interface SoldUnsoldAnimationProps {
+  playerName: string;
+  playerRole?: string;
+  teamName?: string;
+  teamLogoUrl?: string;
+  teamColor?: string;
+  soldAmount?: number;
+  isSold: boolean;
+  onClose?: () => void;
+  /** ms before auto-dismiss. Defaults: 4200 sold / 3000 unsold. */
+  autoDismissMs?: number;
+  /** Show the synthesized sound + TTS announcer. Default true. */
+  enableSound?: boolean;
 }
 
-/** Lazily-created, reused AudioContext — browsers cap how many can exist,
- * and creating one only makes sense once something actually needs to play. */
-let sharedAudioCtx: AudioContext | null = null;
-function getAudioContext(): AudioContext | null {
-  if (typeof window === "undefined") return null;
-  const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-  if (!Ctor) return null;
-  if (!sharedAudioCtx) sharedAudioCtx = new Ctor();
-  if (sharedAudioCtx.state === "suspended") void sharedAudioCtx.resume().catch(() => {});
-  return sharedAudioCtx;
+/* ──────────────────────── confetti pieces ──────────────────────── */
+
+interface ConfettiPiece {
+  left: number;
+  size: number;
+  color: string;
+  delay: number;
+  duration: number;
+  sway: number;
+  spin: number;
+  circle: boolean;
 }
 
-/** A short, percussive two-knock "gavel" hit for SOLD. */
-function playGavelChime() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
-  const knock = (t: number, freq: number, gainPeak: number) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "triangle";
-    osc.frequency.setValueAtTime(freq, t);
-    osc.frequency.exponentialRampToValueAtTime(freq * 0.6, t + 0.09);
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(gainPeak, t + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(t);
-    osc.stop(t + 0.18);
-  };
-  const now = ctx.currentTime;
-  knock(now, 180, 0.35);
-  knock(now + 0.14, 220, 0.28);
+function useConfetti(active: boolean): ConfettiPiece[] {
+  return useMemo(() => {
+    if (!active) return [];
+    const palette = ["#fbbf24", "#fde047", "#34d399", "#f472b6", "#f8fafc"];
+    return Array.from({ length: 48 }, (_, i) => ({
+      left: Math.random() * 100,
+      size: 5 + Math.random() * 7,
+      color: palette[i % palette.length],
+      delay: 0.9 + Math.random() * 0.6,
+      duration: 1.9 + Math.random() * 1.3,
+      sway: (Math.random() - 0.5) * 60,
+      spin: 180 + Math.random() * 540,
+      circle: Math.random() > 0.6,
+    }));
+  }, [active]);
 }
 
-/** A soft, descending "no sale" tone for UNSOLD. */
-function playUnsoldChime() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
-  const now = ctx.currentTime;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(340, now);
-  osc.frequency.exponentialRampToValueAtTime(180, now + 0.4);
-  gain.gain.setValueAtTime(0, now);
-  gain.gain.linearRampToValueAtTime(0.22, now + 0.03);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(now);
-  osc.stop(now + 0.46);
+interface FallTag {
+  left: number;
+  delay: number;
+  duration: number;
+  drift: number;
+  spin: number;
 }
 
-/** Turns a formatted amount like "₹1.20 Cr" / "₹75.00 L" into something a
- * speech engine reads naturally, without needing to know formatLakhs'
- * internals — just strip the currency glyph and spell out the units. */
-function speechFriendlyAmount(formatted: string): string {
-  return formatted
-    .replace(/₹/g, "")
-    .replace(/\bCr\b/gi, "crore")
-    .replace(/\bL\b/gi, "lakh")
-    .replace(/\bK\b/gi, "thousand")
-    .trim();
+function useFallTags(active: boolean): FallTag[] {
+  return useMemo(() => {
+    if (!active) return [];
+    return Array.from({ length: 14 }, () => ({
+      left: 3 + Math.random() * 94,
+      delay: 0.55 + Math.random() * 1.1,
+      duration: 1.5 + Math.random() * 0.9,
+      drift: (Math.random() - 0.5) * 80,
+      spin: 90 + Math.random() * 270,
+    }));
+  }, [active]);
 }
 
-function speak(text: string) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel(); // don't let announcements queue up behind each other
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.95;
-    utterance.pitch = 1;
-    utterance.volume = 1;
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find((v) => /en-IN|en-GB|en-US/i.test(v.lang));
-    if (preferred) utterance.voice = preferred;
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    // Speech synthesis can throw in odd embedded/webview contexts — an
-    // announcement is a nice-to-have, never worth crashing the auction over.
-  }
-}
+/* ══════════════════════════ component ══════════════════════════ */
 
-/** Persisted mute toggle, shared by both the sold and unsold overlays. */
-function useSoundPreference() {
-  const [muted, setMuted] = useState(readSoundPref);
+export const SoldUnsoldAnimation: React.FC<SoldUnsoldAnimationProps> = ({
+  playerName,
+  playerRole,
+  teamName,
+  teamLogoUrl,
+  teamColor,
+  soldAmount,
+  isSold,
+  onClose,
+  autoDismissMs,
+  enableSound = true,
+}) => {
+  const [muted, setMuted] = useState<boolean>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(MUTE_KEY) ?? "false");
+    } catch {
+      return false;
+    }
+  });
 
-  const toggle = () => {
-    setMuted((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(SOUND_PREF_KEY, next ? "1" : "0");
-      } catch {
-        // Preference simply won't persist across sessions — harmless.
-      }
-      if (next) window.speechSynthesis?.cancel();
-      return next;
-    });
-  };
+  const confetti = useConfetti(isSold);
+  const tags = useFallTags(!isSold);
+  const cardControls = useAnimationControls();
 
-  return { muted, toggle };
-}
+  const accent = teamColor ?? (isSold ? "#34d399" : "#94a3b8");
+  const dismissAfter = autoDismissMs ?? (isSold ? 4200 : 3000);
 
-function MuteToggle({ muted, onToggle }: { muted: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      aria-label={muted ? "Unmute auction announcements" : "Mute auction announcements"}
-      title={muted ? "Unmute announcements" : "Mute announcements"}
-      className="absolute right-3 top-3 z-10 rounded-full bg-white/5 p-2 text-slate-400 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white sm:right-4 sm:top-4"
-    >
-      {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-    </button>
-  );
-}
-
-/* ─── Deterministic Hue (same algorithm as PlayerAuctionCard) ─── */
-function seedHue(seed: string): number {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) - hash) + seed.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash) % 360;
-}
-
-/* ─── useDismissingEvent (unchanged logic — the fix that stopped the freeze) ─── */
-function useDismissingEvent<T extends { seq: number }>(event: T | null | undefined, durationMs: number) {
-  const [active, setActive] = useState<T | null>(null);
-  const lastSeenSeq = useRef<number | null>(event?.seq ?? null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
+  /* ── sound (fully synthesized, mastered) ── */
   useEffect(() => {
-    if (!event || event.seq === lastSeenSeq.current) return;
-    lastSeenSeq.current = event.seq;
-    setActive(event);
-    clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setActive(null), durationMs);
-    return () => clearTimeout(hideTimer.current);
+    if (!enableSound || muted) return;
+    playVerdictScore(isSold, playerName, teamName, soldAmount);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event?.seq]);
+  }, [isSold, muted, enableSound]);
 
-  const dismiss = () => {
-    clearTimeout(hideTimer.current);
-    setActive(null);
+  /* ── auto dismiss ── */
+  useEffect(() => {
+    const t = window.setTimeout(() => onClose?.(), dismissAfter);
+    return () => window.clearTimeout(t);
+  }, [dismissAfter, onClose]);
+
+  /* ── escape to dismiss ── */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    try {
+      localStorage.setItem(MUTE_KEY, JSON.stringify(next));
+    } catch {
+      /* private mode */
+    }
   };
 
-  return { active, dismiss };
-}
-
-/* ─── DismissTimer (unchanged) ─── */
-function DismissTimer({ durationMs, colorClass }: { durationMs: number; colorClass: string }) {
-  return (
-    <div className="absolute inset-x-0 bottom-0 h-1 overflow-hidden rounded-b-3xl bg-white/5">
-      <motion.div
-        className={`h-full ${colorClass}`}
-        initial={{ width: "100%" }}
-        animate={{ width: "0%" }}
-        transition={{ duration: durationMs / 1000, ease: "linear" }}
-      />
-    </div>
-  );
-}
-
-/* ─── useImageFallback (unchanged) ─── */
-function useImageFallback(src?: string) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  return { showImage: Boolean(src) && !failed, onError: () => setFailed(true) };
-}
-
-/* ─── CelebrationAvatar ─── */
-function CelebrationAvatar({ player, size = "lg" }: { player: Player; size?: "md" | "lg" | "xl" }) {
-  const { showImage, onError } = useImageFallback(player.profileImage);
-  const hue = seedHue(player.avatarSeed || player.id || player.name);
-  const dims =
-    size === "xl"
-      ? "h-20 w-20 text-xl sm:h-24 sm:w-24 sm:text-2xl md:h-28 md:w-28 md:text-3xl"
-      : size === "lg"
-        ? "h-16 w-16 text-lg sm:h-20 sm:w-20 sm:text-2xl"
-        : "h-14 w-14 text-lg";
-
-  return (
-    <div className={cn("relative overflow-hidden rounded-2xl", dims)}>
-      {showImage ? (
-        <img src={player.profileImage} alt={player.name} onError={onError} className="h-full w-full object-cover" />
-      ) : (
-        <div
-          className="flex h-full w-full items-center justify-center font-bold text-white"
-          style={{ background: `linear-gradient(135deg, hsl(${hue} 70% 55%), hsl(${(hue + 55) % 360} 70% 40%))` }}
-        >
-          {initials(player.name)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── FranchiseBadge ─── */
-function FranchiseBadge({ franchise, size = "md" }: { franchise: Franchise; size?: "sm" | "md" | "lg" }) {
-  const { showImage, onError } = useImageFallback(franchise.logo);
-  const dims =
-    size === "lg"
-      ? "h-11 w-11 text-base sm:h-16 sm:w-16 sm:text-xl"
-      : size === "md"
-        ? "h-10 w-10 text-sm"
-        : "h-6 w-6 text-[10px]";
-
-  return (
-    <span className={cn("relative flex shrink-0 overflow-hidden rounded-full ring-2 ring-white/10 shadow-lg", dims)}>
-      {showImage ? (
-        <img src={franchise.logo} alt={franchise.name} onError={onError} className="h-full w-full object-cover" />
-      ) : (
-        <span
-          className="flex h-full w-full items-center justify-center font-bold text-white"
-          style={{ background: `linear-gradient(135deg, ${franchise.colorFrom}, ${franchise.colorTo})` }}
-        >
-          {initials(franchise.shortName)}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/* ─── AnimatedAmount (unchanged) ─── */
-function AnimatedAmount({ value }: { value: number }) {
-  const [display, setDisplay] = useState(0);
-  useEffect(() => {
-    setDisplay(0);
-    const controls = animate(0, value, { duration: 0.9, ease: "easeOut", onUpdate: (v) => setDisplay(Math.round(v)) });
-    return () => controls.stop();
-  }, [value]);
-  return <>{formatLakhs(display)}</>;
-}
-
-/* ─── TagBadge ─── */
-function TagBadge({ tag, compact = false }: { tag: string; compact?: boolean }) {
-  const styles: Record<string, string> = {
-    marquee: "bg-amber-400/15 text-amber-300 border-amber-400/20",
-    star: "bg-sky-400/15 text-sky-300 border-sky-400/20",
-    uncapped: "bg-slate-400/10 text-slate-400 border-white/10",
-  };
-  return (
-    <span
-      className={cn(
-        "rounded-full border font-bold uppercase tracking-wider",
-        styles[tag] || styles.uncapped,
-        compact ? "px-1 py-0 text-[8px]" : "px-1.5 py-0.5 text-[9px]"
-      )}
-    >
-      {tag}
-    </span>
-  );
-}
-
-/* ─── StyleChip ─── */
-function StyleChip({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-400 border border-white/5">
-      {children}
-    </span>
-  );
-}
-
-/* ─── PlayerDetailsStrip ─── */
-function PlayerDetailsStrip({ player }: { player: Player }) {
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="flex flex-wrap items-center justify-center gap-1.5">
-        {player.tag && <TagBadge tag={player.tag} />}
-        <span className="inline-flex items-center gap-1 rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 border border-white/5">
-          {player.role}
-        </span>
-        {player.overseas && (
-          <span className="inline-flex items-center gap-1 rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-300 border border-sky-400/15">
-            <Globe2 className="h-2.5 w-2.5" /> {player.country}
-          </span>
-        )}
-        {player.battingStyle && <StyleChip>{player.battingStyle}</StyleChip>}
-        {player.bowlingStyle && <StyleChip>{player.bowlingStyle}</StyleChip>}
-        {player.age > 0 && <StyleChip>{player.age} yrs</StyleChip>}
-      </div>
-
-      {player.stats && (player.stats.matches > 0 || player.stats.runs > 0 || player.stats.wickets > 0) && (
-        <div className="flex items-center gap-3 text-[10px] text-slate-500">
-          {player.stats.matches > 0 && (
-            <span className="inline-flex items-center gap-0.5">
-              <TrendingUp className="h-2.5 w-2.5" /> {player.stats.matches} M
-            </span>
-          )}
-          {player.stats.runs > 0 && <span>{player.stats.runs} Runs</span>}
-          {player.stats.wickets > 0 && <span>{player.stats.wickets} Wkts</span>}
-        </div>
-      )}
-
-      {player.bio && (
-        <p className="max-w-[220px] text-[10px] text-slate-500 line-clamp-2 leading-relaxed sm:max-w-[260px]">
-          {player.bio}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/* ─── ConfettiBurst (40 pieces, team-color aware) ─── */
-function ConfettiBurst({ teamColors }: { teamColors?: string[] }) {
-  const colors = teamColors?.length ? [...teamColors, ...CONFETTI_COLORS] : CONFETTI_COLORS;
-  const pieces = Array.from({ length: 40 });
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      {pieces.map((_, i) => {
-        const x = (Math.random() - 0.5) * 500;
-        const y = 180 + Math.random() * 220;
-        const rotate = Math.random() * 720 - 360;
-        const delay = Math.random() * 0.25;
-        const color = colors[i % colors.length];
-        const isWide = Math.random() > 0.5;
-        return (
-          <motion.span
-            key={i}
-            className={cn("absolute left-1/2 top-1/3 rounded-sm", isWide ? "h-2 w-3" : "h-3 w-2")}
-            style={{ background: color }}
-            initial={{ opacity: 1, x: 0, y: 0, rotate: 0, scale: 1 }}
-            animate={{ opacity: 0, x, y, rotate, scale: 0.2 }}
-            transition={{ duration: 1.2 + Math.random() * 0.6, delay, ease: "easeOut" }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-/* ─── ShockwaveRings ─── */
-function ShockwaveRings() {
-  return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-      {[0, 1, 2].map((i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full border-2 border-amber-400/15"
-          initial={{ width: 120, height: 120, opacity: 0.5 }}
-          animate={{ width: 700, height: 700, opacity: 0 }}
-          transition={{ duration: 2.5, delay: i * 0.5, ease: "easeOut", repeat: Infinity, repeatDelay: 2 }}
-        />
-      ))}
-    </div>
-  );
-}
-
-/* ─── SpotlightBackground ─── */
-function SpotlightBackground({ color = "amber" }: { color?: "amber" | "rose" }) {
-  const gradient =
-    color === "amber"
-      ? "radial-gradient(circle at 50% 50%, rgba(251,191,36,0.1) 0%, transparent 55%)"
-      : "radial-gradient(circle at 50% 50%, rgba(244,63,94,0.07) 0%, transparent 55%)";
-
-  return (
-    <motion.div
-      className="pointer-events-none absolute inset-0"
-      style={{ background: gradient }}
-      animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.1, 1] }}
-      transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-    />
-  );
-}
-
-/* ─── Main Component ─── */
-export function SoldUnsoldAnimation() {
-  const { soldEvent, unsoldEvent, franchises, players } = useLiveAuction();
-
-  const { active: activeSold, dismiss: dismissSold } = useDismissingEvent(soldEvent, SOLD_DURATION_MS);
-  const { active: activeUnsold, dismiss: dismissUnsold } = useDismissingEvent(unsoldEvent, UNSOLD_DURATION_MS);
-
-  const soldPlayer = activeSold ? players.find((p) => p.id === activeSold.playerId) : null;
-  const soldFranchise = activeSold ? franchises.find((f) => f.id === activeSold.teamId) : null;
-  const unsoldPlayer = activeUnsold ? players.find((p) => p.id === activeUnsold.playerId) : null;
-
-  const { muted, toggle: toggleMuted } = useSoundPreference();
-
-  // Announce SOLD — chime immediately (mirrors the gavel-drop moment), then
-  // the voice line once the name/franchise/price have had a beat to land
-  // visually. Keyed on event.seq (via a ref) so a re-render never re-fires
-  // the same announcement twice, but a genuinely new lot always does.
-  const lastAnnouncedSoldSeq = useRef<number | null>(null);
-  useEffect(() => {
-    if (!activeSold || !soldPlayer || muted) return;
-    if (lastAnnouncedSoldSeq.current === activeSold.seq) return;
-    lastAnnouncedSoldSeq.current = activeSold.seq;
-
-    playGavelChime();
-    const amount = speechFriendlyAmount(formatLakhs(activeSold.amount));
-    const line = soldFranchise
-      ? `${soldPlayer.name} sold to ${soldFranchise.name} for ${amount}`
-      : `${soldPlayer.name} sold for ${amount}`;
-    const timer = setTimeout(() => speak(line), 650);
-    return () => clearTimeout(timer);
-  }, [activeSold, soldPlayer, soldFranchise, muted]);
-
-  const lastAnnouncedUnsoldSeq = useRef<number | null>(null);
-  useEffect(() => {
-    if (!activeUnsold || !unsoldPlayer || muted) return;
-    if (lastAnnouncedUnsoldSeq.current === activeUnsold.seq) return;
-    lastAnnouncedUnsoldSeq.current = activeUnsold.seq;
-
-    playUnsoldChime();
-    const timer = setTimeout(() => speak(`${unsoldPlayer.name} unsold`), 450);
-    return () => clearTimeout(timer);
-  }, [activeUnsold, unsoldPlayer, muted]);
-
-  // Lock page scroll and support Escape to dismiss while either overlay is
-  // showing — it covers the whole viewport, so the page underneath
-  // shouldn't be scrollable or reachable by keyboard in the meantime.
-  useEffect(() => {
-    if (!activeSold && !activeUnsold) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (activeSold) dismissSold();
-      if (activeUnsold) dismissUnsold();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [activeSold, activeUnsold, dismissSold, dismissUnsold]);
+  const verdictWord = isSold ? "SOLD!" : "UNSOLD";
+  const letters = verdictWord.split("");
 
   return (
     <AnimatePresence>
-      {activeSold && soldPlayer && (
-        <motion.div
-          key={`sold-${activeSold.seq}`}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={dismissSold}
-          role="status"
-          aria-live="polite"
-          className="fixed inset-0 z-[70] flex cursor-pointer items-center justify-center overflow-y-auto bg-slate-950/80 p-4 py-8 backdrop-blur-md sm:p-6"
-        >
-          <SpotlightBackground color="amber" />
-          <ShockwaveRings />
+      <motion.div
+        key="verdict-overlay"
+        className="fixed inset-0 z-50 flex items-center justify-center"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.25 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={isSold ? `${playerName} sold` : `${playerName} unsold`}
+        onClick={onClose}
+      >
+        {/* backdrop */}
+        <div className="absolute inset-0 bg-black/85 backdrop-blur-md" />
 
-          <motion.div
-            initial={{ scale: 0.4, rotate: -10, opacity: 0 }}
-            animate={{ scale: 1, rotate: 0, opacity: 1 }}
-            transition={{ type: "spring", stiffness: 180, damping: 14 }}
-            className="relative my-auto flex w-full max-w-[22rem] flex-col items-center gap-3 overflow-hidden rounded-3xl border border-amber-400/20 bg-gradient-to-b from-slate-900/95 to-slate-950/95 px-6 py-7 text-center shadow-2xl shadow-amber-500/10 backdrop-blur-xl sm:max-w-md sm:gap-4 sm:px-10 sm:py-10"
-          >
-            <ConfettiBurst teamColors={soldFranchise ? [soldFranchise.colorFrom, soldFranchise.colorTo] : undefined} />
-            <MuteToggle muted={muted} onToggle={toggleMuted} />
+        {/* film grain */}
+        <div
+          aria-hidden
+          className="absolute inset-0 pointer-events-none opacity-[0.05] mix-blend-overlay"
+          style={{
+            backgroundImage:
+              "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E\")",
+          }}
+        />
 
-            {/* Gavel */}
-            <motion.div
-              initial={{ rotate: -35, scale: 0.5, opacity: 0 }}
-              animate={{ rotate: [0, -12, 6, 0], scale: 1, opacity: 1 }}
-              transition={{ duration: 0.7, delay: 0.1 }}
-              className="relative"
-            >
-              <Gavel className="h-10 w-10 text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.4)] sm:h-14 sm:w-14" />
+        {/* spotlight */}
+        <div
+          aria-hidden
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: `radial-gradient(ellipse 70% 55% at 50% 46%, ${accent}26 0%, transparent 65%)`,
+          }}
+        />
+
+        {/* shockwave rings (sold only) */}
+        {isSold && (
+          <>
+            {[0, 0.22].map((delay, i) => (
               <motion.div
-                className="absolute inset-0 rounded-full bg-amber-400/20 blur-2xl"
-                animate={{ scale: [1, 1.6, 1], opacity: [0.4, 0.15, 0.4] }}
-                transition={{ duration: 2.5, repeat: Infinity }}
+                key={i}
+                aria-hidden
+                className="absolute rounded-full pointer-events-none"
+                style={{
+                  width: 160,
+                  height: 160,
+                  border: `2px solid ${accent}`,
+                  boxShadow: `0 0 40px ${accent}55`,
+                }}
+                initial={{ scale: 0.2, opacity: 0 }}
+                animate={{ scale: [0.2, 3.4], opacity: [0, 0.75, 0] }}
+                transition={{ delay: 1.62 + delay, duration: 0.9, ease: "easeOut" }}
               />
-            </motion.div>
+            ))}
+          </>
+        )}
 
-            {/* SOLD! */}
-            <motion.h2
-              initial={{ y: 25, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.2, type: "spring" }}
-              className="text-4xl font-black tracking-tighter sm:text-6xl"
-              style={{
-                background: "linear-gradient(135deg, #fbbf24, #f59e0b, #fcd34d, #fbbf24)",
-                backgroundSize: "200% 200%",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-              }}
-            >
-              SOLD!
-            </motion.h2>
-
-            {/* Player Avatar with team glow */}
+        {/* ticker strip (sold only) */}
+        {isSold && (
+          <div
+            aria-hidden
+            className="absolute top-8 left-0 right-0 overflow-hidden opacity-20 pointer-events-none select-none"
+          >
             <motion.div
-              initial={{ scale: 0.4, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.3, type: "spring", stiffness: 200 }}
-              className="relative"
+              className="whitespace-nowrap font-black text-3xl tracking-[0.4em] text-emerald-300"
+              initial={{ x: 0 }}
+              animate={{ x: "-50%" }}
+              transition={{ repeat: Infinity, duration: 18, ease: "linear" }}
             >
-              {soldFranchise && (
-                <motion.div
-                  className="absolute -inset-3 rounded-[22px] blur-md"
-                  style={{
-                    background: `linear-gradient(135deg, ${soldFranchise.colorFrom}, ${soldFranchise.colorTo})`,
-                    opacity: 0.35,
-                  }}
-                  animate={{ opacity: [0.25, 0.45, 0.25] }}
-                  transition={{ duration: 2.5, repeat: Infinity }}
-                />
+              {TICKER + TICKER}
+            </motion.div>
+          </div>
+        )}
+
+        {/* confetti (sold) */}
+        {isSold &&
+          confetti.map((c, i) => (
+            <motion.span
+              key={i}
+              aria-hidden
+              className="absolute top-0 pointer-events-none"
+              style={{
+                left: `${c.left}%`,
+                width: c.size,
+                height: c.circle ? c.size : c.size * 1.8,
+                backgroundColor: c.color,
+                borderRadius: c.circle ? "50%" : 2,
+              }}
+              initial={{ y: -30, x: 0, rotate: 0, opacity: 0 }}
+              animate={{
+                y: ["0vh", "105vh"],
+                x: [0, c.sway, -c.sway * 0.6],
+                rotate: c.spin,
+                opacity: [0, 1, 1, 0.8],
+              }}
+              transition={{
+                delay: c.delay,
+                duration: c.duration,
+                ease: "easeIn",
+              }}
+            />
+          ))}
+
+        {/* falling price tags (unsold) */}
+        {!isSold &&
+          tags.map((t, i) => (
+            <motion.span
+              key={i}
+              aria-hidden
+              className="absolute top-0 pointer-events-none select-none"
+              style={{ left: `${t.left}%`, fontSize: 22 }}
+              initial={{ y: -40, x: 0, rotate: 0, opacity: 0 }}
+              animate={{ y: ["0vh", "108vh"], x: [0, t.drift], rotate: t.spin, opacity: [0, 0.85, 0.85, 0] }}
+              transition={{ delay: t.delay, duration: t.duration, ease: "easeIn" }}
+            >
+              🏷️
+            </motion.span>
+          ))}
+
+        {/* control buttons */}
+        <div className="absolute top-5 right-5 flex items-center gap-2 z-10">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleMute();
+            }}
+            aria-label={muted ? "Unmute sound" : "Mute sound"}
+            className="rounded-full bg-white/10 hover:bg-white/20 border border-white/15 p-2.5 text-white/80 transition-colors"
+          >
+            {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
+            aria-label="Dismiss"
+            className="rounded-full bg-white/10 hover:bg-white/20 border border-white/15 p-2.5 text-white/80 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* ══════════ the verdict card ══════════ */}
+        <motion.div
+          className="relative w-[min(92vw,480px)]"
+          animate={cardControls}
+          initial={{ scale: 0.8, opacity: 0, y: 34 }}
+          whileInView={undefined}
+          transition={{ duration: 0.55, ease: EASE_OUT }}
+          ref={(el) => {
+            if (!el) return;
+            // Entrance → gavel slam kicks (sold) or settle (unsold)
+            cardControls.start({
+              scale: [0.8, 1.04, 1],
+              opacity: 1,
+              y: 0,
+              transition: { duration: 0.55, ease: EASE_OUT },
+            });
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            className="relative overflow-hidden rounded-3xl border px-8 pb-8 pt-10 text-center"
+            style={{
+              background: isSold
+                ? "linear-gradient(160deg, rgba(6,30,20,0.96), rgba(2,12,9,0.98))"
+                : "linear-gradient(160deg, rgba(24,26,34,0.96), rgba(8,9,13,0.98))",
+              borderColor: `${accent}44`,
+              boxShadow: `0 30px 90px -20px ${accent}55, 0 0 0 1px ${accent}22 inset`,
+            }}
+          >
+            {/* verdict ribbon */}
+            <motion.div
+              className="absolute -left-14 top-7 rotate-[-38deg] px-16 py-1.5 text-xs font-black tracking-[0.3em]"
+              style={{
+                background: isSold
+                  ? "linear-gradient(90deg,#059669,#34d399)"
+                  : "linear-gradient(90deg,#475569,#94a3b8)",
+                color: isSold ? "#052e1c" : "#0f172a",
+              }}
+              initial={{ x: -60, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ delay: 0.35, duration: 0.45, ease: EASE_OUT }}
+            >
+              {isSold ? "SOLD" : "PASS"}
+            </motion.div>
+
+            {/* verdict icon */}
+            <motion.div
+              className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full"
+              style={{
+                background: `${accent}1f`,
+                border: `2px solid ${accent}66`,
+                boxShadow: `0 0 44px ${accent}44`,
+              }}
+              initial={{ scale: 0, rotate: isSold ? -120 : 120 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 15 }}
+            >
+              {isSold ? (
+                <Trophy className="h-9 w-9" style={{ color: accent }} />
+              ) : (
+                <Ban className="h-9 w-9" style={{ color: accent }} />
               )}
-              <div
-                className={cn(
-                  "relative overflow-hidden rounded-2xl ring-2 ring-offset-2 ring-offset-slate-950",
-                  soldFranchise ? "ring-offset-[3px]" : "ring-white/10"
-                )}
-                style={soldFranchise ? { ringColor: soldFranchise.colorFrom } : undefined}
-              >
-                <CelebrationAvatar player={soldPlayer} size="xl" />
-              </div>
             </motion.div>
 
-            {/* Player Name */}
-            <motion.p
-              initial={{ y: 12, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.4 }}
-              className="text-xl font-black text-white tracking-tight sm:text-3xl"
+            {/* player name */}
+            <motion.h2
+              className="text-3xl font-black text-white leading-tight"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3, duration: 0.4, ease: EASE_OUT }}
             >
-              {soldPlayer.name}
-            </motion.p>
+              {playerName}
+            </motion.h2>
+            {playerRole && (
+              <motion.p
+                className="mt-1 text-xs font-semibold uppercase tracking-[0.25em] text-white/50"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.42 }}
+              >
+                {playerRole}
+              </motion.p>
+            )}
 
-            {/* Details */}
-            <motion.div initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.45 }}>
-              <PlayerDetailsStrip player={soldPlayer} />
+            {/* verdict word — letter-cascade with landing bounce */}
+            <div
+              className="mt-4 flex items-end justify-center gap-1 select-none"
+              aria-hidden
+            >
+              {letters.map((ch, i) => (
+                <motion.span
+                  key={i}
+                  className={`inline-block font-black ${
+                    ch === " " ? "w-3" : ""
+                  } ${isSold ? "text-6xl" : "text-5xl"}`}
+                  style={{
+                    color: isSold ? "#fbbf24" : "#cbd5e1",
+                    textShadow: isSold
+                      ? "0 0 30px rgba(251,191,36,0.55), 0 2px 0 rgba(120,70,0,0.6)"
+                      : "0 0 24px rgba(148,163,184,0.35)",
+                    fontFamily: "'Arial Black', 'Helvetica Neue', sans-serif",
+                    WebkitTextStroke: isSold ? "1px rgba(120,70,0,0.45)" : "1px rgba(15,23,42,0.5)",
+                  }}
+                  initial={{ y: -90, opacity: 0, scaleY: 1.4 }}
+                  animate={{ y: [ -90, 8, -4, 0 ], opacity: 1, scaleY: 1 }}
+                  transition={{
+                    delay: 0.55 + i * 0.06,
+                    duration: 0.55,
+                    times: [0, 0.7, 0.85, 1],
+                    ease: "easeOut",
+                  }}
+                >
+                  {ch === " " ? "\u00A0" : ch}
+                </motion.span>
+              ))}
+            </div>
+
+            {/* destination row */}
+            <motion.div
+              className="mt-6 flex items-center justify-center gap-3"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1.05, duration: 0.4, ease: EASE_OUT }}
+            >
+              {isSold ? (
+                <>
+                  {teamLogoUrl ? (
+                    <img
+                      src={teamLogoUrl}
+                      alt={teamName ?? ""}
+                      className="h-9 w-9 rounded-full object-cover ring-2 ring-white/20"
+                    />
+                  ) : (
+                    <span
+                      className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-black ring-2 ring-white/20"
+                      style={{ background: `${accent}33`, color: accent }}
+                    >
+                      {(teamName ?? "?").slice(0, 2).toUpperCase()}
+                    </span>
+                  )}
+                  <span className="text-lg font-bold text-white/90">{teamName}</span>
+                  {soldAmount != null && (
+                    <>
+                      <ArrowRight className="h-4 w-4 text-white/40" />
+                      <AnimatedAmount value={soldAmount} />
+                    </>
+                  )}
+                </>
+              ) : (
+                <span className="text-base font-medium text-white/60">
+                  No bids received — returns to the pool
+                </span>
+              )}
             </motion.div>
 
-            {/* Franchise */}
-            {soldFranchise && (
+            {/* gavel rap marks (sold) */}
+            {isSold && (
               <motion.div
-                initial={{ y: 12, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.55 }}
-                className="flex flex-col items-center gap-2"
+                className="mx-auto mt-7 flex w-fit items-center gap-2 opacity-70"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.7 }}
+                transition={{ delay: 1.6 }}
               >
-                <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-slate-500">Sold To</span>
-                <div className="flex items-center gap-3">
-                  <FranchiseBadge franchise={soldFranchise} size="lg" />
-                  <span
-                    className="text-lg font-black sm:text-2xl"
-                    style={{
-                      background: `linear-gradient(135deg, ${soldFranchise.colorFrom}, ${soldFranchise.colorTo})`,
-                      WebkitBackgroundClip: "text",
-                      WebkitTextFillColor: "transparent",
-                    }}
-                  >
-                    {soldFranchise.name}
-                  </span>
-                </div>
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="block h-1.5 w-8 rounded-full bg-amber-400/70"
+                    initial={{ scaleX: 0 }}
+                    animate={{ scaleX: 1 }}
+                    transition={{ delay: 1.62 + i * 0.14, duration: 0.12, ease: "easeOut" }}
+                    style={{ transformOrigin: "left" }}
+                  />
+                ))}
               </motion.div>
             )}
 
-            {/* Price */}
-            <motion.div
-              initial={{ scale: 0.4, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.65, type: "spring", stiffness: 180 }}
-              className="flex flex-col items-center gap-1"
-            >
-              <p className="text-3xl font-black text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.35)] sm:text-5xl">
-                <AnimatedAmount value={activeSold.amount} />
-              </p>
-              <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-slate-500">Hammer Price</span>
-            </motion.div>
-
-            <p className="text-[10px] uppercase tracking-widest text-slate-600 mt-1">Tap anywhere to dismiss</p>
-            <DismissTimer durationMs={SOLD_DURATION_MS} colorClass="bg-amber-400" />
-          </motion.div>
+            {/* sweep shine (sold) */}
+            {isSold && (
+              <motion.div
+                aria-hidden
+                className="pointer-events-none absolute inset-0"
+                initial={{ x: "-120%" }}
+                animate={{ x: "120%" }}
+                transition={{ delay: 1.3, duration: 1.1, ease: EASE_IN }}
+                style={{
+                  background:
+                    "linear-gradient(100deg, transparent 20%, rgba(255,255,255,0.09) 50%, transparent 80%)",
+                  width: "55%",
+                }}
+              />
+            )}
+          </div>
         </motion.div>
-      )}
-
-      {activeUnsold && unsoldPlayer && (
-        <motion.div
-          key={`unsold-${activeUnsold.seq}`}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={dismissUnsold}
-          role="status"
-          aria-live="polite"
-          className="fixed inset-0 z-[70] flex cursor-pointer items-center justify-center overflow-y-auto bg-slate-950/80 p-4 py-8 backdrop-blur-md sm:p-6"
-        >
-          <SpotlightBackground color="rose" />
-
-          <motion.div
-            initial={{ scale: 0.4, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1, x: [0, -5, 5, -3, 3, 0] }}
-            transition={{ type: "spring", stiffness: 220, damping: 14, x: { duration: 0.5, delay: 0.3 } }}
-            className="relative my-auto flex w-full max-w-[22rem] flex-col items-center gap-3 overflow-hidden rounded-3xl border border-rose-500/20 bg-gradient-to-b from-slate-900/95 to-slate-950/95 px-6 py-7 text-center shadow-2xl shadow-rose-500/10 backdrop-blur-xl sm:max-w-md sm:gap-4 sm:px-10 sm:py-10"
-          >
-            <MuteToggle muted={muted} onToggle={toggleMuted} />
-
-            <XCircle className="h-10 w-10 text-rose-400 drop-shadow-[0_0_12px_rgba(244,63,94,0.3)] sm:h-14 sm:w-14" />
-
-            <h2
-              className="text-4xl font-black tracking-tighter text-rose-400 sm:text-6xl"
-              style={{ textShadow: "0 0 30px rgba(244,63,94,0.25)" }}
-            >
-              UNSOLD
-            </h2>
-
-            <div className="grayscale opacity-70">
-              <CelebrationAvatar player={unsoldPlayer} size="lg" />
-            </div>
-
-            <p className="text-xl font-black text-white tracking-tight sm:text-3xl">{unsoldPlayer.name}</p>
-
-            <PlayerDetailsStrip player={unsoldPlayer} />
-
-            <div className="flex flex-col items-center gap-1.5">
-              <span className="text-xs font-medium text-slate-500">No takers at base price</span>
-              <span className="text-lg font-bold text-slate-400 line-through decoration-rose-500/40 decoration-2 sm:text-2xl">
-                {formatLakhs(unsoldPlayer.basePrice)}
-              </span>
-            </div>
-
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 border border-rose-500/20">
-              Returns to Player Pool
-            </span>
-
-            <p className="text-[10px] uppercase tracking-widest text-slate-600 mt-1">Tap anywhere to dismiss</p>
-            <DismissTimer durationMs={UNSOLD_DURATION_MS} colorClass="bg-rose-400" />
-          </motion.div>
-        </motion.div>
-      )}
+      </motion.div>
     </AnimatePresence>
   );
+};
+
+export default SoldUnsoldAnimation;
+
+/* ───────────────── animated amount ───────────────── */
+
+const AnimatedAmount: React.FC<{ value: number }> = ({ value }) => {
+  const [display, setDisplay] = useState(0);
+
+  useEffect(() => {
+    const start = performance.now();
+    const duration = 900;
+    let raf = 0;
+    const step = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(Math.round(value * eased));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+
+  return (
+    <span className="text-2xl font-black tabular-nums text-amber-300" style={{ textShadow: "0 0 24px rgba(251,191,36,0.5)" }}>
+      {formatINRCompact(display)}
+    </span>
+  );
+};
+
+function formatINRCompact(n: number): string {
+  if (n >= 1_00_00_000) return `₹${(n / 1_00_00_000).toFixed(2).replace(/\.00$/, "")} Cr`;
+  if (n >= 1_00_000) return `₹${(n / 1_00_000).toFixed(1).replace(/\.0$/, "")} L`;
+  if (n >= 1_000) return `₹${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `₹${n}`;
+}
+
+/* ═════════════════ synthesized verdict score ═════════════════
+   Self-contained WebAudio: gavel raps + applause swell + fanfare for SOLD,
+   descending sigh + floor thud for UNSOLD, with an optional TTS announcer
+   line layered underneath. Generated impulse-response reverb gives it room.
+   ═══════════════════════════════════════════════════════════════ */
+
+function playVerdictScore(
+  isSold: boolean,
+  playerName: string,
+  teamName?: string,
+  soldAmount?: number,
+) {
+  const ctx = getSharedCtx();
+  if (ctx) {
+    const master = ctx.createGain();
+    master.gain.value = 0.9;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -16;
+    comp.ratio.value = 4;
+    comp.connect(ctx.destination);
+    master.connect(comp);
+
+    const reverb = makeReverb(ctx);
+    if (reverb) {
+      const wet = ctx.createGain();
+      wet.gain.value = 0.3;
+      reverb.connect(wet).connect(master);
+      if (isSold) synthSold(ctx, master, reverb);
+      else synthUnsold(ctx, master, reverb);
+    }
+  }
+  speakVerdict(isSold, playerName, teamName, soldAmount);
+}
+
+let sharedCtx: AudioContext | null = null;
+function getSharedCtx(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+  if (!Ctor) return null;
+  if (!sharedCtx) sharedCtx = new Ctor();
+  if (sharedCtx.state === "suspended") void sharedCtx.resume().catch(() => {});
+  return sharedCtx;
+}
+
+function makeReverb(ctx: AudioContext): ConvolverNode | null {
+  try {
+    const seconds = 1.4;
+    const len = Math.floor(seconds * ctx.sampleRate);
+    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = ir.getChannelData(c);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.2);
+    }
+    const conv = ctx.createConvolver();
+    conv.buffer = ir;
+    return conv;
+  } catch {
+    return null;
+  }
+}
+
+function synthTone(
+  ctx: AudioContext, out: AudioNode,
+  o: { type: OscillatorType; f: number; fEnd?: number; at: number; decay: number; peak: number },
+) {
+  const t = ctx.currentTime + o.at;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = o.type;
+  osc.frequency.setValueAtTime(Math.max(20, o.f), t);
+  if (o.fEnd) osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.fEnd), t + o.decay * 0.9);
+  g.setValueAtTime(0, t);
+  g.linearRampToValueAtTime(o.peak, t + 0.006);
+  g.exponentialRampToValueAtTime(0.0004, t + o.decay);
+  osc.connect(g).connect(out);
+  osc.start(t);
+  osc.stop(t + o.decay + 0.05);
+}
+
+function synthNoise(
+  ctx: AudioContext, out: AudioNode,
+  o: { at: number; dur: number; peak: number; type: BiquadFilterType; freq: number; freqEnd?: number; q?: number; attack?: number },
+) {
+  const t = ctx.currentTime + o.at;
+  const len = Math.max(1, Math.floor(ctx.sampleRate * o.dur));
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const f = ctx.createBiquadFilter();
+  f.type = o.type;
+  f.frequency.setValueAtTime(o.freq, t);
+  if (o.freqEnd) f.frequency.exponentialRampToValueAtTime(Math.max(30, o.freqEnd), t + o.dur);
+  f.Q.value = o.q ?? 1;
+  const g = ctx.createGain();
+  g.setValueAtTime(0, t);
+  g.linearRampToValueAt(o.peak, t + (o.attack ?? 0.005));
+  g.exponentialRampToValueAtTime(0.0004, t + o.dur);
+  src.connect(f).connect(g).connect(out);
+  src.start(t);
+  src.stop(t + o.dur + 0.05);
+}
+
+function synthSold(ctx: AudioContext, dry: AudioNode, wet: AudioNode) {
+  // three gavel raps — one-two-three
+  [0, 0.16, 0.34].forEach((at, i) => {
+    const weight = 1 - i * 0.14;
+    synthTone(ctx, dry, { type: "sine", f: 95, fEnd: 50, at, decay: 0.22, peak: 0.85 * weight });
+    synthNoise(ctx, dry, { at, dur: 0.1, peak: 0.5 * weight, type: "lowpass", freq: 520, q: 0.8 });
+    synthNoise(ctx, dry, { at, dur: 0.028, peak: 0.36 * weight, type: "bandpass", freq: 2200, q: 4 });
+    // room echo of the rap
+    synthTone(ctx, wet, { type: "sine", f: 140, fEnd: 70, at: at + 0.02, decay: 0.5, peak: 0.3 * weight });
+  });
+  // applause swell
+  synthNoise(ctx, dry, { at: 0.55, dur: 1.4, peak: 0.3, attack: 0.28, type: "bandpass", freq: 1100, freqEnd: 1700, q: 0.6 });
+  synthNoise(ctx, dry, { at: 0.6, dur: 1.1, peak: 0.16, attack: 0.24, type: "highpass", freq: 5000 });
+  // fanfare: C5 E5 G5 C6
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+    const at = 0.62 + i * 0.09;
+    synthTone(ctx, dry, { type: "triangle", f, at, decay: 0.55, peak: 0.15 });
+    synthTone(ctx, wet, { type: "triangle", f: f * 2, at, decay: 0.4, peak: 0.06 });
+  });
+}
+
+function synthUnsold(ctx: AudioContext, dry: AudioNode, wet: AudioNode) {
+  synthTone(ctx, dry, { type: "sawtooth", f: 220, fEnd: 156, at: 0, decay: 0.6, peak: 0.14 });
+  synthTone(ctx, dry, { type: "sawtooth", f: 221.5, fEnd: 154, at: 0, decay: 0.6, peak: 0.14 });
+  synthTone(ctx, wet, { type: "sine", f: 110, fEnd: 76, at: 0.05, decay: 0.7, peak: 0.3 });
+  synthNoise(ctx, dry, { at: 0.4, dur: 0.35, peak: 0.12, type: "lowpass", freq: 320 });
+}
+
+function speakVerdict(
+  isSold: boolean,
+  playerName: string,
+  teamName?: string,
+  soldAmount?: number,
+) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  const amount = soldAmount != null ? formatINRCompact(soldAmount) : "";
+  const text = isSold
+    ? `${playerName}, sold${teamName ? ` to ${teamName}` : ""}${amount ? ` for ${amount.replace("₹", "rupees ")}` : ""}!`
+    : `${playerName} goes unsold.`;
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = isSold ? 1.02 : 0.95;
+    utterance.pitch = isSold ? 1.05 : 0.9;
+    utterance.volume = 0.85;
+    const voices = window.speechSynthesis.getVoices();
+    const preferred =
+      voices.find((v) => v.lang === "en-IN") ??
+      voices.find((v) => v.lang === "en-GB") ??
+      voices.find((v) => v.lang.startsWith("en"));
+    if (preferred) utterance.voice = preferred;
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    /* TTS is a garnish — never let it break the reveal */
+  }
 }
