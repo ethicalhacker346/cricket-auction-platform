@@ -143,17 +143,17 @@ export class AuctionAudioManager {
     const { ctx, input, t } = bus;
     const at = t + (opts.at ?? 0);
     const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
     osc.type = opts.freq > 2000 ? "sine" : opts.type;
     osc.frequency.setValueAtTime(Math.max(20, opts.freq), at);
     if (opts.freqEnd) {
       osc.frequency.exponentialRampToValueAtTime(Math.max(20, opts.freqEnd), at + opts.decay * 0.9);
     }
     if (opts.detune) osc.detune.value = opts.detune;
-    gain.setValueAtTime(0, at);
-    gain.linearRampToValueAtTime(opts.peak, at + (opts.attack ?? 0.006));
-    gain.exponentialRampToValueAtTime(0.0004, at + opts.decay);
-    osc.connect(gain).connect(input);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, at);
+    env.gain.linearRampToValueAtTime(opts.peak, at + (opts.attack ?? 0.006));
+    env.gain.exponentialRampToValueAtTime(0.0004, at + opts.decay);
+    osc.connect(env).connect(input);
     osc.start(at);
     osc.stop(at + opts.decay + 0.05);
   }
@@ -189,9 +189,9 @@ export class AuctionAudioManager {
     }
     filter.Q.value = opts.q ?? 1;
     const gain = ctx.createGain();
-    gain.setValueAtTime(0, at);
-    gain.linearRampToValueAtTime(opts.peak, at + (opts.attack ?? 0.005));
-    gain.exponentialRampToValueAtTime(0.0004, at + opts.duration);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(opts.peak, at + (opts.attack ?? 0.005));
+    gain.gain.exponentialRampToValueAtTime(0.0004, at + opts.duration);
     src.connect(filter).connect(gain).connect(input);
     src.start(at);
     src.stop(at + opts.duration + 0.05);
@@ -211,12 +211,12 @@ export class AuctionAudioManager {
     const amp = ctx.createGain();
     carrier.frequency.value = opts.carrier;
     modulator.frequency.value = opts.carrier * ratio;
-    modGain.setValueAtTime(opts.carrier * 2.4, at);
-    modGain.exponentialRampToValueAtTime(1, at + opts.decay * 0.8);
+    modGain.gain.setValueAtTime(opts.carrier * 2.4, at);
+    modGain.gain.exponentialRampToValueAtTime(1, at + opts.decay * 0.8);
     modulator.connect(modGain).connect(carrier.frequency);
-    amp.setValueAtTime(0, at);
-    amp.linearRampToValueAtTime(opts.peak, at + 0.005);
-    amp.exponentialRampToValueAtTime(0.0004, at + opts.decay);
+    amp.gain.setValueAtTime(0, at);
+    amp.gain.linearRampToValueAtTime(opts.peak, at + 0.005);
+    amp.gain.exponentialRampToValueAtTime(0.0004, at + opts.decay);
     carrier.connect(amp).connect(input);
     carrier.start(at);
     modulator.start(at);
@@ -362,34 +362,41 @@ export class AuctionAudioManager {
       if (first) this.recent.delete(first);
     }
 
-    switch (event.type) {
-      case "BID_PLACED":
-        this.playBid(event.payload.isFirstBid);
-        break;
-      case "LOT_OPENED":
-        this.playLotOpened();
-        break;
-      case "LOT_SOLD":
-        this.playSold();
-        break;
-      case "LOT_UNSOLD":
-        this.playUnsold();
-        break;
-      case "AUCTION_STARTED":
-        this.playAuctionStarted();
-        break;
-      case "AUCTION_PAUSED":
-        this.playPaused();
-        break;
-      case "AUCTION_RESUMED":
-        this.playResumed();
-        break;
-      case "ROUND_COMPLETED":
-        this.playRoundCompleted();
-        break;
-      case "TIMER_TICK":
-        this.playTick(event.payload.urgency);
-        break;
+    // Audio is a garnish on the auction, never a reason to break it: a
+    // failure in any voice (device policy, context quirks) degrades to
+    // silence for that event instead of throwing into the event bus.
+    try {
+      switch (event.type) {
+        case "BID_PLACED":
+          this.playBid(event.payload.isFirstBid);
+          break;
+        case "LOT_OPENED":
+          this.playLotOpened();
+          break;
+        case "LOT_SOLD":
+          this.playSold();
+          break;
+        case "LOT_UNSOLD":
+          this.playUnsold();
+          break;
+        case "AUCTION_STARTED":
+          this.playAuctionStarted();
+          break;
+        case "AUCTION_PAUSED":
+          this.playPaused();
+          break;
+        case "AUCTION_RESUMED":
+          this.playResumed();
+          break;
+        case "ROUND_COMPLETED":
+          this.playRoundCompleted();
+          break;
+        case "TIMER_TICK":
+          this.playTick(event.payload.urgency);
+          break;
+      }
+    } catch (err) {
+      console.warn("[AuctionAudioManager] voice failed:", err);
     }
   }
 
@@ -398,27 +405,32 @@ export class AuctionAudioManager {
    * seconds and plays a closing buzzer when the clock runs out.
    */
   onTimerUpdate(remaining: number) {
-    const sec = Math.ceil(remaining);
-    if (sec <= 0) {
-      if (this.timerHadRun && this.timerLastSecond !== 0) {
-        this.timerLastSecond = 0;
-        this.timerHadRun = false;
-        this.playExpired();
+    // Runs inside a store subscription — must never throw back into it.
+    try {
+      const sec = Math.ceil(remaining);
+      if (sec <= 0) {
+        if (this.timerHadRun && this.timerLastSecond !== 0) {
+          this.timerLastSecond = 0;
+          this.timerHadRun = false;
+          this.playExpired();
+        }
+        this.timerLastSecond = -1;
+        return;
       }
-      this.timerLastSecond = -1;
-      return;
-    }
-    if (sec <= 5) this.timerHadRun = true;
-    if (sec > 5) {
-      this.timerLastSecond = -1;
-      return;
-    }
-    if (sec === this.timerLastSecond) return;
-    this.timerLastSecond = sec;
+      if (sec <= 5) this.timerHadRun = true;
+      if (sec > 5) {
+        this.timerLastSecond = -1;
+        return;
+      }
+      if (sec === this.timerLastSecond) return;
+      this.timerLastSecond = sec;
 
-    const urgency: "normal" | "fast" | "final" =
-      sec === 1 ? "final" : sec <= 3 ? "fast" : "normal";
-    this.playTick(urgency);
+      const urgency: "normal" | "fast" | "final" =
+        sec === 1 ? "final" : sec <= 3 ? "fast" : "normal";
+      this.playTick(urgency);
+    } catch (err) {
+      console.warn("[AuctionAudioManager] timer sound failed:", err);
+    }
   }
 
   /* ─────────────────────────── controls ──────────────────────────── */

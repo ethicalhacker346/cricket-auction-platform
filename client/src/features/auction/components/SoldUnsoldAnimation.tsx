@@ -88,7 +88,7 @@ function useFallTags(active: boolean): FallTag[] {
 
 /* ══════════════════════════ component ══════════════════════════ */
 
-export const SoldUnsoldAnimation: React.FC<SoldUnsoldAnimationProps> = ({
+export const SoldUnsoldAnimationView: React.FC<SoldUnsoldAnimationProps> = ({
   playerName,
   playerRole,
   teamName,
@@ -118,7 +118,13 @@ export const SoldUnsoldAnimation: React.FC<SoldUnsoldAnimationProps> = ({
   /* ── sound (fully synthesized, mastered) ── */
   useEffect(() => {
     if (!enableSound || muted) return;
-    playVerdictScore(isSold, playerName, teamName, soldAmount);
+    // Audio must NEVER take down the reveal: any failure in the synth
+    // chain (AudioContext quirks, device policy, etc.) degrades to silence.
+    try {
+      playVerdictScore(isSold, playerName, teamName, soldAmount);
+    } catch (err) {
+      console.warn("[SoldUnsoldAnimation] verdict score failed:", err);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSold, muted, enableSound]);
 
@@ -494,6 +500,41 @@ export const SoldUnsoldAnimation: React.FC<SoldUnsoldAnimationProps> = ({
   );
 };
 
+/* ───────────────── error boundary ─────────────────
+   A verdict overlay is a celebration layer, never a reason to crash the
+   auction page. Any render/effect error inside the reveal degrades to
+   "no overlay" and is logged, so LiveAuctionPage keeps running.
+   ─────────────────────────────────────────────────── */
+
+interface BoundaryState {
+  failed: boolean;
+}
+
+class VerdictErrorBoundary extends React.Component<
+  React.PropsWithChildren<{}>,
+  BoundaryState
+> {
+  state: BoundaryState = { failed: false };
+
+  static getDerivedStateFromError(): BoundaryState {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("[SoldUnsoldAnimation] reveal crashed, suppressed:", error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+export const SoldUnsoldAnimation: React.FC<SoldUnsoldAnimationProps> = (props) => (
+  <VerdictErrorBoundary>
+    <SoldUnsoldAnimationView {...props} />
+  </VerdictErrorBoundary>
+);
+
 export default SoldUnsoldAnimation;
 
 /* ───────────────── animated amount ───────────────── */
@@ -600,9 +641,9 @@ function synthTone(
   osc.type = o.type;
   osc.frequency.setValueAtTime(Math.max(20, o.f), t);
   if (o.fEnd) osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.fEnd), t + o.decay * 0.9);
-  g.setValueAtTime(0, t);
-  g.linearRampToValueAtTime(o.peak, t + 0.006);
-  g.exponentialRampToValueAtTime(0.0004, t + o.decay);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(o.peak, t + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0004, t + o.decay);
   osc.connect(g).connect(out);
   osc.start(t);
   osc.stop(t + o.decay + 0.05);
@@ -625,9 +666,9 @@ function synthNoise(
   if (o.freqEnd) f.frequency.exponentialRampToValueAtTime(Math.max(30, o.freqEnd), t + o.dur);
   f.Q.value = o.q ?? 1;
   const g = ctx.createGain();
-  g.setValueAtTime(0, t);
-  g.linearRampToValueAt(o.peak, t + (o.attack ?? 0.005));
-  g.exponentialRampToValueAtTime(0.0004, t + o.dur);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(o.peak, t + (o.attack ?? 0.005));
+  g.gain.exponentialRampToValueAtTime(0.0004, t + o.dur);
   src.connect(f).connect(g).connect(out);
   src.start(t);
   src.stop(t + o.dur + 0.05);
