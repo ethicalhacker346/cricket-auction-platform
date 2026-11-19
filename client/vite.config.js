@@ -58,16 +58,25 @@ export default defineConfig({
   },
 
   server: {
+    host: '0.0.0.0',
+    allowedHosts: ['.e2b.app'],
     port: 5173,
     proxy: {
+      '/socket.io': {
+        target: process.env.DEV_API_TARGET || 'http://127.0.0.1:3000',
+        changeOrigin: true,
+        ws: true,
+      },
       '/api': {
-        target: 'http://localhost:3000',
+        target: process.env.DEV_API_TARGET || 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
     },
   },
 
   preview: {
+    host: '0.0.0.0',
+    allowedHosts: ['.e2b.app'],
     port: 4173,
   },
 });

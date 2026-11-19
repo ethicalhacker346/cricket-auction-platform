@@ -8,3 +8,10 @@ process.env.JWT_REFRESH_EXPIRES_IN = '7d';
 process.env.BCRYPT_SALT_ROUNDS = '10';
 process.env.RATE_LIMIT_WINDOW_MS = '60000';
 process.env.RATE_LIMIT_MAX = '1000';
+
+// No external email service is used by API tests.
+process.env.SMTP_HOST = 'localhost';
+process.env.SMTP_PORT = '1025';
+process.env.SMTP_USER = '';
+process.env.SMTP_PASS = '';
+process.env.LOG_LEVEL = 'fatal';

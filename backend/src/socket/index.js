@@ -20,6 +20,7 @@ import { initSocketPublisher, getSocketPublisher } from '../publishers/socket.pu
 
 let ioInstance = null;
 let redisAdapter = null;
+let ipCleanupInterval = null;
 
 export async function initSocket(httpServer, options = {}) {
   const {
@@ -83,7 +84,7 @@ export async function initSocket(httpServer, options = {}) {
   const MAX_CONNECTIONS_PER_IP = 10;
   const CLEANUP_INTERVAL_MS = 60000;
 
-  const ipCleanupInterval = setInterval(() => {
+  ipCleanupInterval = setInterval(() => {
     connectionCounts.clear();
   }, CLEANUP_INTERVAL_MS);
 
@@ -175,8 +176,9 @@ export function getIOOptional() {
 }
 
 export async function closeSocketIO() {
+  if (ipCleanupInterval) { clearInterval(ipCleanupInterval); ipCleanupInterval = null; }
   if (!ioInstance) return;
-  
+
   logger.info('Closing Socket.IO...');
   
   const pub = getSocketPublisher();

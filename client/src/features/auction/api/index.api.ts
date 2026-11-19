@@ -65,6 +65,7 @@ export function mapPlayer(tp: any): Player {
     stats: playerDoc?.stats || tp.stats || { matches: 0, runs: 0, wickets: 0, average: 0, strikeRate: 0 },
     tag: tp.tag,
     avatarSeed: tp.avatarSeed || playerDoc?.fullName || tp.name || stringId(tp._id),
+    cricHeroesUrl: playerDoc?.cricHeroesUrl || tp.cricHeroesUrl || undefined,
     profileImage: playerDoc?.profileImage || tp.profileImage || undefined,
     battingStyle: playerDoc?.battingStyle || tp.battingStyle || undefined,
     bowlingStyle: playerDoc?.bowlingStyle || tp.bowlingStyle || undefined,
@@ -159,7 +160,8 @@ export function mapFranchise(team: any): Franchise {
 export function mapBid(b: any): Bid {
   return {
     id: stringId(b._id || b.id),
-    playerId: stringId(b.tournamentPlayerId || b.playerId),
+    status: b.status,
+    playerId: stringId(b.tournamentPlayerId?._id || b.tournamentPlayerId || b.playerId),
     teamId: stringId(b.tournamentTeamId?._id || b.tournamentTeamId || b.teamId),
     amount: b.amount ?? 0,
     timestamp: new Date(b.placedAt || b.timestamp).getTime(),
@@ -245,6 +247,15 @@ function toBackendPayload(payload: AuctionSavePayload): Record<string, unknown> 
 const dataOf = (res: any) => res?.data ?? res;
 
 export const auctionApi = {
+  undoAction: async (auctionId: string, actionId: string, reason?: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/undo`, {
+      method: "POST", body: JSON.stringify({ actionId, reason }),
+    })),
+  getActionHistory: async (auctionId: string) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/actions`)) as Array<{
+      _id: string; kind: string; label: string; status: "APPLIED" | "UNDONE";
+      createdAt: string; undoneAt?: string; undoReason?: string;
+    }>,
   getAuction: async (tournamentId: string) => {
     const res = await request<any>(`/tournaments/${tournamentId}/auction`);
     return res.data ? mapAuction(res.data) : null;
@@ -285,6 +296,8 @@ export const auctionApi = {
 
     return {
       auction,
+      undoAction: d.undoAction ?? null,
+      undoVersion: d.lastUndoVersion ?? 0,
       rounds: (d.rounds || []).map(mapRound),
       players: (d.players || []).map(mapPlayer),
       franchises,

@@ -14,6 +14,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Sparkles,
+  Link2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -262,6 +263,7 @@ export function PlayerForm({
       bowlingStyle: "",
       profileImage: profileImage || "",
       bio: "",
+      cricHeroesUrl: "",
       ...defaultValues,
     },
   });
@@ -549,6 +551,18 @@ export function PlayerForm({
             </FormField>
           </div>
         </div>
+      </FormSection>
+
+      <FormSection icon={Link2} iconColor="text-emerald-600" iconBg="bg-emerald-50"
+        title="Your cricket record" description="Let teams explore your CricHeroes profile" delay={0.12}>
+        <FormField label="CricHeroes profile link (optional)" error={errors.cricHeroesUrl?.message}
+          hint="Paste your player-profile link or CricHeroes share link. Leave blank to remove it.">
+          <input id="cric-heroes-profile" type="url" inputMode="url" autoComplete="url" maxLength={500}
+            aria-label="CricHeroes profile link (optional)" aria-invalid={!!errors.cricHeroesUrl}
+            {...register("cricHeroesUrl")}
+            placeholder="https://cricheroes.com/player-profile/12345/your-name"
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+        </FormField>
       </FormSection>
 
       {/* ═══════════════════════════════════════════════════════════════

@@ -131,7 +131,7 @@ export class AdminResourceService {
 
     const [rows, total] = await Promise.all([
       Player.find(filter)
-        .select('userId fullName dateOfBirth nationality primaryRole battingStyle bowlingStyle profileImage isActive createdAt updatedAt')
+        .select('userId fullName dateOfBirth nationality primaryRole battingStyle bowlingStyle profileImage cricHeroesUrl isActive createdAt updatedAt')
         .populate('userId', 'name email role isActive')
         .sort(safeSort(query))
         .skip(skip)

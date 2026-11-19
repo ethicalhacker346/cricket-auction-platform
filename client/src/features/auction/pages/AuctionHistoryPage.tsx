@@ -1,25 +1,21 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useMemo, useState } from "react";
-import { History, Loader2, ShieldAlert } from "lucide-react";
-import { Link } from "react-router-dom";
+import { History, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import {
   useAuth,
   useBidHistory,
   useLiveAuction,
 } from "@/features/auction/hooks/index.hook";
-import { useLiveAuctionStore } from "@/features/auction/store/index.store";
+import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
 import { formatLakhs, initials, timeAgo } from "@/features/auction/utils/index.utils";
 
 export default function AuctionHistoryPage() {
-  const { isAuthenticated, hasHydrated } = useAuth();
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
-  const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
+  const { hasHydrated } = useAuth();
+  const { auctionId: storeAuctionId, tournamentId: storeTournamentId } = useAuctionContext();
 
   // Bootstrap live connection so rounds + franchises populate
-  const { rounds, franchises, connection } = useLiveAuction(
-    storeAuctionId || undefined,
-    storeTournamentId || undefined
-  );
+  const { rounds, franchises, connection } = useLiveAuction({ auctionId: storeAuctionId || undefined, tournamentId: storeTournamentId || undefined });
 
   const [roundFilter, setRoundFilter] = useState("all");
   const [teamFilter, setTeamFilter] = useState("all");
@@ -43,23 +39,7 @@ export default function AuctionHistoryPage() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="mx-auto flex max-w-5xl flex-col items-center justify-center gap-4 py-32 text-center">
-        <ShieldAlert className="h-12 w-12 text-rose-400" />
-        <h2 className="text-lg font-bold text-white">Authentication Required</h2>
-        <p className="max-w-sm text-sm text-slate-400">
-          Please sign in to view bid history and auction analytics.
-        </p>
-        <Link
-          to="/login"
-          className="rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:brightness-110"
-        >
-          Sign In
-        </Link>
-      </div>
-    );
-  }
+
 
   const isLoading = connection === "connecting" || connection === "reconnecting";
 
@@ -142,7 +122,9 @@ export default function AuctionHistoryPage() {
                 className="bg-white/[0.015] transition hover:bg-white/[0.04]"
               >
                 <td className="px-4 py-3 text-slate-200">
-                  {bid.player?.name ?? "—"}
+                  <span className={bid.status === 'CANCELLED' ? 'line-through text-slate-500' : ''}>{bid.player?.name ?? "—"}</span>
+                  <CricHeroesLink url={bid.player?.cricHeroesUrl} playerName={bid.player?.name} className="text-emerald-300" />
+                  {bid.status === 'CANCELLED' && <span className="ml-2 rounded bg-rose-400/10 px-2 py-1 text-[10px] font-semibold text-rose-300">Cancelled by organizer undo</span>}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">

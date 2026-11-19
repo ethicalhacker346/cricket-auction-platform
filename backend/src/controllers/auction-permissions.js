@@ -3,6 +3,7 @@ import { AuctionAuthorizationService } from '../services/auction-authorization.s
 // UI aliases belong at the API boundary, not inside the policy engine.
 const UI_ALIASES = Object.freeze({
   canManageAuction: 'MANAGE_AUCTION',
+  canUndo: 'UNDO_ACTION',
   canStart: 'START_AUCTION',
   canPause: 'PAUSE_AUCTION',
   canResume: 'RESUME_AUCTION',

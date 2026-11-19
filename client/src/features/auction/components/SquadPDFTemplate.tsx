@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useEffect, useState } from "react";
 import type { Franchise, Player } from "@/features/auction/types/index.types";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
@@ -465,6 +466,7 @@ export function SquadPDFTemplate({
                     <p style={{ margin: 0, fontSize: "13px", fontWeight: 800, color: "#0f172a" }}>
                       {p.name}
                     </p>
+                    <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                     {p.overseas && <span style={S.overseasBadge}>Overseas</span>}
                   </div>
                 </div>

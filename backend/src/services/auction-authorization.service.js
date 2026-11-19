@@ -7,11 +7,12 @@ import { OwnershipResolver } from './ownership.resolver.js';
 import { PermissionEngine, POLICY_VERSION } from './permission.engine.js';
 
 export class AuctionAuthorizationService {
-  static async buildContext({ auctionId, user }) {
+  static async buildContext({ auctionId, user, session = null }) {
     const identity = IdentityResolver.resolve(user);
 
     const auction = assertFound(
-      await Auction.findById(auctionId).populate('tournamentId'),
+      await Auction.findById(auctionId).select('+undoHeadActionId').session(session)
+        .populate({ path: 'tournamentId', options: { session } }),
       'Auction not found'
     );
     const tournament = auction.tournamentId;
@@ -24,7 +25,7 @@ export class AuctionAuthorizationService {
     const tournamentTeam = await TournamentTeam.findOne({
       tournamentId: tournament._id,
       ownerId: identity.userId,
-    }).lean();
+    }).session(session).lean();
 
     const ownership = OwnershipResolver.resolveAuction({ auction, tournament, tournamentTeam, identity });
 

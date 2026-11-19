@@ -1,8 +1,19 @@
+import { AuctionCommandService } from '../services/auction-command.service.js';
 import { AuctionService } from '../services/auction.service.js';
 import { BidService } from '../services/bid.service.js';
 import { AuctionAuthorizationService } from '../services/auction-authorization.service.js';
 
 export const auctionController = {
+  undo: async (req, res) => {
+    const result = await AuctionCommandService.undo(req.params.auctionId, req.user, req.body);
+    return res.json({ success: true, data: result });
+  },
+
+  actionHistory: async (req, res) => {
+    const history = await AuctionCommandService.history(req.params.auctionId, req.user);
+    return res.json({ success: true, data: history });
+  },
+
   create: async (req, res) => {
     const auction = await AuctionService.create(req.params.tournamentId, req.user, req.body);
     return res.status(201).json({ success: true, data: auction });
@@ -101,6 +112,7 @@ export const auctionController = {
     const data = AuctionAuthorizationService.toPublicPermissions(context);
     const aliases = {
       canManageAuction: data.permissions.MANAGE_AUCTION,
+      canUndo: data.permissions.UNDO_ACTION,
       canStart: data.permissions.START_AUCTION,
       canPause: data.permissions.PAUSE_AUCTION,
       canResume: data.permissions.RESUME_AUCTION,

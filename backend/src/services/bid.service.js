@@ -1,405 +1,172 @@
-import mongoose from 'mongoose';
 import { Bid } from '../models/Bid.js';
 import { Auction } from '../models/Auction.js';
 import { TournamentTeam } from '../models/TournamentTeam.js';
 import { TournamentPlayer } from '../models/TournamentPlayer.js';
-import { Tournament } from '../models/Tournament.js';
 import { AppError, assertFound } from '../utils/helpers.js';
-import {
-  AUCTION_STATUS,
-  AUCTION_LOG_ACTIONS,
-  BID_STATUS,
-  LOT_STATUS,
-  LOT_OUTCOME,
-  REGISTRATION_STATUS,
-  NOTIFICATION_TYPES,
-  ROUND_TYPE,
-  
-} from '../config/constants.js';
+import { AUCTION_LOG_ACTIONS, BID_STATUS, LOT_STATUS, LOT_OUTCOME, REGISTRATION_STATUS, NOTIFICATION_TYPES } from '../config/constants.js';
 import { AuctionService } from './auction.service.js';
+import { AuctionCommandService } from './auction-command.service.js';
 import { NotificationService } from './notification.service.js';
-import { AuctionAuthorizationService } from './auction-authorization.service.js';
 import { AUCTION_PERMISSIONS } from './permission.engine.js';
 import { emitBidPlaced, emitLotSold, emitLotUnsold } from '../events/auction.events.js';
 
 export class BidService {
-  static async placeBid(auctionId, user, { amount }, authorization = null) {
-    // assertPermission returns the context it evaluated against — capture
-    // it, don't re-derive ownership from scratch below.
-    const context = await AuctionAuthorizationService.assertPermission({
-      auctionId,
-      user,
-      permission: AUCTION_PERMISSIONS.PLACE_BID,
-      existingContext: authorization,
-    });
-
-    const actingTeamId = context.ownership?.team?.id;
-    if (!actingTeamId) {
-      // Unreachable in practice — PermissionEngine already denies PLACE_BID
-      // with NOT_TOURNAMENT_TEAM_OWNER when there's no owned team — but
-      // never assume a context object handed in from outside this method
-      // (req.authorization, built by middleware) can't be stale or wrong.
-      throw new AppError('No approved tournament team found for this owner', 403);
-    }
-
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    let previousHighestBid = 0;
-    let previousHighestTeamId = null;
-    let finalBid = null;
-    let finalLiveState = null;
-    let finalTeam = null;
-    let roundId = null;
-
-    try {
-      const auction = assertFound(await Auction.findById(auctionId).session(session), 'Auction not found');
-
-      if (auction.status !== AUCTION_STATUS.LIVE) {
-        throw new AppError('Auction is not live', 400);
-      }
-
-      const liveState = auction.liveState;
-      if (!liveState?.currentTournamentPlayerId || liveState.lotStatus !== LOT_STATUS.BIDDING) {
-        throw new AppError('No player is currently on the block', 400);
-      }
-
-      previousHighestBid = liveState.currentHighestBid;
-      previousHighestTeamId = liveState.highestBidderTeamId;
-      roundId = liveState.currentRoundId;
-
-      // Re-resolved INSIDE the transaction, by _id — never by client input,
-      // and never by trusting the authorization context alone. ownerId and
-      // tournamentId are kept as belt-and-suspenders filters even though
-      // _id already pins the document: if actingTeamId were ever wrong,
-      // these stop it from touching someone else's team. status is
-      // re-checked here specifically to close the gap where a team is
-      // suspended/rejected between context build and transaction commit.
-      const team = assertFound(
-        await TournamentTeam.findOne({
-          _id: actingTeamId,
-          tournamentId: auction.tournamentId,
-          ownerId: user._id,
-          status: REGISTRATION_STATUS.APPROVED,
-        }).session(session),
-        'Approved tournament team not found for this owner'
-      );
-
-      const tournament = await Tournament.findById(auction.tournamentId).session(session);
-      if (team.roster.length >= tournament.squadSize) {
-        throw new AppError('Squad is full', 400);
-      }
-
-      const tournamentPlayer = await TournamentPlayer.findById(liveState.currentTournamentPlayerId).session(session);
-
-      const effectiveMin =
-        liveState.currentHighestBid === 0 ? tournamentPlayer.basePrice : liveState.currentHighestBid + auction.getBidIncrement(liveState.currentHighestBid);
-
-      if (amount < effectiveMin) {
-        throw new AppError(`Bid must be at least ${effectiveMin}`, 400);
-      }
-
-      if (liveState.highestBidderTeamId?.toString() === team._id.toString()) {
-        throw new AppError('You already hold the highest bid', 400);
-      }
-
-      if (!team.canAfford(amount)) {
-        throw new AppError('Insufficient purse balance', 400);
-      }
-
-      if (liveState.highestBidderTeamId) {
-        const previousTeam = await TournamentTeam.findById(liveState.highestBidderTeamId).session(session);
-        if (previousTeam) {
-          previousTeam.releaseReservation(liveState.currentHighestBid);
-          await previousTeam.save({ session });
+  static async placeBid(auctionId, user, { amount }) {
+    if (!Number.isSafeInteger(amount) || amount < 1) throw new AppError('Bid amount must be a positive safe integer', 400);
+    const command = await AuctionCommandService.run({
+      auctionId, user, permission: AUCTION_PERMISSIONS.PLACE_BID,
+      kind: 'BID_PLACED', label: `Place bid of ${amount}`,
+    }, async (scope) => {
+      const { auction, tournament, context, journal, session, outbox, afterCommit } = scope;
+      const live = auction.liveState;
+      if (!live?.currentTournamentPlayerId || live.lotStatus !== LOT_STATUS.BIDDING) throw new AppError('No player is currently on the block', 400);
+      const elapsed = live.updatedAt ? Math.max(0, (Date.now() - new Date(live.updatedAt).getTime()) / 1000) : 0;
+      const remaining = Math.max(0, (live.remainingTimeSeconds ?? 0) - elapsed);
+      if (remaining <= 0) throw new AppError('The lot timer has expired; wait for the organizer', 409);
+      // Never trust a team ID supplied by the client or a stale HTTP policy context.
+      const team = assertFound(await TournamentTeam.findOne({
+        _id: context.ownership.team.id, tournamentId: auction.tournamentId,
+        ownerId: user._id, status: REGISTRATION_STATUS.APPROVED,
+      }).session(session), 'Approved tournament team not found for this owner');
+      if (team.roster.length >= (auction.auctionConfiguration?.squadSize ?? tournament.squadSize)) throw new AppError('Squad is full', 400);
+      if (String(live.highestBidderTeamId) === String(team._id)) throw new AppError('You already hold the highest bid', 400);
+      const player = assertFound(await TournamentPlayer.findOne({
+        _id: live.currentTournamentPlayerId, tournamentId: auction.tournamentId,
+        status: REGISTRATION_STATUS.APPROVED, lotOutcome: LOT_OUTCOME.IN_PROGRESS,
+      }).session(session).populate({ path: 'playerId', select: 'fullName', options: { session } }), 'Active player not found');
+      journal.track(player); // approval/base-price guards; does not rewind their profile
+      const minimum = live.currentHighestBid === 0 ? Math.max(1, player.basePrice) : live.currentHighestBid + auction.getBidIncrement(live.currentHighestBid);
+      if (amount < minimum) throw new AppError(`Bid must be at least ${minimum}`, 400);
+      if (!team.canAfford(amount)) throw new AppError('Insufficient purse balance', 400);
+      const previousHighestBid = live.currentHighestBid;
+      const previousHighestTeamId = live.highestBidderTeamId;
+      if (previousHighestTeamId) {
+        const previousTeam = assertFound(await TournamentTeam.findById(previousHighestTeamId).session(session), 'Previous leading team not found');
+        journal.track(previousTeam, ['wallet']);
+        previousTeam.releaseReservation(previousHighestBid);
+        await previousTeam.save({ session });
+        const previousBids = await Bid.find({ auctionId, tournamentPlayerId: player._id, status: BID_STATUS.WINNING }).session(session);
+        for (const bid of previousBids) {
+          journal.track(bid, ['status']);
+          bid.status = BID_STATUS.OUTBID;
+          await bid.save({ session });
         }
-
-        await Bid.updateMany(
-          {
-            auctionId,
-            tournamentPlayerId: liveState.currentTournamentPlayerId,
-            tournamentTeamId: liveState.highestBidderTeamId,
-            status: BID_STATUS.WINNING,
-          },
-          { status: BID_STATUS.OUTBID },
-          { session }
-        );
       }
-
+      journal.track(team, ['wallet']);
       team.reserve(amount);
       await team.save({ session });
-
-      const bid = await Bid.create(
-        [
-          {
-            auctionId,
-            roundId: liveState.currentRoundId,
-            tournamentTeamId: team._id,
-            tournamentPlayerId: liveState.currentTournamentPlayerId,
-            amount,
-            status: BID_STATUS.WINNING,
-          },
-        ],
-        { session }
-      );
-
-      const elapsedSeconds = liveState.updatedAt ? (Date.now() - new Date(liveState.updatedAt).getTime()) / 1000 : 0;
-      const trueRemaining = Math.max(0, (liveState.remainingTimeSeconds ?? 0) - elapsedSeconds);
-
-      auction.liveState.currentHighestBid = amount;
-      auction.liveState.highestBidderTeamId = team._id;
-      auction.liveState.remainingTimeSeconds = Math.max(trueRemaining, auction.bidResetSeconds);
-      auction.liveState.version = (auction.liveState.version ?? 0) + 1;
-      auction.liveState.updatedAt = new Date();
-      auction.logs.push({
-        action: AUCTION_LOG_ACTIONS.BID_PLACED,
-        userId: user._id,
-        message: `Bid of ${amount} placed by ${team.name}`,
-        metadata: { bidId: bid[0]._id, amount, teamId: team._id },
-      });
-
+      const [bid] = await Bid.create([{
+        auctionId, roundId: live.currentRoundId, tournamentTeamId: team._id,
+        tournamentPlayerId: player._id, amount, status: BID_STATUS.WINNING,
+      }], { session });
+      journal.created(bid);
+      live.currentHighestBid = amount;
+      live.highestBidderTeamId = team._id;
+      live.remainingTimeSeconds = Math.max(remaining, auction.bidResetSeconds);
+      live.updatedAt = new Date();
+      scope.label = `${team.name} bid ${amount} for ${player.playerId?.fullName || 'player'}`;
+      auction.logs.push({ action: AUCTION_LOG_ACTIONS.BID_PLACED, userId: user._id,
+        message: scope.label, metadata: { bidId: bid._id, amount, teamId: team._id } });
       await auction.save({ session });
-      await session.commitTransaction();
-
-      finalBid = bid[0];
-      finalLiveState = { ...auction.liveState.toObject?.() || auction.liveState };
-      finalTeam = team;
-
-      // Best-effort: the bid is already committed — a notification failure
-      // must not turn this into a 500 (the client would retry against the
-      // "already highest bidder" guard and see a phantom rejection).
-      try {
-        await NotificationService.create({
-          userId: user._id,
-          type: NOTIFICATION_TYPES.BID_UPDATE,
-          title: 'Bid placed',
-          message: `Your bid of ${amount} is currently leading`,
-          data: { auctionId, bidId: bid[0]._id },
-        });
-      } catch (e) {
-        console.error('[BidService] bid notification failed', e);
-      }
-
-      try {
-        emitBidPlaced(auctionId, {
-          bid: finalBid,
-          tournamentPlayerId: liveState.currentTournamentPlayerId,
-          roundId,
-          amount,
-          teamId: team._id,
-          teamName: team.name,
-          previousHighestBid,
-          previousHighestTeamId,
-          liveState: finalLiveState,
-          placedBy: user._id,
-        });
-      } catch (e) {
-        console.error('[BidService] emitBidPlaced failed', e);
-      }
-
-      return finalBid;
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+      outbox.push(() => emitBidPlaced(auctionId, {
+        bid, tournamentPlayerId: player._id, roundId: live.currentRoundId, amount,
+        teamId: team._id, teamName: team.name, previousHighestBid, previousHighestTeamId,
+        liveState: live, placedBy: user._id,
+      }));
+      afterCommit.push(() => NotificationService.create({
+        userId: user._id, type: NOTIFICATION_TYPES.BID_UPDATE, title: 'Bid placed',
+        message: `Your bid of ${amount} is currently leading`, data: { auctionId, bidId: bid._id },
+      }));
+      return bid;
+    });
+    return command.result;
   }
 
-  // settleLot / listBids unchanged — SETTLE_LOT stays organizer-owner-gated,
-  // which was never in question.
-
-
-  static async settleLot(auctionId, user, sold = true, authorization = null) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    let resultAuction = null;
-    let soldInfo = null;
-    let liveStateForEvent = null;
-    let tournamentPlayerId = null;
-    let roundIdToCheck = null;
-
-    try {
-      const auction = assertFound(await Auction.findById(auctionId).session(session), 'Auction not found');
-
-      await AuctionAuthorizationService.assertPermission({
-        auctionId,
-        user,
-        permission: AUCTION_PERMISSIONS.SETTLE_LOT,
-        existingContext: authorization,
-      });
-
-      const liveState = auction.liveState;
-      if (!liveState?.currentTournamentPlayerId) {
-        throw new AppError('No active lot to settle', 400);
-      }
-
-      tournamentPlayerId = liveState.currentTournamentPlayerId;
-      const tournamentPlayer = await TournamentPlayer.findById(liveState.currentTournamentPlayerId).session(session);
-      roundIdToCheck = liveState.currentRoundId;
-
-      if (sold && liveState.highestBidderTeamId) {
-        const winningTeam = await TournamentTeam.findById(liveState.highestBidderTeamId).session(session);
-        const soldPrice = liveState.currentHighestBid;
-
-        winningTeam.commitSpend(soldPrice);
-        winningTeam.roster.push({
-          tournamentPlayerId: tournamentPlayer._id,
-          boughtPrice: soldPrice,
-          role: tournamentPlayer.primaryRole,
-          boughtAt: new Date(),
-        });
-        await winningTeam.save({ session });
-
-        tournamentPlayer.isSold = true;
-        tournamentPlayer.soldToTeamId = winningTeam._id;
-        tournamentPlayer.soldPrice = soldPrice;
-        tournamentPlayer.soldAt = new Date();
-        tournamentPlayer.lotOutcome = LOT_OUTCOME.SOLD;
-        await tournamentPlayer.save({ session });
-
-        auction.logs.push({
-          action: AUCTION_LOG_ACTIONS.LOT_SOLD,
-          userId: user._id,
-          message: `Player sold to ${winningTeam.name} for ${soldPrice}`,
-          metadata: { teamId: winningTeam._id, soldPrice },
-        });
-
-        liveState.lotStatus = LOT_STATUS.SOLD;
-
-        soldInfo = {
-          soldPrice,
-          soldToTeamId: winningTeam._id,
-          soldToTeamName: winningTeam.name,
-          ownerId: winningTeam.ownerId,
-        };
-      } else {
-        if (liveState.highestBidderTeamId) {
-          const team = await TournamentTeam.findById(liveState.highestBidderTeamId).session(session);
-          team.releaseReservation(liveState.currentHighestBid);
-          await team.save({ session });
-
-          await Bid.updateMany(
-            {
-              auctionId,
-              tournamentPlayerId: liveState.currentTournamentPlayerId,
-              status: BID_STATUS.WINNING,
-            },
-            { status: BID_STATUS.OUTBID },
-            { session }
-          );
-        }
-
-        tournamentPlayer.lotOutcome = LOT_OUTCOME.UNSOLD;
-        await tournamentPlayer.save({ session });
-
-        auction.logs.push({
-          action: AUCTION_LOG_ACTIONS.LOT_UNSOLD,
-          userId: user._id,
-          message: 'Player marked unsold',
-          metadata: { tournamentPlayerId: tournamentPlayer._id },
-        });
-
-        liveState.lotStatus = LOT_STATUS.UNSOLD;
-      }
-
-      
-
-      // Capture liveState before resetting
-      liveStateForEvent = {
-        ...liveState.toObject?.(),
-        ...liveState,
-      };
-
-      auction.liveState = {
-        currentTournamentPlayerId: null,
-        currentRoundId: roundIdToCheck,
-        currentHighestBid: 0,
-        highestBidderTeamId: null,
-        remainingTimeSeconds: 0,
-        lotStatus: LOT_STATUS.PENDING,
-        version: (liveState.version ?? 0) + 1,
-        updatedAt: new Date(),
-      };
-
-      await auction.save({ session });
-
-      // Round-completion chain runs inside this transaction; it defers its
-      // domain events (round completed / unsold round created / auction
-      // completed) into this outbox so nothing is published before commit.
-      const outbox = [];
-      await AuctionService.checkRoundCompletion(roundIdToCheck, session, outbox);
-      await session.commitTransaction();
-
-      resultAuction = auction;
-
-      // Drain deferred domain events now that the transaction is durable.
-      for (const emit of outbox) {
-        try {
-          emit();
-        } catch (e) {
-          console.error('[BidService] post-commit event emission failed', e);
-        }
-      }
-
-      // Best-effort winner notification — a notification failure must never
-      // roll back or fail an already-settled lot.
-      if (sold && soldInfo) {
-        try {
-          await NotificationService.create({
-            userId: soldInfo.ownerId,
-            type: NOTIFICATION_TYPES.AUCTION_UPDATE,
-            title: 'Player acquired',
-            message: `${soldInfo.soldToTeamName} won the bid for ${soldInfo.soldPrice}`,
-            data: { auctionId, tournamentPlayerId },
-          });
-        } catch (e) {
-          console.error('[BidService] settleLot notification failed', e);
-        }
-      }
-
-      // ---- SOCKET EVENTS AFTER COMMIT ----
-      try {
-        if (sold && soldInfo) {
-          emitLotSold(auctionId, {
-            tournamentPlayerId,
-            roundId: roundIdToCheck,
-            soldPrice: soldInfo.soldPrice,
-            soldToTeamId: soldInfo.soldToTeamId,
-            soldToTeamName: soldInfo.soldToTeamName,
-            liveState: resultAuction.liveState,
-            settledBy: user._id,
-          });
+  static async settleLot(auctionId, user, sold = true) {
+    const command = await AuctionCommandService.run({
+      auctionId, user, permission: AUCTION_PERMISSIONS.SETTLE_LOT,
+      kind: sold ? 'LOT_SOLD' : 'LOT_UNSOLD', label: sold ? 'Mark player sold' : 'Mark player unsold',
+    }, async (scope) => {
+      const { auction, tournament, journal, session, outbox, afterCommit } = scope;
+      const live = auction.liveState;
+      if (!live?.currentTournamentPlayerId || live.lotStatus !== LOT_STATUS.BIDDING) throw new AppError('No active lot to settle', 409);
+      if (sold && !live.highestBidderTeamId) throw new AppError('A winning bid is required to mark sold', 400);
+      const player = assertFound(await TournamentPlayer.findOne({
+        _id: live.currentTournamentPlayerId, tournamentId: auction.tournamentId,
+        lotOutcome: LOT_OUTCOME.IN_PROGRESS,
+      }).session(session).populate({ path: 'playerId', select: 'fullName', options: { session } }), 'Active player not found');
+      journal.track(player);
+      const roundId = live.currentRoundId;
+      let winningTeam;
+      if (live.highestBidderTeamId) {
+        winningTeam = assertFound(await TournamentTeam.findById(live.highestBidderTeamId).session(session), 'Leading team not found');
+        journal.track(winningTeam);
+        if (sold) {
+          if (winningTeam.status !== REGISTRATION_STATUS.APPROVED || String(winningTeam.tournamentId) !== String(auction.tournamentId)) {
+            throw new AppError('Leading team is no longer approved for this tournament', 409);
+          }
+          if (winningTeam.roster.length >= (auction.auctionConfiguration?.squadSize ?? tournament.squadSize)) {
+            throw new AppError('Leading team squad is now full; review this lot before settling', 409);
+          }
+          if (winningTeam.roster.some((entry) => String(entry.tournamentPlayerId) === String(player._id))) {
+            throw new AppError('Player is already in the leading team roster', 409);
+          }
+          winningTeam.commitSpend(live.currentHighestBid);
+          winningTeam.roster.push({ tournamentPlayerId: player._id, boughtPrice: live.currentHighestBid, role: player.primaryRole, boughtAt: new Date() });
         } else {
-          emitLotUnsold(auctionId, {
-            tournamentPlayerId,
-            roundId: roundIdToCheck,
-            liveState: resultAuction.liveState,
-            settledBy: user._id,
-          });
+          winningTeam.releaseReservation(live.currentHighestBid);
+          const bids = await Bid.find({ auctionId, tournamentPlayerId: player._id, status: BID_STATUS.WINNING }).session(session);
+          for (const bid of bids) {
+            journal.track(bid, ['status']);
+            bid.status = BID_STATUS.OUTBID;
+            await bid.save({ session });
+          }
         }
-      } catch (e) {
-        console.error('[BidService] settleLot emit failed', e);
+        await winningTeam.save({ session });
       }
-
-      return resultAuction;
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+      if (sold) {
+        player.isSold = true;
+        player.soldToTeamId = winningTeam._id;
+        player.soldPrice = live.currentHighestBid;
+        player.soldAt = new Date();
+        player.lotOutcome = LOT_OUTCOME.SOLD;
+        scope.label = `Sell ${player.playerId?.fullName || 'player'} to ${winningTeam.name} for ${live.currentHighestBid}`;
+      } else {
+        player.lotOutcome = LOT_OUTCOME.UNSOLD;
+        scope.label = `Mark ${player.playerId?.fullName || 'player'} unsold`;
+      }
+      await player.save({ session });
+      auction.logs.push({ action: sold ? AUCTION_LOG_ACTIONS.LOT_SOLD : AUCTION_LOG_ACTIONS.LOT_UNSOLD,
+        userId: user._id, message: scope.label,
+        metadata: { tournamentPlayerId: player._id, teamId: winningTeam?._id, soldPrice: sold ? live.currentHighestBid : undefined } });
+      auction.liveState = {
+        currentTournamentPlayerId: null, currentRoundId: roundId, currentHighestBid: 0,
+        highestBidderTeamId: null, remainingTimeSeconds: 0, lotStatus: LOT_STATUS.PENDING,
+        version: live.version, updatedAt: new Date(),
+      };
+      await auction.save({ session });
+      let finalAuction;
+      // Verdict precedes completion so every connected spectator sees the result.
+      outbox.push(() => sold ? emitLotSold(auctionId, {
+        tournamentPlayerId: player._id, roundId, soldPrice: player.soldPrice,
+        soldToTeamId: winningTeam._id, soldToTeamName: winningTeam.name,
+        liveState: finalAuction.liveState, settledBy: user._id,
+      }) : emitLotUnsold(auctionId, {
+        tournamentPlayerId: player._id, roundId, liveState: finalAuction.liveState, settledBy: user._id,
+      }));
+      await AuctionService.checkRoundCompletion(roundId, session, outbox, journal);
+      finalAuction = await Auction.findById(auctionId).session(session);
+      if (sold) afterCommit.push(() => NotificationService.create({
+        userId: winningTeam.ownerId, type: NOTIFICATION_TYPES.AUCTION_UPDATE, title: 'Player acquired',
+        message: `${winningTeam.name} won the bid for ${player.soldPrice}`, data: { auctionId, tournamentPlayerId: player._id },
+      }));
+    });
+    return command.auction;
   }
 
   static async listBids(auctionId, query = {}) {
-    const filter = { auctionId };
-    if (query.tournamentPlayerId) filter.tournamentPlayerId = query.tournamentPlayerId;
-
-    return Bid.find(filter)
-      .populate('tournamentTeamId', 'name')
-      .populate('tournamentPlayerId')
-      .sort({ placedAt: -1 })
-      .limit(Math.min(Number(query.limit) || 50, 100));
+    return Bid.find({ auctionId, ...(query.tournamentPlayerId ? { tournamentPlayerId: query.tournamentPlayerId } : {}) })
+      .populate('tournamentTeamId', 'name').populate('tournamentPlayerId')
+      .sort({ placedAt: -1, _id: -1 }).limit(Math.min(Number(query.limit) || 50, 100));
   }
 }

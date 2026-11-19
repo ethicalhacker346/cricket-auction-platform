@@ -217,12 +217,10 @@ describe('Cricket Auction Platform API', () => {
       .get(`/api/v1/auctions/${auctionId}/live`)
       .expect(200);
 
-    expect(liveRes.body.data.liveState.lotStatus).toBe('pending');
+    expect(liveRes.body.data.liveState.lotStatus).toBe('PENDING');
 
-    await request(app)
-      .post(`/api/v1/auctions/${auctionId}/complete`)
-      .set(authHeader(organizerToken))
-      .expect(200);
+    // The final lot atomically completes the auction and tournament now.
+    expect(liveRes.body.data.status).toBe('COMPLETED');
   });
 
   test('exports final squads', async () => {

@@ -1,10 +1,10 @@
 // src/api/registrationApi.ts
 import { axiosClient } from "@/api/axiosClient";
-import type { ApiEnvelope } from "@/types/auth";
 import type {
   PaginatedResult,
   PlayerListQueryParams,
   PlayerRegistration,
+  PlayerRegistrationListItem,
   RegisterPlayerPayload,
   RegisterTeamPayload,
   RejectPayload,
@@ -39,6 +39,7 @@ function unwrapPaginated<T>(res: any): PaginatedResult<T> {
       total: body.total ?? body.data.length,
       page: body.page ?? 1,
       limit: body.limit ?? body.data.length,
+      totalPages: body.totalPages ?? Math.ceil((body.total ?? body.data.length) / Math.max(1, body.limit ?? body.data.length)),
     };
   }
 
@@ -49,11 +50,12 @@ function unwrapPaginated<T>(res: any): PaginatedResult<T> {
       total: body.length,
       page: 1,
       limit: body.length,
+      totalPages: body.length ? 1 : 0,
     };
   }
 
   // Fallback: empty
-  return { data: [], total: 0, page: 1, limit: 20 };
+  return { data: [], total: 0, page: 1, limit: 20, totalPages: 0 };
 }
 
 /* ═════════════════════════════════════════════════════════════════
@@ -79,7 +81,7 @@ export const registrationApi = {
       `${registrationsBase(tournamentId)}/players`,
       { params }
     );
-    return unwrapPaginated<PlayerRegistration>(res);
+    return unwrapPaginated<PlayerRegistrationListItem>(res);
   },
 
   verifyPlayer: async (tournamentId: string, registrationId: string) => {

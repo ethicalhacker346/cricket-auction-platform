@@ -5,9 +5,9 @@ import type {
   AuctionStatus,
   BidIncrementTier,
 } from "@/features/auction/types/index.types";
-import { CRORE } from "@/features/auction/constants/index.constants";
 
 export const AUCTION_PERMISSIONS: Record<string, AuctionPermission> = {
+  UNDO_ACTION: "UNDO_ACTION",
   MANAGE_AUCTION: "MANAGE_AUCTION",
   UPDATE_RULES: "UPDATE_RULES",
   MANAGE_ROUNDS: "MANAGE_ROUNDS",
@@ -152,6 +152,7 @@ export function normalizeAuctionPermissions(raw: any): AuctionPermissions {
     ownsTournament: Boolean(raw?.ownsTournament),
     role: raw?.role ?? "PLAYER",
     auctionStatus: raw?.auctionStatus ?? "",
+    canUndo: value("UNDO_ACTION", "canUndo"),
     canManageAuction: value("MANAGE_AUCTION", "canManageAuction"),
     canManageRounds: value("MANAGE_ROUNDS", "canManageRounds"),
     canUpdateRules: value("UPDATE_RULES", "canUpdateRules"),

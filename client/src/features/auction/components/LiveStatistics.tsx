@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useState } from "react";
 import {
   BarChart3,
@@ -241,6 +242,7 @@ export function LiveStatistics() {
         />
       </div>
 
+      {topSale?.cricHeroesUrl && <div className="flex items-center justify-end gap-2 text-xs text-slate-500">Top sale profile <CricHeroesLink url={topSale.cricHeroesUrl} playerName={topSale.name} className="text-emerald-300" /></div>}
       {topSpenders.length > 0 && (
         <div className="flex items-center gap-3 overflow-x-auto rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5">
           <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-slate-500">

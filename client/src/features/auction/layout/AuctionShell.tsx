@@ -1,3 +1,4 @@
+import { useLiveAuctionStore } from "../store/index.store";
 import {Link, NavLink, Outlet } from "react-router-dom";
 import {
   ArrowLeft,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { NAV_ITEMS } from "@/features/auction/constants/index.constants";
+import { AuctionGuestBanner } from "../components/AuctionGuestBanner";
 import { AuctionHeader } from "@/features/auction/components/AuctionHeader";
 import { cn } from "@/utils/cn";
 import { useAuctionContext } from "../hooks/useAuctionContext";
@@ -27,6 +29,7 @@ import {
   useAuth,
   useAuctionPermissions,
   useAuctionSocket,
+  useAuctionViewerPresence,
 } from "@/features/auction/hooks/index.hook";
 import { AuctionSoundEngine } from "@/features/auction/audio/AuctionSoundEngine";
 import { USER_ROLES } from "@/lib/constants/roles";
@@ -48,21 +51,20 @@ const RESTRICTED_SEGMENTS = new Set(["configuration", "rounds", "team"]);
 const SIDEBAR_COLLAPSE_KEY = "gullybid-sidebar-collapsed";
 
 function useVisibleNavItems(auctionId: string) {
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const permissions = useAuctionPermissions(auctionId);
 
   const userRole = user?.role ?? permissions.role;
   const isOrganizer =
-    !permissions.loading &&
+    isAuthenticated && !permissions.loading &&
     (permissions.ownsAuction ||
       permissions.ownsTournament ||
-      userRole === USER_ROLES.ORGANIZER ||
       userRole === USER_ROLES.ADMIN);
   const isFranchiseOwner = user?.role === "FRANCHISE_OWNER";
 
   const canSeeConfiguration = isOrganizer;
   const canSeeRounds = isOrganizer;
-  const canSeeTeam = !permissions.loading && isFranchiseOwner;
+  const canSeeTeam = isAuthenticated && !permissions.loading && isFranchiseOwner && permissions.ownsTournamentTeam;
 
   return useMemo(
     () =>
@@ -92,7 +94,6 @@ export function AuctionShell() {
   // we guarantee the session is alive before any child asks for data.
   // ========================================================================
   const {
-    isConnected,
     latencyMs,
     shouldShowReconnect,
   } = useAuctionSocket({
@@ -100,6 +101,9 @@ export function AuctionShell() {
     auctionId,
   });
 
+  useAuctionViewerPresence(auctionId);
+  const release = useLiveAuctionStore((state) => state.release);
+  useEffect(() => () => release(auctionId), [auctionId, release]);
   const visibleNavItems = useVisibleNavItems(auctionId);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -277,6 +281,7 @@ export function AuctionShell() {
       {/* Main column */}
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <AuctionHeader onMenuClick={() => setMobileOpen(true)} />
+        <AuctionGuestBanner tournamentId={tournamentId} auctionId={auctionId} />
 
         {/* =================================================================
             NEW: AuctionSoundEngine

@@ -1,9 +1,10 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useMemo, useState } from "react";
-import { Trophy, Users, XCircle, Loader2, ShieldAlert, BarChart3, Ban, Info } from "lucide-react";
+import { Trophy, Users, XCircle, Loader2, BarChart3, Ban, Info } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth, useLiveAuction } from "@/features/auction/hooks/index.hook";
-import { useLiveAuctionStore } from "@/features/auction/store/index.store";
+import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
 import { TeamBudgetCard, TeamRosterCard } from "@/features/auction/components/TeamCards";
 import { TopBuyShareCard } from "@/features/auction/components/TopBuyShareCard";
 import { AuctionStatusBadge } from "@/features/auction/components/Badges";
@@ -13,9 +14,8 @@ import { cn } from "@/utils/cn";
 type ResultTab = "teams" | "sold" | "unsold" | "permanent_unsold";
 
 export default function AuctionResultPage() {
-  const { isAuthenticated, hasHydrated } = useAuth();
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
-  const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
+  const { hasHydrated } = useAuth();
+  const { auctionId: storeAuctionId, tournamentId: storeTournamentId } = useAuctionContext();
 
   const {
     players,
@@ -26,7 +26,7 @@ export default function AuctionResultPage() {
     playersUnsoldCount,
     playersPermanentUnsoldCount,
     totalMoneySpent,
-  } = useLiveAuction(storeAuctionId || undefined, storeTournamentId || undefined);
+  } = useLiveAuction({ auctionId: storeAuctionId || undefined, tournamentId: storeTournamentId || undefined });
 
   const [tab, setTab] = useState<ResultTab>("teams");
 
@@ -49,23 +49,7 @@ export default function AuctionResultPage() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 py-32 text-center">
-        <ShieldAlert className="h-12 w-12 text-rose-400" />
-        <h2 className="text-lg font-bold text-white">Authentication Required</h2>
-        <p className="max-w-sm text-sm text-slate-400">
-          Sign in to view auction results and team standings.
-        </p>
-        <Link
-          to="/login"
-          className="rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:brightness-110"
-        >
-          Sign In
-        </Link>
-      </div>
-    );
-  }
+
 
   if (!storeAuctionId || !storeTournamentId) {
     return (
@@ -293,6 +277,7 @@ export default function AuctionResultPage() {
                         <span className="max-w-[220px] truncate text-slate-200">
                           {p.name}
                         </span>
+                        <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                       </div>
                     </td>
 
@@ -367,6 +352,7 @@ export default function AuctionResultPage() {
                       <p className="truncate text-sm font-medium text-slate-200">
                         {p.name}
                       </p>
+                      <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                       <p className="text-[10px] text-slate-500">
                         {p.role} · Base {formatLakhs(p.basePrice)}
                       </p>
@@ -418,6 +404,7 @@ export default function AuctionResultPage() {
                         <p className="truncate text-sm font-medium text-slate-300">
                           {p.name}
                         </p>
+                        <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                         <p className="text-[10px] text-slate-500">
                           {p.role} · Base {formatLakhs(p.basePrice)}
                         </p>

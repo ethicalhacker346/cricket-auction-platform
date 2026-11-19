@@ -1,7 +1,13 @@
 // src/lib/validations/playerSchema.ts
 import { z } from "zod";
+import { normalizeCricHeroesUrl } from "@/lib/cricheroes";
+
+export const cricHeroesUrlSchema = z.string().trim().max(500, "Link must be 500 characters or less")
+  .refine((value) => !value || Boolean(normalizeCricHeroesUrl(value)), "Enter a CricHeroes player profile or share link")
+  .optional();
 
 export const playerFormSchema = z.object({
+  cricHeroesUrl: cricHeroesUrlSchema,
   fullName: z
     .string()
     .min(2, "Full name must be at least 2 characters")
@@ -59,7 +65,9 @@ export const sanitizePlayerPayload = (
 ): Partial<PlayerFormValues> => {
   const payload: Record<string, unknown> = {};
   Object.entries(values).forEach(([key, value]) => {
-    if (value !== undefined && value !== "") {
+    if (key === "cricHeroesUrl" && value !== undefined) {
+      payload[key] = value ? normalizeCricHeroesUrl(String(value)) : "";
+    } else if (value !== undefined && value !== "") {
       payload[key] = value;
     }
   });

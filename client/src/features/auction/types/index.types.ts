@@ -2,8 +2,6 @@
 // Backend authorization is authoritative. UI capability names are API aliases;
 // canonical policy keys remain the source of truth internally.
 
-import strict from "assert/strict";
-
 export type AuctionStatus = "draft" | "scheduled" | "live" | "paused" | "completed";
 export type RoundStatus = "pending" | "active" | "completed";
 export type AuctionRoundType =
@@ -25,6 +23,7 @@ export type PlayerRole = "Batter" | "Bowler" | "All-Rounder" | "Wicket-Keeper";
 export type PlayerStatus = "pending" | "current" | "sold" | "unsold"| "permanent_unsold";
 
 export type AuctionPermission =
+  | "UNDO_ACTION"
   | "MANAGE_AUCTION"
   | "UPDATE_RULES"
   | "MANAGE_ROUNDS"
@@ -72,6 +71,7 @@ export interface AuctionPermissions {
   canUpdateRules: boolean;
 
   // API-boundary aliases. These are convenience fields, never policy inputs.
+  canUndo: boolean;
   canManageAuction: boolean;
   canStart: boolean;
   canPause: boolean;
@@ -118,6 +118,7 @@ export interface Player {
   stats: PlayerStats;
   tag?: "marquee" | "star" | "uncapped";
   avatarSeed: string;
+  cricHeroesUrl?: string;
   profileImage?: string;
   
   // ── NEW FIELDS ──
@@ -174,7 +175,16 @@ export interface Franchise {
   description?: string;  
 }
 
+export interface UndoableAuctionAction {
+  id: string;
+  kind: string;
+  label: string;
+  createdAt: string;
+  version: number;
+}
+
 export interface Bid {
+  status?: "WINNING" | "OUTBID" | "CANCELLED";
   id: string;
   playerId: string;
   teamId: string;
@@ -226,6 +236,8 @@ export interface TimerState { remaining: number; total: number; isRunning: boole
 export interface CurrentBidState { amount: number; teamId: string | null; }
 
 export interface LiveAuctionSnapshot {
+  undoAction: UndoableAuctionAction | null;
+  undoVersion: number;
   auction: Auction;
   rounds: AuctionRound[];
   players: Player[];
@@ -250,6 +262,8 @@ export interface LiveAuctionSnapshot {
 }
 
 export interface AuctionSnapshot {
+  undoAction: UndoableAuctionAction | null;
+  undoVersion: number;
   auction: Auction;
   rounds: AuctionRound[];
   players: Player[];

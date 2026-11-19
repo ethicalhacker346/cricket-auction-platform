@@ -46,14 +46,25 @@ function getViewerCount(auctionId) {
   return map ? map.size : 0;
 }
 
-// Try to import AuctionService for DB-backed viewer tracking if available
-let AuctionService = null;
-try {
-  const mod = await import("../../services/auction.service.js").catch(
-    () => null,
-  );
-  if (mod?.AuctionService) AuctionService = mod.AuctionService;
-} catch (_) {}
+import { AuctionService } from '../../services/auction.service.js';
+
+/** Remove this socket's lease without removing another socket for the same tab. */
+async function detachViewer(socket, auctionId) {
+  const viewerId = socket.data.viewerIds?.get(auctionId);
+  if (!viewerId) return null;
+  const viewers = auctionViewers.get(auctionId);
+  const entry = viewers?.get(viewerId);
+  entry?.socketIds.delete(socket.id);
+  const stillConnected = !!entry?.socketIds.size;
+  if (entry && !stillConnected) viewers.delete(viewerId);
+  if (viewers?.size === 0) auctionViewers.delete(auctionId);
+  socket.data.auctions?.delete(auctionId);
+  socket.data.viewerIds?.delete(auctionId);
+  const viewerCount = stillConnected
+    ? await AuctionService.getViewerCount(auctionId)
+    : await AuctionService.removeViewer(auctionId, viewerId);
+  return { viewerId, viewerCount };
+}
 
 export function handleAuctionEvents(io, socket) {
   // ---------- JOIN ----------
@@ -71,8 +82,22 @@ export function handleAuctionEvents(io, socket) {
         return socket.emit("auction:error", err);
       }
 
+      if (viewerId !== undefined && (typeof viewerId !== 'string' || !viewerId.trim() || viewerId.length > 200)) {
+        const error = { success: false, message: 'Invalid viewerId' };
+        if (typeof ack === 'function') return ack(error);
+        return socket.emit('auction:error', error);
+      }
+      if (!socket.data.auctions?.has(auctionId) && socket.data.auctions?.size >= 5) {
+        throw new Error('Leave another auction before joining more rooms');
+      }
+      // Fail closed for missing auctions BEFORE allocating a room/presence row.
+      const previousViewerId = socket.data.viewerIds?.get(auctionId);
+      if (previousViewerId && viewerId && previousViewerId !== viewerId) throw new Error('Leave this auction before changing viewer identity');
+      const initialLiveState = await AuctionService.getLiveState(auctionId);
       const room = getRoomName(auctionId);
-      const finalViewerId = viewerId || socket.userId || socket.id;
+      // Repeated subscriptions may omit the optional ID. Keep the original
+      // binding instead of leaking a second presence lease for this socket.
+      const finalViewerId = previousViewerId || viewerId || socket.userId || socket.id;
 
       // Join socket.io room
       await socket.join(room);
@@ -141,15 +166,7 @@ export function handleAuctionEvents(io, socket) {
         },
       };
 
-      // Ack to joining client with liveState if we can fetch it
-      if (AuctionService?.getLiveState) {
-        try {
-          const liveState = await AuctionService.getLiveState(auctionId);
-          response.data.liveState = liveState;
-        } catch (_) {
-          // ignore, maybe auction not found — still joined room
-        }
-      }
+      response.data.liveState = initialLiveState;
 
       if (typeof ack === "function") return ack(response);
       socket.emit("auction:joined", response.data);
@@ -188,30 +205,12 @@ export function handleAuctionEvents(io, socket) {
       const room = getRoomName(auctionId);
       await socket.leave(room);
 
-      const finalViewerId =
-        socket.data.viewerIds?.get(auctionId) || socket.userId || socket.id;
-      const viewers = auctionViewers.get(auctionId);
-      if (viewers) {
-        const entry = viewers.get(finalViewerId);
-        if (entry) {
-          entry.socketIds.delete(socket.id);
-          if (entry.socketIds.size === 0) {
-            viewers.delete(finalViewerId);
-          }
-        }
-        if (viewers.size === 0) auctionViewers.delete(auctionId);
+      const detached = await detachViewer(socket, auctionId);
+      if (!detached) {
+        if (typeof ack === 'function') ack({ success: true, data: { auctionId, viewerCount: await AuctionService.getViewerCount(auctionId) } });
+        return;
       }
-
-      socket.data.auctions?.delete(auctionId);
-      socket.data.viewerIds?.delete(auctionId);
-
-      let viewerCount = getViewerCount(auctionId);
-
-      if (AuctionService?.removeViewer) {
-        try {
-          viewerCount = await AuctionService.removeViewer(auctionId, finalViewerId);
-        } catch (_) {}
-      }
+      const { viewerId: finalViewerId, viewerCount } = detached;
 
       emitViewerLeft(auctionId, { viewerId: finalViewerId, viewerCount });
       emitViewerCountUpdated(auctionId, viewerCount, {
@@ -247,22 +246,12 @@ export function handleAuctionEvents(io, socket) {
           return ack({ success: false, message: "auctionId required" });
         return;
       }
-      const finalViewerId =
-        viewerId || socket.data.viewerIds?.get(auctionId) || socket.id;
-      const viewers = getAuctionViewerMap(auctionId);
-      if (viewers.has(finalViewerId)) {
-        viewers.get(finalViewerId).lastSeen = new Date();
-      }
-      if (AuctionService?.heartbeatViewer) {
-        try {
-          await AuctionService.heartbeatViewer(
-            auctionId,
-            finalViewerId,
-            socket.userId || null,
-          );
-        } catch (_) {}
-      }
-      const viewerCount = getViewerCount(auctionId);
+      const finalViewerId = socket.data.viewerIds?.get(auctionId);
+      if (!finalViewerId || (viewerId && viewerId !== finalViewerId)) throw new Error('Join this auction before sending its heartbeat');
+      const viewers = auctionViewers.get(auctionId);
+      const entry = viewers?.get(finalViewerId);
+      if (entry) entry.lastSeen = new Date();
+      const viewerCount = await AuctionService.heartbeatViewer(auctionId, finalViewerId, socket.userId || null);
       if (typeof ack === "function")
         ack({
           success: true,
@@ -332,22 +321,9 @@ export function handleAuctionEvents(io, socket) {
       const auctionRooms = rooms.filter((r) => r.startsWith("auction:"));
       for (const room of auctionRooms) {
         const auctionId = room.replace("auction:", "");
-        const finalViewerId =
-          socket.data.viewerIds?.get(auctionId) || socket.userId || socket.id;
-        const viewers = auctionViewers.get(auctionId);
-        if (viewers) {
-          const entry = viewers.get(finalViewerId);
-          if (entry) {
-            entry.socketIds.delete(socket.id);
-            if (entry.socketIds.size === 0) viewers.delete(finalViewerId);
-          }
-          if (viewers.size === 0) auctionViewers.delete(auctionId);
-        }
-        const viewerCount = getViewerCount(auctionId);
-        // Don't await DB heavily on disconnecting — best effort
-        if (AuctionService?.removeViewer) {
-          AuctionService.removeViewer(auctionId, finalViewerId).catch(() => {});
-        }
+        const detached = await detachViewer(socket, auctionId);
+        if (!detached) continue;
+        const { viewerId: finalViewerId, viewerCount } = detached;
         emitViewerLeft(auctionId, { viewerId: finalViewerId, viewerCount });
         emitViewerCountUpdated(auctionId, viewerCount, {
           source: "disconnecting",

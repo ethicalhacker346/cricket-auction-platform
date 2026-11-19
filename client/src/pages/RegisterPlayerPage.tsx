@@ -5,6 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { cricHeroesUrlSchema } from "@/lib/validators/playerSchema";
+import { normalizeCricHeroesUrl } from "@/lib/cricheroes";
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { formatDistanceToNow, isPast, format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -49,9 +52,8 @@ import type { Tournament } from "@/types/tournament";
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const registerPlayerSchema = z.object({
-  confirm: z.literal(true, {
-    errorMap: () => ({ message: "You must confirm your details are accurate" }),
-  }),
+  confirm: z.boolean().refine((value) => value, "You must confirm your details are accurate"),
+  cricHeroesUrl: cricHeroesUrlSchema,
 });
 
 type RegisterPlayerFormValues = z.infer<typeof registerPlayerSchema>;
@@ -390,16 +392,21 @@ export function RegisterPlayerPage() {
   const {
     register: registerField,
     handleSubmit,
+    resetField,
     formState: { errors },
   } = useForm<RegisterPlayerFormValues>({
     resolver: zodResolver(registerPlayerSchema),
-    defaultValues: { confirm: false },
+    defaultValues: { confirm: false, cricHeroesUrl: "" },
   });
 
-  const onSubmit = (_values: RegisterPlayerFormValues) => {
+  useEffect(() => {
+    if (player) resetField("cricHeroesUrl", { defaultValue: player.cricHeroesUrl ?? "" });
+  }, [player, resetField]);
+
+  const onSubmit = (values: RegisterPlayerFormValues) => {
     // Reset any previous error state before submitting
     if (isError) resetMutation();
-    register({}); 
+    register({ cricHeroesUrl: values.cricHeroesUrl ? normalizeCricHeroesUrl(values.cricHeroesUrl) || "" : "" });
   };
 
   // ─── Derived state ───
@@ -582,7 +589,7 @@ export function RegisterPlayerPage() {
                       </span>
                       <span className="flex items-center gap-1.5">
                         <BadgeCheck className="w-3.5 h-3.5" />
-                        Role: {existingReg.primaryRole?.replace("_", " ")}
+                        Role: {existingReg.role?.replace("_", " ")}
                       </span>
                       <span className="flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5" />
@@ -778,9 +785,22 @@ export function RegisterPlayerPage() {
                   </div>
                 )}
 
+                <CricHeroesLink url={player.cricHeroesUrl} playerName={player.fullName} />
+
                 {/* Registration Form */}
                 {!isClosed && !existingReg && (
                   <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+
+                    <div className="space-y-2 rounded-xl border border-emerald-100 bg-emerald-50/40 p-5">
+                      <label htmlFor="registration-cricheroes" className="block text-sm font-semibold text-slate-800">CricHeroes profile link (optional)</label>
+                      <input id="registration-cricheroes" type="url" inputMode="url" autoComplete="url" maxLength={500}
+                        {...registerField("cricHeroesUrl")} aria-invalid={!!errors.cricHeroesUrl}
+                        aria-describedby="registration-cricheroes-help"
+                        placeholder="https://cricheroes.com/player-profile/12345/your-name"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                      <p id="registration-cricheroes-help" className="text-xs text-slate-500">Saved to your player profile and shown to teams and spectators. This is an external link, not verified statistics.</p>
+                      {errors.cricHeroesUrl && <p role="alert" className="text-xs text-red-600">{errors.cricHeroesUrl.message}</p>}
+                    </div>
 
                     {/* Tournament Info Summary */}
                     <div className="p-5 bg-slate-50 rounded-xl border border-slate-100 space-y-3">

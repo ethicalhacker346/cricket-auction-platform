@@ -1,6 +1,6 @@
 import { Radio, Wifi, Loader2, Clock, Users } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAuctionSocket, useAuctionViewerPresence } from "@/features/auction/hooks/index.hook";
+import { useAuctionSocket } from "@/features/auction/hooks/index.hook";
 import { useLiveAuctionStore } from "@/features/auction/store/index.store";
 import { formatClockTime } from "@/features/auction/utils/index.utils";
 import { ConnectionDot } from "./Badges";
@@ -23,19 +23,9 @@ function Divider() {
 export function AuctionFooter({ auctionId }: { auctionId?: string }) {
   const { connection, latencyMs, isConnected } = useAuctionSocket(auctionId ? { auctionId } : undefined);
 
-  // Calling this hook is what actually registers this client's presence
-  // with the server (POST /viewers/heartbeat on an interval) — it has to
-  // run even though we don't render its return value directly below. Its
-  // own REST response count is a decent fallback for the first render or
-  // if sockets are degraded, but once the live engine's socket connection
-  // is up, `liveViewerCount` from the store is pushed on every heartbeat
-  // from *any* viewer (not just this tab's own 15s interval) and is the
-  // number every other screen (LiveStatistics) already trusts. Showing two
-  // different sources for the same "N watching" stat between the footer and
-  // the stats bar is its own bug, so this prefers the shared one.
-  const restViewerCount = useAuctionViewerPresence(auctionId);
-  const liveViewerCount = useLiveAuctionStore((s) => s.viewerCount);
-  const viewerCount = liveViewerCount ?? restViewerCount;
+  // The workspace owns the heartbeat for every read-only page, with the same
+  // viewer identity used by its socket (not a second counted spectator).
+  const viewerCount = useLiveAuctionStore((state) => state.viewerCount);
 
   const clock = useLiveClock();
 

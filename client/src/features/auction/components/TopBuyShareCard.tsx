@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
@@ -136,6 +137,7 @@ function SharePreviewCard({
           </div>
 
           <h2 className="mt-4 text-2xl font-black leading-tight">{player.name}</h2>
+          <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
 
           <p className="mt-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-white/70">
             {ROLE_ICONS[player.role] ?? "🏏"} {player.role}
@@ -644,6 +646,7 @@ export function TopBuyShareCard({
         <div className="mt-2 flex flex-wrap items-center gap-4">
           <div>
             <p className="text-xl font-black text-white">{player.name}</p>
+            <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
             <p className="text-xs text-slate-400">
               {player.role} · Sold to {franchiseName}
             </p>

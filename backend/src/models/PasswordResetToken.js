@@ -17,7 +17,7 @@ const passwordResetTokenSchema = new mongoose.Schema(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
+      // The TTL index below is the only expiresAt index.
     },
     usedAt: {
       type: Date,

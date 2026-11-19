@@ -32,14 +32,7 @@ export function UserMenu() {
 
   if (!user) return null;
 
-  // ── Admin gate guard ─────────────────────────────
-  // Defensive: backend may send role as a string or roles as an array.
-  const isAdmin =
-    user.role === "ADMIN" ||
-    user.role === "admin" ||
-    (Array.isArray(user.roles) &&
-      user.roles.some((r) => r.toUpperCase() === "ADMIN"));
-  // ─────────────────────────────────────────────────
+  const isAdmin = user.role === 'ADMIN';
 
   return (
     <div className="relative" ref={containerRef}>

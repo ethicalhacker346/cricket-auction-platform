@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Boxes, ChevronLeft, Gavel, Loader2, ShieldAlert, WifiOff } from "lucide-react";
+import { AlertTriangle, Boxes, ChevronLeft, Gavel, Loader2, WifiOff } from "lucide-react";
 import {
-  useAuctionViewerPresence,
   useAuth,
   useLiveAuction,
   useResolvedUserTeam,
@@ -74,16 +73,13 @@ function RendererLoading() {
 
 export default function LiveAuction3DPage() {
   const { tournamentId, auctionId } = useAuctionContext();
-  const { isAuthenticated, hasHydrated } = useAuth();
+  const { hasHydrated } = useAuth();
   const roomRef = useRef<HTMLDivElement>(null);
   const [webGLAvailable, setWebGLAvailable] = useState<boolean | null>(null);
   const [rendererKey, setRendererKey] = useState(0);
 
   const live = useLiveAuction({ auctionId, tournamentId });
   const teamResolution = useResolvedUserTeam(live.franchises);
-  const presenceCount = useAuctionViewerPresence(
-    isAuthenticated && auctionId ? auctionId : undefined,
-  );
   const preferences = useAuction3DPreferences();
 
   useEffect(() => {
@@ -101,25 +97,7 @@ export default function LiveAuction3DPage() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <CenteredGuard>
-        <div>
-          <ShieldAlert className="mx-auto h-12 w-12 text-rose-300" />
-          <h1 className="mt-4 text-xl font-black text-white">Authentication required</h1>
-          <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-400">
-            Sign in to enter the immersive auction, watch the floor, and place authorized bids.
-          </p>
-          <Link
-            to="/login"
-            className="mt-5 inline-flex rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-black text-slate-950 transition hover:brightness-110"
-          >
-            Sign in
-          </Link>
-        </div>
-      </CenteredGuard>
-    );
-  }
+
 
   if (!auctionId || !tournamentId) {
     return (
@@ -137,7 +115,7 @@ export default function LiveAuction3DPage() {
   }
 
   const permissions = teamResolution.permissions;
-  const viewerCount = live.viewerCount || presenceCount || 0;
+  const viewerCount = live.viewerCount;
 
   return (
     <div

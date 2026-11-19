@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Globe2, Gavel, XCircle, TrendingUp, Shield } from "lucide-react";
@@ -309,7 +310,7 @@ export function PlayerAuctionCard({
           HEADER: Identity Block
          ═══════════════════════════════════════════════════════════════════════ */}
       <div className="relative flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3.5">
+        <div className="flex min-w-0 flex-1 items-start gap-3.5">
           {/* Avatar */}
           <div className="relative h-[72px] w-[72px] shrink-0 overflow-hidden rounded-2xl ring-2 ring-white/10 shadow-lg">
             {showImage ? (
@@ -353,6 +354,7 @@ export function PlayerAuctionCard({
                 </span>
               )}
             </div>
+            <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="mt-1 px-0 text-emerald-300" />
 
             {/* Role + Country */}
             <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-slate-400">

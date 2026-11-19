@@ -42,6 +42,8 @@ const bidSchema = new mongoose.Schema(
       default: BID_STATUS.WINNING,
       index: true,
     },
+    cancelledAt: Date,
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     placedAt: {
       type: Date,
       default: Date.now,

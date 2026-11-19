@@ -82,6 +82,12 @@ export class RegistrationService {
     session.startTransaction();
     let registration;
     try {
+      // Persist the optional link on the canonical profile in the SAME TX as
+      // submission; a failed/duplicate registration must not partially edit it.
+      if (payload.cricHeroesUrl !== undefined) {
+        player.cricHeroesUrl = payload.cricHeroesUrl;
+        await player.save({ session });
+      }
       [registration] = await TournamentPlayer.create([{
         tournamentId,
         playerId: player._id,
@@ -259,7 +265,7 @@ export class RegistrationService {
       TournamentPlayer.find(filter)
         .populate({
           path: "playerId",
-          select: "fullName primaryRole profileImage",
+          select: "fullName primaryRole profileImage cricHeroesUrl",
         })
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -272,6 +278,9 @@ export class RegistrationService {
     const data = registrations.map((registration) => ({
       id: registration._id.toString(),
       registrationId: registration._id.toString(),
+      // Rejection feedback belongs to this player, never the public pool.
+      ...(currentUserId && String(registration.userId) === String(currentUserId)
+        ? { rejectedReason: registration.rejectedReason } : {}),
       playerId: registration.playerId?._id?.toString(),
       name: registration.playerId?.fullName ?? "",
       role: registration.primaryRole,
@@ -282,6 +291,7 @@ export class RegistrationService {
       isSold: registration.isSold,
       soldPrice: registration.soldPrice,
       profileImage: registration.playerId?.profileImage ?? null,
+      cricHeroesUrl: registration.playerId?.cricHeroesUrl ?? null,
       createdAt: registration.createdAt,
     }));
 
@@ -546,7 +556,7 @@ export class RegistrationService {
       TournamentPlayer.find(filter)
         .populate({
           path: 'playerId',
-          select: 'fullName primaryRole profileImage',
+          select: 'fullName primaryRole profileImage cricHeroesUrl',
         })
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -569,6 +579,7 @@ export class RegistrationService {
       isSold: registration.isSold,
       soldPrice: registration.soldPrice,
       profileImage: registration.playerId?.profileImage ?? null,
+      cricHeroesUrl: registration.playerId?.cricHeroesUrl ?? null,
       createdAt: registration.createdAt,
     }));
 

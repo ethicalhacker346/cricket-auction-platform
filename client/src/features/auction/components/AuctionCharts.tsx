@@ -432,7 +432,7 @@ export function RolePriceChart({ soldPlayers }: { soldPlayers: Player[] }) {
 export function BiddingActivityChart({ bidHistory }: { bidHistory: Bid[] }) {
   const data = useMemo(() => {
     if (bidHistory.length === 0) return [];
-    const sorted = [...bidHistory].sort((a, b) => a.timestamp - b.timestamp);
+    const sorted = bidHistory.filter((bid) => bid.status !== 'CANCELLED').sort((a, b) => a.timestamp - b.timestamp);
     const buckets = new Map<string, { time: string; bids: number; volume: number }>();
 
     // Bucket into 5-minute windows
@@ -720,7 +720,7 @@ export function MostContestedChart({
 }) {
   const data = useMemo(() => {
     const counts = new Map<string, number>();
-    bidHistory.forEach((b) => counts.set(b.playerId, (counts.get(b.playerId) ?? 0) + 1));
+    bidHistory.filter((bid) => bid.status !== 'CANCELLED').forEach((b) => counts.set(b.playerId, (counts.get(b.playerId) ?? 0) + 1));
     return Array.from(counts.entries())
       .map(([playerId, count]) => {
         const player = players.find((p) => p.id === playerId);
@@ -784,7 +784,7 @@ export function SpendingTrendChart({
 }) {
   const data = useMemo(() => {
     if (bidHistory.length === 0) return [];
-    const sorted = [...bidHistory].sort((a, b) => a.timestamp - b.timestamp);
+    const sorted = bidHistory.filter((bid) => bid.status !== 'CANCELLED').sort((a, b) => a.timestamp - b.timestamp);
     let cumulative = 0;
     return sorted.map((bid) => {
       cumulative += bid.amount;

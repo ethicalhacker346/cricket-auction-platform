@@ -21,7 +21,7 @@ const clientConstantsSrc = readFileSync(
 
 // 1. Every domain event the bus carries must be wired in the publisher.
 const registeredHandlers = new Set(
-  [...publisherSrc.matchAll(/eventBus\.on\(AUCTION_EVENTS\.([A-Z_]+)/g)].map((m) => m[1])
+  [...publisherSrc.matchAll(/(?:eventBus\.on|this\.listen)\(AUCTION_EVENTS\.([A-Z_]+)/g)].map((m) => m[1])
 );
 const unwired = Object.keys(AUCTION_EVENTS).filter((k) => !registeredHandlers.has(k));
 
