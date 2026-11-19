@@ -123,7 +123,7 @@ async function publish(outbox) {
  * notification or socket emission can escape an aborted/retried transaction.
  */
 export class AuctionCommandService {
-  static async run({ auctionId, user, permission, kind, label }, work) {
+  static async run({ auctionId, user, permission, kind, label, commandId, commandFingerprint }, work) {
     const session = await mongoose.startSession();
     let committed;
     try {
@@ -133,6 +133,16 @@ export class AuctionCommandService {
         const tournament = context.tournament;
         const auction = context.auction;
         auction.depopulate('tournamentId');
+        if (commandId) {
+          const existing = await AuctionAction.findOne({ auctionId, commandId }).session(session);
+          if (existing) {
+            if (existing.status !== 'APPLIED' || existing.kind !== kind || String(existing.actorId) !== String(user._id) || existing.commandFingerprint !== commandFingerprint) {
+              throw conflict('This command was already used or undone. Review the current lot before trying again.', 'COMMAND_ALREADY_USED');
+            }
+            committed = { result: null, auction, action: actionSummary(existing), outbox: [] };
+            return;
+          }
+        }
         const previousVersion = auction.liveState?.version ?? 0;
         const journal = new AuctionJournal(session, auction.status);
         journal.track(auction);
@@ -148,6 +158,7 @@ export class AuctionCommandService {
         const action = new AuctionAction({
           auctionId, previousActionId: auction.undoHeadActionId ?? null,
           kind, label: scope.label || label, actorId: user._id, version: previousVersion + 1,
+          ...(commandId ? { commandId, commandFingerprint } : {}),
         });
         finalAuction.undoHeadActionId = action._id;
         await finalAuction.save({ session });

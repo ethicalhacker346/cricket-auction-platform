@@ -36,7 +36,7 @@ const clientListeners = new Set(
   [...socketEventsBlock.matchAll(/^\s+[A-Z_]+:\s*"(auction:[^"]+)"/gm)].map((m) => m[1])
 );
 const clientEmits = new Set(
-  [...clientConstantsSrc.matchAll(/(JOIN_AUCTION|LEAVE_AUCTION):\s*"([^"]+)"/g)].map((m) => m[2])
+  [...clientConstantsSrc.split('export const SOCKET_CLIENT_EVENTS')[1].matchAll(/^\s+[A-Z_]+:\s*"(auction:[^"]+)"/gm)].map((m) => m[1])
 );
 
 // 4. Events the backend socket handlers process.

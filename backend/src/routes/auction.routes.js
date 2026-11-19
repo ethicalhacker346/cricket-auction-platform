@@ -2,8 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-// Strict per-user bid limiter (5 bids / 2s) — the auction-specific limiter,
-// not the loose global-shaped one in rateLimiter.js (6000/min per IP).
+// Independent per-owner burst protection; viewing traffic never consumes it.
 import { bidRateLimiter } from '../middleware/auctionRateLimiter.js';
 import { auctionController } from '../controllers/auction.controller.js';
 import {
@@ -16,6 +15,7 @@ import {
   updateAuctionRoundSchema, // NEW — add to validators/schemas.js, see note below
   placeBidSchema,
   openLotSchema,
+  extendLotTimeSchema,
   undoAuctionActionSchema,
   auctionIdParamSchema,
   auctionRoundIdParamSchema, // NEW — add to validators/schemas.js, see note below
@@ -84,10 +84,7 @@ auctionRouter.get('/:auctionId/snapshot', validate(auctionIdParamSchema, 'params
 // only used inside the controller as an optional req.user — nothing here
 // requires it or rejects its absence.
 //
-// TODO: consider a dedicated, more permissive rate limiter than
-// bidRateLimiter (heartbeats are frequent-but-harmless reads, not bids) if
-// this endpoint sees abuse — not wired up here since the shape of the
-// existing limiter middleware isn't visible from this file.
+// The application traffic classifier assigns presence its own NAT-aware budget.
 auctionRouter.post(
   '/:auctionId/viewers/heartbeat',
   validate(auctionIdParamSchema, 'params'),
@@ -194,6 +191,13 @@ auctionRouter.post(
 
   validate(openLotSchema),
   asyncHandler(auctionController.openLot)
+);
+
+auctionRouter.post(
+  '/:auctionId/lot/time', authenticate,
+  validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.EXTEND_LOT_TIME),
+  validate(extendLotTimeSchema), asyncHandler(auctionController.extendLotTime)
 );
 
 auctionRouter.post(

@@ -33,6 +33,7 @@ export type AuctionPermission =
   | "COMPLETE_AUCTION"
   | "OPEN_LOT"
   | "SETTLE_LOT"
+  | "EXTEND_LOT_TIME"
   | "PLACE_BID"
   | "MARK_PERMANENT_UNSOLD";
 
@@ -72,6 +73,7 @@ export interface AuctionPermissions {
 
   // API-boundary aliases. These are convenience fields, never policy inputs.
   canUndo: boolean;
+  canExtendLotTime: boolean;
   canManageAuction: boolean;
   canStart: boolean;
   canPause: boolean;
@@ -196,7 +198,7 @@ export interface Bid {
 
 export type AuctionLogType =
   | "start" | "pause" | "resume" | "lot_open" | "bid" | "sold"
-  | "unsold" | "round_complete" | "complete" | "connect" | "disconnect";
+  | "lot_time_extended" | "unsold" | "round_complete" | "complete" | "connect" | "disconnect";
 
 export interface AuctionLog {
   id: string;
@@ -230,6 +232,30 @@ export interface Auction {
   rules: AuctionRules;
   createdAt: string;
   tournamentId?: string;
+}
+
+/** Authoritative result of an idempotent per-lot extension. */
+export interface LotTimeResponse {
+  status: string;
+  liveState: {
+    currentTournamentPlayerId: string | null;
+    currentRoundId: string | null;
+    currentHighestBid: number;
+    highestBidderTeamId: string | null;
+    lotStatus: string;
+    remainingTimeSeconds: number;
+    timerTotalSeconds: number;
+    updatedAt: string;
+    version: number;
+  };
+  timer: TimerState;
+}
+
+export interface LotTimeCommandResult {
+  success: boolean;
+  error?: string;
+  /** The server may have committed before the connection failed. Retry with the SAME command ID. */
+  uncertain?: boolean;
 }
 
 export interface TimerState { remaining: number; total: number; isRunning: boolean; }

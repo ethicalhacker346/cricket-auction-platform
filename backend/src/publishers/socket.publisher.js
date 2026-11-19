@@ -71,6 +71,7 @@ class SocketEventPublisher {
     );
 
     // Lot
+    this.listen(AUCTION_EVENTS.LOT_TIME_EXTENDED, (p) => this.handleLotTimeExtended(p));
     this.listen(AUCTION_EVENTS.LOT_OPENED, (p) => this.handleLotOpened(p));
     this.listen(AUCTION_EVENTS.LOT_SOLD, (p) => this.handleLotSold(p));
     this.listen(AUCTION_EVENTS.LOT_UNSOLD, (p) => this.handleLotUnsold(p));
@@ -372,6 +373,12 @@ class SocketEventPublisher {
     });
   }
 
+  handleLotTimeExtended(payload) {
+    this.publishToAuction(payload.auctionId, 'auction:lot:time:extended', payload);
+    if (payload.status === 'LIVE') this.startTimer(payload.auctionId, payload.liveState.remainingTimeSeconds, payload.liveState);
+    else this.stopTimer(payload.auctionId, payload.version);
+  }
+
   // ---------- Lot handlers ----------
   handleLotOpened({
     auctionId,
@@ -601,7 +608,7 @@ class SocketEventPublisher {
     if (Number.isFinite(version) && version < (this.revisions.get(String(auctionId)) ?? -1)) return;
     this.stopTimer(auctionId, version);
     remainingSeconds = this.clockRemaining(remainingSeconds, liveState);
-    const totalSeconds = liveState.lotTimerSeconds || remainingSeconds || 30;
+    const totalSeconds = Math.max(remainingSeconds, liveState.timerTotalSeconds || liveState.lotTimerSeconds || remainingSeconds || 30);
     const expiresAt = Date.now() + remainingSeconds * 1000;
     if (remainingSeconds <= 0) {
       this.publishToAuction(auctionId, "auction:timer:expired", { auctionId, version });

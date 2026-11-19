@@ -1,5 +1,5 @@
 import { CricHeroesLink } from "@/components/player/CricHeroesLink";
-import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import {
@@ -39,21 +39,19 @@ import type {
 import { AuctionRoutes } from "@/features/auction/routes/auction.routes";
 import { AuctionControls } from "@/features/auction/components/AuctionControls";
 import { formatLakhs, formatSeconds, initials, timeAgo } from "@/features/auction/utils/index.utils";
-import type {
-  Auction3DCameraMode,
-  Auction3DQuality,
-} from "@/features/auction/hooks/useAuction3DPreferences";
+import { ArenaDisplaySettings, type ArenaDisplaySettingsProps } from './ArenaDisplaySettings';
 
-export type Auction3DDrawer = "activity" | "teams" | "queue" | "controls" | null;
+export type Auction3DDrawer = "activity" | "teams" | "queue" | "controls" | "display" | null;
 
 interface HudPermissionShape {
   loading: boolean;
   canBid: boolean;
   canManageAuction: boolean;
   canUndo?: boolean;
+  canExtendLotTime?: boolean;
 }
 
-interface Auction3DHudProps {
+export interface Auction3DHudProps extends ArenaDisplaySettingsProps {
   tournamentId: string;
   auctionId: string;
   player: Player | null;
@@ -76,14 +74,8 @@ interface Auction3DHudProps {
   unsoldCount: number;
   totalMoneySpent: number;
   permissions: HudPermissionShape;
-  quality: Auction3DQuality;
-  onQualityChange: (quality: Auction3DQuality) => void;
-  cameraMode: Auction3DCameraMode;
-  onCameraModeChange: (mode: Auction3DCameraMode) => void;
   fullscreenTarget: RefObject<HTMLDivElement | null>;
 }
-
-const QUALITY_ORDER: Auction3DQuality[] = ["performance", "balanced", "cinematic"];
 
 function statusClasses(status: AuctionStatus) {
   switch (status) {
@@ -145,7 +137,7 @@ function TeamLogo({ team, className = "h-8 w-8" }: { team: Franchise; className?
   );
 }
 
-function TimerDial({ timer }: { timer: Auction3DHudProps["timer"] }) {
+function TimerDial({ timer, motionless }: { timer: Auction3DHudProps["timer"]; motionless: boolean }) {
   const size = 88;
   const radius = 36;
   const circumference = 2 * Math.PI * radius;
@@ -153,10 +145,11 @@ function TimerDial({ timer }: { timer: Auction3DHudProps["timer"] }) {
   const critical = timer.remaining > 0 && timer.remaining <= 5;
 
   return (
-    <div className="relative h-[88px] w-[88px] shrink-0">
+    <div className="relative h-[88px] w-[88px] shrink-0" role="timer" aria-label={`Lot countdown ${formatSeconds(timer.remaining)}`}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx="44" cy="44" r={radius} fill="rgba(3,7,18,.76)" stroke="rgba(255,255,255,.08)" strokeWidth="6" />
         <motion.circle
+          initial={false}
           cx="44"
           cy="44"
           r={radius}
@@ -166,11 +159,11 @@ function TimerDial({ timer }: { timer: Auction3DHudProps["timer"] }) {
           strokeLinecap="round"
           strokeDasharray={circumference}
           animate={{ strokeDashoffset: circumference * (1 - progress) }}
-          transition={{ duration: 0.3, ease: "linear" }}
+          transition={{ duration: motionless ? 0 : 0.3, ease: "linear" }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`font-mono text-[18px] font-black tabular-nums ${critical ? "animate-pulse text-rose-300" : "text-white"}`}>
+        <span className={`font-mono text-[18px] font-black tabular-nums ${critical ? `${motionless ? "" : "animate-pulse"} text-rose-300` : "text-white"}`}>
           {formatSeconds(timer.remaining)}
         </span>
         <span className="mt-0.5 text-[7px] font-black uppercase tracking-[0.22em] text-slate-500">
@@ -186,11 +179,13 @@ function PlayerHudCard({
   currentBid,
   leadingFranchise,
   timer,
+  motionless,
 }: {
   player: Player | null;
   currentBid: Auction3DHudProps["currentBid"];
   leadingFranchise: Franchise | null;
   timer: Auction3DHudProps["timer"];
+  motionless: boolean;
 }) {
   return (
     <motion.aside
@@ -234,7 +229,7 @@ function PlayerHudCard({
           </div>
 
           <div className="mt-3.5 flex items-center gap-3 border-t border-white/8 pt-3.5">
-            <TimerDial timer={timer} />
+            <TimerDial timer={timer} motionless={motionless} />
             <div className="min-w-0 flex-1">
               <p className="text-[9px] font-black uppercase tracking-[0.22em] text-amber-300/65">Highest bid</p>
               <AnimatePresence mode="popLayout" initial={false}>
@@ -382,14 +377,23 @@ function QueueDrawer({
   rounds: AuctionRound[];
   players: Player[];
 }) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const search = useDeferredValue(query.trim().toLowerCase());
+  const matches = useMemo(() => upcomingPlayers.filter((player) => `${player.name} ${player.role}`.toLowerCase().includes(search)), [upcomingPlayers, search]);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(matches.length / 40) - 1));
+  const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
   return (
     <div className="space-y-5">
       <section>
         <h3 className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Up next</h3>
+        <label className="mb-3 block text-[10px] font-bold text-slate-400">Find an upcoming player
+          <input type="search" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} className="mt-1 min-h-11 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-xs text-white outline-none focus:border-cyan-300/40" />
+        </label>
         <div className="space-y-2">
-          {upcomingPlayers.map((player, index) => (
+          {matches.slice(currentPage * 40, (currentPage + 1) * 40).map((player, index) => (
             <div key={player.id} className="flex items-center gap-3 rounded-2xl border border-white/7 bg-white/[0.025] p-2.5">
-              <span className="w-5 text-center text-[9px] font-black text-slate-600">{String(index + 1).padStart(2, "0")}</span>
+              <span className="w-5 text-center text-[9px] font-black text-slate-600">{String(currentPage * 40 + index + 1).padStart(2, "0")}</span>
               <TinyAvatar player={player} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-black text-white">{player.name}</p>
@@ -398,15 +402,20 @@ function QueueDrawer({
               </div>
             </div>
           ))}
-          {upcomingPlayers.length === 0 ? <p className="py-5 text-center text-xs text-slate-600">No players queued.</p> : null}
+          {matches.length === 0 ? <p className="py-5 text-center text-xs text-slate-600">{query ? 'No matching players.' : 'No players queued.'}</p> : null}
         </div>
+        {matches.length > 40 && <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+          <button type="button" aria-label="Previous queue page" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="min-h-11 rounded-xl border border-white/10 px-3 disabled:opacity-30">Previous</button>
+          <span>{currentPage * 40 + 1}–{Math.min(matches.length, (currentPage + 1) * 40)} of {matches.length}</span>
+          <button type="button" aria-label="Next queue page" disabled={(currentPage + 1) * 40 >= matches.length} onClick={() => setPage(currentPage + 1)} className="min-h-11 rounded-xl border border-white/10 px-3 disabled:opacity-30">Next</button>
+        </div>}
       </section>
 
       <section>
         <h3 className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Round map</h3>
         <div className="space-y-2">
           {[...rounds].sort((a, b) => a.order - b.order).map((round) => {
-            const roundPlayers = players.filter((player) => round.playerIds.includes(player.id));
+            const roundPlayers = round.playerIds.map((id) => playerById.get(id)).filter((player): player is Player => Boolean(player));
             const settled = roundPlayers.filter((player) => player.status === "sold" || player.status === "permanent_unsold").length;
             const progress = roundPlayers.length > 0 ? (settled / roundPlayers.length) * 100 : 0;
             return (
@@ -489,32 +498,53 @@ function Drawer({
   onChange: (drawer: Exclude<Auction3DDrawer, null>) => void;
   props: Auction3DHudProps;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  const titleId = useId();
+  useEffect(() => {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panel.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('[aria-modal="true"]')) {
+        event.preventDefault(); closeRef.current();
+      }
+    };
+    document.addEventListener('keydown', escape);
+    const element = panel.current;
+    return () => {
+      document.removeEventListener('keydown', escape);
+      const restore = document.activeElement === document.body || element?.contains(document.activeElement);
+      if (restore) queueMicrotask(() => { if (trigger?.isConnected && !document.querySelector('[aria-modal="true"]')) trigger.focus(); });
+    };
+  }, []);
   const titles: Record<Exclude<Auction3DDrawer, null>, string> = {
     activity: "Live activity",
     teams: "Franchise floor",
     queue: "Auction runway",
     controls: "Organizer console",
+    display: "Your arena settings",
   };
 
   return (
     <motion.aside
+      ref={panel} aria-labelledby={titleId} id="auction-3d-panel"
       initial={{ opacity: 0, x: 32, scale: 0.98 }}
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 32, scale: 0.98 }}
       transition={{ type: "spring", stiffness: 320, damping: 30 }}
-      className="pointer-events-auto absolute bottom-[176px] right-3 top-[74px] z-30 flex w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-[26px] border border-white/12 bg-[#050813]/96 shadow-[0_32px_120px_rgba(0,0,0,.72)] backdrop-blur-3xl 2xl:bottom-[76px]"
+      className="pointer-events-auto absolute bottom-[188px] right-3 top-[74px] z-30 flex w-[calc(100%_-_24px)] max-w-[420px] flex-col overflow-hidden rounded-[26px] border border-white/12 bg-[#050813]/96 shadow-[0_32px_120px_rgba(0,0,0,.72)] backdrop-blur-3xl 2xl:bottom-[76px]"
     >
       <header className="flex items-center justify-between border-b border-white/8 px-4 py-3.5">
         <div>
           <p className="text-[8px] font-black uppercase tracking-[0.3em] text-cyan-300/55">Immersive intelligence</p>
-          <h2 className="mt-0.5 text-sm font-black text-white">{titles[active]}</h2>
+          <h2 id={titleId} className="mt-0.5 text-sm font-black text-white">{titles[active]}</h2>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close panel" className="rounded-xl p-2 text-slate-400 transition hover:bg-white/8 hover:text-white">
+        <button type="button" onClick={onClose} aria-label="Close panel" className="flex h-11 w-11 items-center justify-center rounded-xl p-2 text-slate-400 transition hover:bg-white/8 hover:text-white">
           <X className="h-4 w-4" />
         </button>
       </header>
 
-      {active !== "controls" ? (
+      {active !== "controls" && active !== "display" ? (
         <div className="grid grid-cols-3 gap-2 border-b border-white/8 p-2">
           {(["activity", "teams", "queue"] as const).map((tab) => (
             <button
@@ -536,6 +566,7 @@ function Drawer({
         {active === "teams" ? <TeamsDrawer franchises={props.franchises} currentBid={props.currentBid} /> : null}
         {active === "queue" ? <QueueDrawer upcomingPlayers={props.upcomingPlayers} rounds={props.rounds} players={props.players} /> : null}
         {active === "controls" ? <AuctionControls /> : null}
+        {active === "display" ? <ArenaDisplaySettings {...props} /> : null}
       </div>
     </motion.aside>
   );
@@ -558,7 +589,8 @@ function IconAction({
       onClick={onClick}
       aria-label={label}
       title={label}
-      className={`flex h-8 items-center justify-center gap-1.5 rounded-[10px] px-2 text-[9px] font-black uppercase tracking-wider transition ${
+      aria-pressed={active}
+      className={`flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-[10px] px-2 text-[9px] font-black uppercase tracking-wider transition ${
         active ? "bg-cyan-300/12 text-cyan-200 ring-1 ring-cyan-300/20" : "bg-white/[0.045] text-slate-400 ring-1 ring-white/8 hover:bg-white/10 hover:text-white"
       }`}
     >
@@ -573,16 +605,17 @@ export function Auction3DHud(props: Auction3DHudProps) {
   const [cleanView, setCleanView] = useState(false);
 
   useEffect(() => {
-    const sync = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const sync = () => setIsFullscreen(document.fullscreenElement === props.fullscreenTarget.current);
+    sync();
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
-  }, []);
+  }, [props.fullscreenTarget]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== "h" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented || document.querySelector('[aria-modal="true"]') || event.key.toLowerCase() !== "h" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, button, [contenteditable='true']")) return;
+      if (target?.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
       setDrawer(null);
       setCleanView((current) => !current);
     };
@@ -599,14 +632,11 @@ export function Auction3DHud(props: Auction3DHudProps) {
     }
   };
 
-  const cycleQuality = () => {
-    const current = QUALITY_ORDER.indexOf(props.quality);
-    props.onQualityChange(QUALITY_ORDER[(current + 1) % QUALITY_ORDER.length]);
-  };
-
   const toggleDrawer = (next: Exclude<Auction3DDrawer, null>) => {
     setDrawer((current) => (current === next ? null : next));
   };
+  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const motionless = props.reducedMotion || props.motionPaused;
 
   const completion = props.players.length > 0
     ? Math.min(100, ((props.soldCount + props.unsoldCount) / props.players.length) * 100)
@@ -614,19 +644,20 @@ export function Auction3DHud(props: Auction3DHudProps) {
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden text-white">
+      <p aria-live="polite" aria-atomic="true" className="sr-only">{props.player ? `Current player: ${props.player.name}. ${props.leadingFranchise ? `${props.leadingFranchise.name} leads at ${formatLakhs(props.currentBid.amount)}.` : 'No bids yet.'} ${props.timer.remaining <= 0 ? 'Bidding window closed.' : props.timer.isRunning ? 'Bidding window open.' : 'Clock paused.'}` : 'Waiting for the next player.'} Auction {props.status}.</p>
       <header className="pointer-events-auto absolute inset-x-3 top-3 z-40 flex h-[50px] items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#050813]/72 px-2.5 shadow-xl backdrop-blur-2xl sm:px-3.5">
         <div className="flex min-w-0 items-center gap-2.5">
           <Link
             to={AuctionRoutes.live(props.tournamentId, props.auctionId)}
             aria-label="Return to standard live auction"
             title="Standard live room"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-white/[0.055] text-slate-400 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-white/[0.055] text-slate-400 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
           >
             <ChevronLeft className="h-4 w-4" />
           </Link>
           <div className="hidden h-7 w-px bg-white/10 sm:block" />
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-cyan-400/20 to-violet-500/20 text-cyan-200 ring-1 ring-cyan-300/20">
+            <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-cyan-400/20 to-violet-500/20 text-cyan-200 ring-1 ring-cyan-300/20 sm:flex">
               <Boxes className="h-4 w-4" />
             </span>
             <div className="min-w-0">
@@ -635,7 +666,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
             </div>
           </div>
           <span className={`ml-1 hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.16em] sm:flex ${statusClasses(props.status)}`}>
-            <span className={`h-1.5 w-1.5 rounded-full bg-current ${props.status === "live" ? "animate-pulse" : ""}`} />
+            <span className={`h-1.5 w-1.5 rounded-full bg-current ${props.status === "live" && !motionless ? "animate-pulse" : ""}`} />
             {props.status}
           </span>
           {props.currentRound ? (
@@ -655,7 +686,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
             <span className="flex items-center gap-1"><Eye className="h-3 w-3" /> {props.viewerCount}</span>
           </div>
 
-          <div className="hidden items-center gap-1 md:flex">
+          <div className="hidden items-center gap-1 lg:flex">
             <IconAction label="Broadcast camera" active={props.cameraMode === "broadcast"} onClick={() => props.onCameraModeChange("broadcast")}>
               <Eye className="h-3.5 w-3.5" />
             </IconAction>
@@ -673,9 +704,9 @@ export function Auction3DHud(props: Auction3DHudProps) {
             </IconAction>
           </div>
 
-          <IconAction label={`Rendering quality: ${props.quality}`} onClick={cycleQuality}>
-            <Gauge className="h-3.5 w-3.5" />
-            <span className="hidden xl:inline">{props.quality}</span>
+          <IconAction label="Arena display settings" active={drawer === 'display'} onClick={() => toggleDrawer('display')}>
+            <Gauge className="h-4 w-4" />
+            <span className="hidden xl:inline">{props.qualityPreference === 'auto' ? 'Auto' : props.quality}</span>
           </IconAction>
           <IconAction
             label={cleanView ? "Show information panels (H)" : "Clean arena view (H)"}
@@ -695,7 +726,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
 
       {!cleanView ? (
         <div className="absolute left-4 top-[78px] hidden xl:block">
-          <PlayerHudCard player={props.player} currentBid={props.currentBid} leadingFranchise={props.leadingFranchise} timer={props.timer} />
+          <PlayerHudCard player={props.player} currentBid={props.currentBid} leadingFranchise={props.leadingFranchise} timer={props.timer} motionless={motionless} />
         </div>
       ) : null}
 
@@ -710,7 +741,8 @@ export function Auction3DHud(props: Auction3DHudProps) {
         {props.player ? <TinyAvatar player={props.player} /> : <Gavel className="mx-2 h-4 w-4 text-slate-500" />}
         <div className="min-w-0 pr-1">
           <p className="max-w-[128px] truncate text-[11px] font-black text-white sm:max-w-[220px]">{props.player?.name ?? "Awaiting next lot"}</p>
-          <p className="text-[9px] text-slate-500">{props.player ? formatLakhs(props.currentBid.amount) : props.status}</p>
+          <p className="text-[9px] text-slate-400">{props.player ? props.currentBid.amount > 0 ? formatLakhs(props.currentBid.amount) : 'No bids yet' : props.status}</p>
+          {props.player && <CricHeroesLink url={props.player.cricHeroesUrl} playerName={props.player.name} className="text-emerald-300" />}
         </div>
         <div className="h-7 w-px bg-white/10" />
         <span className={`font-mono text-xs font-black ${props.timer.remaining <= 5 && props.timer.remaining > 0 ? "text-rose-300" : "text-amber-200"}`}>
@@ -720,7 +752,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
       ) : null}
 
       {!cleanView ? (
-      <nav aria-label="Auction room panels" className="pointer-events-auto absolute bottom-[116px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-[14px] border border-white/10 bg-[#050813]/84 p-1 shadow-2xl backdrop-blur-2xl 2xl:bottom-4 2xl:left-auto 2xl:right-4 2xl:translate-x-0">
+      <nav aria-label="Auction room panels" className="pointer-events-auto absolute bottom-[124px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-[14px] border border-white/10 bg-[#050813]/84 p-1 shadow-2xl backdrop-blur-2xl 2xl:bottom-4 2xl:left-auto 2xl:right-4 2xl:translate-x-0">
         <IconAction label="Live activity" active={drawer === "activity"} onClick={() => toggleDrawer("activity")}>
           <Activity className="h-3.5 w-3.5" /><span className="hidden sm:inline">Activity</span>
         </IconAction>
@@ -730,7 +762,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
         <IconAction label="Player queue" active={drawer === "queue"} onClick={() => toggleDrawer("queue")}>
           <ListOrdered className="h-3.5 w-3.5" /><span className="hidden sm:inline">Queue</span>
         </IconAction>
-        {props.permissions.canManageAuction || props.permissions.canUndo ? (
+        {props.permissions.canManageAuction || props.permissions.canUndo || props.permissions.canExtendLotTime ? (
           <IconAction label="Organizer controls" active={drawer === "controls"} onClick={() => toggleDrawer("controls")}>
             <Settings2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Control</span>
           </IconAction>
@@ -751,7 +783,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
         <span className="flex items-center gap-1">
           <Gamepad2 className="h-3 w-3" />
           {props.cameraMode === "orbit"
-            ? "Two-finger swipe: 360° + tilt · pinch: zoom"
+            ? "Drag: rotate · swipe: tilt · pinch: zoom"
             : "Choose orbit for touchpad gestures"}
         </span>
         <span>·</span>
@@ -763,7 +795,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
         {drawer ? (
           <Drawer
             active={drawer}
-            onClose={() => setDrawer(null)}
+            onClose={closeDrawer}
             onChange={(next) => setDrawer(next)}
             props={props}
           />

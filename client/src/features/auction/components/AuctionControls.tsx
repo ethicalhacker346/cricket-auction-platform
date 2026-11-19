@@ -16,6 +16,7 @@ import { formatLakhs } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
 import { AuctionDialog } from './AuctionDialog';
 import { AuctionUndoPanel } from './AuctionUndoPanel';
+import { LotTimeControls } from './LotTimeControls';
 import { NextLotPicker } from './NextLotPicker';
 import { eligibleRoundPlayers, runningAuctionRound } from '../utils/roundSelection';
 
@@ -200,7 +201,7 @@ function ControlButton({
 /* ------------------------------------------------------------------ */
 
 export function AuctionControls() {
-  const { actions, currentPlayer, currentRound, leadingFranchise, currentBid, auction, currentPlayerId, rounds, players, undoAction } =
+  const { actions, currentPlayer, currentRound, leadingFranchise, currentBid, auction, currentPlayerId, rounds, players, undoAction, timer, connection } =
     useLiveAuction();
   const permissions = useAuctionPermissions();
 
@@ -351,6 +352,7 @@ export function AuctionControls() {
 
   const noOrganizerAccess =
     !permissions.canUndo &&
+    !permissions.canExtendLotTime &&
     !permissions.canStart &&
     !permissions.canPause &&
     !permissions.canResume &&
@@ -427,7 +429,7 @@ export function AuctionControls() {
             variant="primary"
             loading={loading.start}
             onClick={onStart}
-            disabled={!permissions.canStart}
+            disabled={!permissions.canStart || anyLoading}
             title={!permissions.canStart ? "Auction cannot be started now" : "Start Auction"}
           />
           <ControlButton
@@ -436,7 +438,7 @@ export function AuctionControls() {
             variant="warning"
             loading={loading.pause}
             onClick={onPause}
-            disabled={!permissions.canPause}
+            disabled={!permissions.canPause || anyLoading}
             title={!permissions.canPause ? "Auction is not live" : "Pause Auction"}
           />
           <ControlButton
@@ -445,7 +447,7 @@ export function AuctionControls() {
             variant="primary"
             loading={loading.resume}
             onClick={onResume}
-            disabled={!permissions.canResume}
+            disabled={!permissions.canResume || anyLoading}
             title={!permissions.canResume ? "Auction is not paused" : "Resume Auction"}
           />
           <ControlButton
@@ -454,7 +456,7 @@ export function AuctionControls() {
             variant="danger"
             loading={loading.complete}
             onClick={onComplete}
-            disabled={!permissions.canComplete}
+            disabled={!permissions.canComplete || anyLoading}
             title={!permissions.canComplete ? "Cannot complete auction yet" : "Complete Auction"}
           />
 
@@ -494,6 +496,12 @@ export function AuctionControls() {
             title="Release the winning reservation and return the player to the unsold pool" />
         </div>
 
+        {permissions.canExtendLotTime && currentPlayer && <LotTimeControls player={currentPlayer} timer={timer} status={auction.status}
+          disabled={anyLoading || connection !== 'connected'} onExtend={async (playerId, seconds, requestId) => {
+            setLoading((previous) => ({ ...previous, extendLotTime: true }));
+            try { return await actions.extendLotTime(playerId, seconds, requestId); }
+            finally { setLoading((previous) => ({ ...previous, extendLotTime: false })); }
+          }} />}
         {permissions.canUndo && <AuctionUndoPanel auctionId={auction.id} action={undoAction} onUndo={actions.undo} />}
         {(permissions.canOpenLot || permissions.canPause || permissions.canResume) && (
           <NextLotPicker rounds={rounds} players={players} selectedId={nextPlayerId || ''}

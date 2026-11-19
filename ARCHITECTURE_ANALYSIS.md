@@ -8,9 +8,9 @@
 
 ## Current implementation checkpoint — 2026-11-18
 
-The review below is chronological. **Parts 1–5 preserve findings and verification
+The review below is chronological. **Parts 1–6 preserve findings and verification
 at their original checkpoints**; historical blocked tests and compiler counts
-are not the current result. [Part 6](#part-6--audited-undo-player-links-next-lot-selection-and-public-spectators)
+are not the current result. [Part 7](#part-7--auction-traffic-resilience-per-lot-time-and-adaptive-3d)
 records the latest implementation and remaining limits.
 
 | Requested capability | Current implementation |
@@ -19,15 +19,21 @@ records the latest implementation and remaining limits.
 | CricHeroes profiles | Optional create/edit/submission field, validated persistence and safe links throughout public player/auction views |
 | Arbitrary next player | Search/select any eligible player in the **running round**, enforced inside the transaction |
 | Guest watching | Public live/3D/dashboard/history/analytics/results; no bidding or management privileges |
+| Auction traffic | Separate verified-account/NAT-aware read, presence, command and bid budgets; Redis atomic counters with bounded local fallback; Retry-After-aware coalesced reads |
+| Extra time for one lot | Audited, idempotent LIVE/PAUSED extension of the active player, including after expiry; global rules/next-lot duration unchanged |
+| Immersive room | Device/FPS-adaptive rendering, accessible persistent camera/display controls, bounded stage/queue, renderer-only graphics recovery and standard-room fallback |
 
-**Final verification:** 80 client tests / 10 files; 43 backend tests / 4 suites;
-hooks lint, 22-event socket contract, syntax checks, diff checks and production
-PWA build pass. A separate backend run with open-handle detection exits cleanly
-without forced termination. Nine real-browser acceptance checks pass against a
-disposable API. Typecheck still fails with **228 diagnostics vs 290 before the
-features**, with no new normalized diagnostic messages. Large-bundle warnings
-remain. See [the repeatable checks](client/TESTING.md) and the
-[operator/deployment guide](docs/AUCTION_SAFETY_AND_SPECTATORS.md).
+**Final verification:** 125 client tests / 18 files; 69 backend tests / 5 suites;
+hooks lint, 23-event socket contract, syntax checks, diff checks and production
+PWA build pass. The backend exits cleanly with open-handle detection and without
+forced termination. Five real-Redis integration checks pass. The targeted
+follow-up browser harness completes with eight checks and no uncaught exceptions;
+the earlier feature acceptance checklist is retained in the testing guide.
+Typecheck still fails with **228 diagnostics**, unchanged by this follow-up
+(and down from 290 before the earlier features); only equivalent union-order
+wording differs. Large-bundle warnings remain, but the lazy 3D renderer is no
+longer PWA-precached for 2D viewers. See [the repeatable checks](client/TESTING.md)
+and the [operator/deployment guide](docs/AUCTION_SAFETY_AND_SPECTATORS.md).
 
 # Part 1 — Initial architecture and findings (historical baseline)
 
@@ -1021,8 +1027,9 @@ Browser-facing code never needs to contact the browser's own localhost.
 
 ## R6.6 — Verified outcome and honest deployment limits
 
-The current 80-client / 43-backend automated checks and nine disposable-API
-browser checks are detailed in `client/TESTING.md`. Browser acceptance includes
+At the Part 6 checkpoint, 80-client / 43-backend automated checks and nine
+disposable-API browser checks passed. The expanded current checks are detailed
+in `client/TESTING.md` and Part 7 below. Browser acceptance includes
 real owner UI bids, live guest corrections, sale/purse/roster restoration,
 390px layouts, public/private-route separation and native fullscreen. Browser
 profile/submission, unsold reversal and final-auction recovery were not
@@ -1043,3 +1050,127 @@ is not a Redis-elected timer-owner implementation. Shared MongoDB and the
 existing Redis Socket.IO adapter are still required when scaling horizontally.
 Large PWA bundles and 228 pre-existing TypeScript diagnostics remain technical
 debt; neither a passing build nor these feature tests claims to resolve them.
+
+# Part 7 — Auction traffic resilience, per-lot time, and adaptive 3D
+
+## R7.1 — Separate legitimate live traffic from abuse limits
+
+The original general/IP limiter charged polling, presence and commands to one
+allowance. A shared venue/proxy IP compounded the issue; the former socket gate
+also combined attempt counts with active connections and reset them on a minute
+boundary. Simply removing limits would hide the symptom and remove protection.
+
+`auctionTrafficClass` now recognizes exact live method/path pairs. Ordinary
+requests, authenticated/anonymous reads, presence, commands, bid ingress and
+short owner bid bursts have independent scopes. A verified JWT subject selects
+an account bucket; invalid/expired/forged tokens fall back to the trusted client
+IP and never authorize a request. Actual owner authentication still precedes the
+bid-burst limiter. Development has larger ordinary/live allowances, while
+security-sensitive authentication/reset/upload limits remain intact. Production
+defaults and tuning parameters are recorded in the operator guide.
+
+`ResilientRateLimitStore` uses atomic namespaced Redis counters when configured
+and continuously warms a bounded local mirror. Remote command deadlines,
+readiness checks and a five-second half-open cooldown avoid repeatedly stalling
+bids during an outage. Failure never removes local protection or creates an
+unbounded identity map. Shared-store disconnect/reconnect, scope isolation,
+decrement/reset and actual expiry are verified against a disposable Redis.
+During an outage the mirror is worker-local, so it is intentionally not an
+exact distributed counter.
+
+Both HTTP and sockets honor only `TRUST_PROXY_HOPS`, default zero. The ingress
+must enforce that known uniform topology; spoofed forwarding headers must not
+create fresh allowances. Socket admission separately tracks bounded attempts
+and active IP/account leases, with idempotent disconnect release and no periodic
+reset of active occupancy. Admission remains worker-local. Native Socket.IO
+Redis clients have a bounded startup deadline, disabled offline queues, capped
+command queues, observed publish rejections and deterministic destruction.
+Initial adapter failure leaves that worker local until restart; a later outage
+can lose cross-worker packets, not database correctness.
+
+On the client, the engine coalesces in-flight snapshots and backs off failed
+reads using the exposed Retry-After deadline plus jitter. A throttled REST read
+does not disconnect a healthy socket or block authoritative events. Presence is
+socket-first, sequential and visibility-aware. The HTTP layer has a 15-second
+abort deadline. No financial/organizer mutation is automatically replayed.
+
+## R7.2 — Reopen the active lot, not the global configuration
+
+`POST /auctions/:id/lot/time` requires policy-v5 `EXTEND_LOT_TIME`, the current
+tournament-player ID, 5–300 whole seconds and a UUID request ID. The owning
+organizer/admin may extend a LIVE or PAUSED BIDDING lot. Transactional checks
+reject another player, settled lot, denied identity or excessive remainder.
+LIVE adds to `max(0, persisted remainder - elapsed)`; PAUSED adds to the frozen
+remainder without resuming. `liveState.timerTotalSeconds` is per-lot and resets
+when the next lot opens. Bid/reset/global rules and the winning reservation are
+not rewritten by an extension.
+
+The command journal stores `lot-time:<requestId>` plus a player/seconds
+fingerprint, guarded by a unique partial `(auctionId, commandId)` index. An
+identical applied retry by the same actor is a no-op; changed/undone ID reuse
+conflicts. Audit failure aborts the time edit and prevents publication. The
+ordinary latest-first undo restores the prior lot state and pauses for review.
+The new index is a deployment requirement, not an optional performance hint.
+
+`auction:lot:time:extended` carries authoritative state and restarts/stops the
+publisher timer based on lifecycle state. The HTTP response also supplies the
+**current elapsed-adjusted clock**, including on deduplicated retries; replaying
+an old original duration cannot visually reopen an expired timer. Client
+connection-generation/revision fences apply to both transports. Standard and
+immersive organizer views share the same extra-time panel, including explicit
+same-ID retry after uncertain network results and no silent mutation replay.
+
+## R7.3 — Keep the renderer optional and bounded
+
+The immersive stage uses explicit Performance/Balanced/Cinematic budgets for
+DPR, shadows and particles. Auto starts from device constraints and adapts to
+sustained FPS with separate upgrade/downgrade thresholds and hysteresis. Hidden,
+lost-context and reduced/paused-motion cases avoid continuous scene rendering;
+samples ignore warming-up/stalled intervals. A maximum of 12 unique stage teams
+always retains the leader, and the searchable queue renders 40 entries per page.
+
+Camera vectors are reused rather than allocated per frame. Responsive FOV,
+five camera modes, touch/trackpad gestures and labelled 44px step controls make
+the scene usable without precise dragging. Manual orbit input temporarily takes
+priority over brief bid-follow cuts. Persistent display, motion, follow and
+audio controls remain usable if browser storage fails; system reduced-motion
+changes are observed live. A strict CSS-to-Three color parser also fixes modern
+space-separated HSL team colors silently becoming white.
+
+Native context-loss listeners isolate graphics recovery from the live engine.
+The renderer can restore into conservative quality, or explicitly restart after
+an eight-second timeout, without remounting sockets/controls. Missing WebGL 2
+keeps the console with an explicit standard-room link. During real-browser
+verification a projected HTML player card was found intercepting HUD controls;
+an isolated scene stacking context and bounded projected-label z-index fix that
+failure. The CSS font reset now lives in the base layer rather than defeating
+component utility typography. Drawers/dock use room-relative widths and pass
+320px/390px overflow checks.
+
+The lazy renderer is excluded from Workbox precaching, and API/Socket.IO paths
+are denied app-shell navigation fallback. The final production build precaches
+14 entries / 3602.20 KiB rather than downloading the renderer for every 2D user.
+The wider existing application bundle still needs future splitting.
+
+## R7.4 — Verified boundary, not a capacity certification
+
+The final runs pass **125 frontend tests, 69 backend tests, five real-Redis
+checks, hooks lint, 23 room-event contracts, backend syntax and diff checks**.
+Backend tests use real replica-set transactions and exit without forceExit.
+The production build passes; typecheck retains the same 228 pre-existing
+semantic diagnostics, not a clean compiler run.
+
+A targeted Chromium harness exits successfully with eight checks and no
+uncaught browser exceptions. It exercises real expiry → organizer extension →
+owner UI bid, frozen paused extensions, both organizer views, actual WebGL 2
+mobile rendering/settings, native context loss/restoration with the same live
+socket, HTTP 429 backoff with immediate socket updates, and no-WebGL fallback.
+These are acceptance checks, not production load/failover tests or a comprehensive
+mobile GPU/driver matrix. Temporary fixtures, tokens, binaries and screenshots
+are excluded from the shipped repository. Repeat the documented staging
+checklist and tune ingress/Redis/database capacity for the actual event.
+
+The Part 6 distributed limits remain: post-commit publication is not a durable
+outbox, timer ownership is not elected across workers, and presence is
+approximate. Shared Redis/MongoDB plus client reconciliation remain required;
+this work does not claim exactly-once distributed delivery.

@@ -28,7 +28,9 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
-button, input { font: inherit; }
+/* Keep the reset BELOW component typography in the cascade. An unlayered
+   font shorthand silently defeated Tailwind's font sizes in live controls. */
+@layer base { button, input { font: inherit; } }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
 

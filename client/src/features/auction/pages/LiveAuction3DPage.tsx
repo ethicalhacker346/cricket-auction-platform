@@ -1,6 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { MotionConfig } from "framer-motion";
+import type { ArenaCameraAction, ArenaCameraCommand } from "../components/3d/ArenaCameraRig";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Boxes, ChevronLeft, Gavel, Loader2, WifiOff } from "lucide-react";
+import { AlertTriangle, Boxes, ChevronLeft, Gavel, Loader2, RotateCcw, WifiOff } from "lucide-react";
 import {
   useAuth,
   useLiveAuction,
@@ -61,7 +63,7 @@ function RendererLoading() {
       <div className="text-center">
         <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] text-cyan-200">
           <Boxes className="h-6 w-6" />
-          <span className="absolute inset-0 animate-ping rounded-2xl border border-cyan-300/20" />
+          <span className="absolute inset-0 animate-ping rounded-2xl border border-cyan-300/20 motion-reduce:animate-none" />
         </div>
         <p className="mt-4 text-[10px] font-black uppercase tracking-[0.34em] text-cyan-300/55">
           Building GullyBid Arena
@@ -71,16 +73,49 @@ function RendererLoading() {
   );
 }
 
+function GraphicsRecovery({ timedOut, onRetry }: { timedOut: boolean; onRetry: () => void }) {
+  return <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#02030a]/75 px-5 py-32 backdrop-blur-sm">
+    <div role="status" className="pointer-events-auto max-w-sm rounded-3xl border border-amber-300/20 bg-slate-950/95 p-5 text-center shadow-2xl">
+      {timedOut ? <AlertTriangle className="mx-auto h-7 w-7 text-amber-200" /> : <Loader2 className="mx-auto h-7 w-7 animate-spin text-cyan-200 motion-reduce:animate-none" />}
+      <h2 className="mt-3 text-base font-black text-white">{timedOut ? 'The visual stage is paused' : 'Restoring the visual stage…'}</h2>
+      <p className="mt-2 text-xs leading-5 text-slate-400">Your device reset its graphics connection. Live data, organizer controls and bidding remain available. {timedOut ? 'Retry safely at a lower quality, or use the standard room link above.' : 'Waiting for the browser to restore 3D.'}</p>
+      {timedOut && <button type="button" onClick={onRetry} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-xl bg-cyan-100 px-4 text-xs font-bold text-slate-950"><RotateCcw className="h-4 w-4" /> Restart visual stage</button>}
+    </div>
+  </div>;
+}
+
 export default function LiveAuction3DPage() {
   const { tournamentId, auctionId } = useAuctionContext();
   const { hasHydrated } = useAuth();
   const roomRef = useRef<HTMLDivElement>(null);
   const [webGLAvailable, setWebGLAvailable] = useState<boolean | null>(null);
   const [rendererKey, setRendererKey] = useState(0);
+  const [contextLost, setContextLost] = useState(false);
+  const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);
+  const [rendererReady, setRendererReady] = useState(false);
+  const [cameraCommand, setCameraCommand] = useState<ArenaCameraCommand | null>(null);
 
   const live = useLiveAuction({ auctionId, tournamentId });
   const teamResolution = useResolvedUserTeam(live.franchises);
   const preferences = useAuction3DPreferences();
+  const ready = useCallback(() => setRendererReady(true), []);
+  const loseContext = useCallback(() => { setContextLost(true); setRecoveryTimedOut(false); }, []);
+  const restoreContext = useCallback(() => {
+    preferences.recoverRenderer(); setContextLost(false); setRecoveryTimedOut(false);
+  }, [preferences.recoverRenderer]);
+  const retryRenderer = useCallback(() => {
+    preferences.recoverRenderer(); setContextLost(false); setRecoveryTimedOut(false); setRendererReady(false);
+    setRendererKey((value) => value + 1);
+  }, [preferences.recoverRenderer]);
+  const cameraAction = useCallback((action: ArenaCameraAction) => {
+    preferences.setCameraMode('orbit');
+    setCameraCommand((previous) => ({ sequence: (previous?.sequence ?? 0) + 1, action }));
+  }, [preferences.setCameraMode]);
+  useEffect(() => {
+    if (!contextLost) return;
+    const timeout = setTimeout(() => setRecoveryTimedOut(true), 8000);
+    return () => clearTimeout(timeout);
+  }, [contextLost]);
 
   useEffect(() => {
     setWebGLAvailable(supportsWebGL());
@@ -118,9 +153,10 @@ export default function LiveAuction3DPage() {
   const viewerCount = live.viewerCount;
 
   return (
+    <MotionConfig reducedMotion={preferences.reducedMotion || preferences.motionPaused ? 'always' : 'user'}>
     <div
-      ref={roomRef}
-      className="relative isolate h-[calc(100dvh-6rem)] min-h-[620px] w-full overflow-hidden rounded-[28px] border border-white/10 bg-[#02030a] shadow-[0_30px_120px_rgba(0,0,0,.45)] fullscreen:h-screen fullscreen:min-h-0 fullscreen:rounded-none fullscreen:border-0"
+      ref={roomRef} role="region" aria-label="Immersive live auction" data-renderer-state={contextLost ? 'interrupted' : rendererReady ? 'ready' : 'loading'}
+      className="relative isolate h-[calc(100dvh-6rem)] min-h-[560px] sm:min-h-[600px] w-full overflow-hidden rounded-[28px] border border-white/10 bg-[#02030a] shadow-[0_30px_120px_rgba(0,0,0,.45)] fullscreen:h-screen fullscreen:min-h-0 fullscreen:rounded-none fullscreen:border-0"
     >
       <SoldUnsoldAnimation />
 
@@ -129,7 +165,7 @@ export default function LiveAuction3DPage() {
       ) : webGLAvailable ? (
         <Auction3DErrorBoundary
           key={rendererKey}
-          onRetry={() => setRendererKey((value) => value + 1)}
+          onRetry={retryRenderer}
         >
           <Suspense fallback={<RendererLoading />}>
             <AuctionArena3D
@@ -146,12 +182,22 @@ export default function LiveAuction3DPage() {
               renderConfig={preferences.renderConfig}
               reducedMotion={preferences.reducedMotion}
               pageVisible={preferences.pageVisible}
+              motionPaused={preferences.motionPaused}
+              followBids={preferences.followBids}
+              contextLost={contextLost}
+              cameraCommand={cameraCommand}
+              onRendererReady={ready}
+              onContextLost={loseContext}
+              onContextRestored={restoreContext}
+              onFrameRate={preferences.reportFrameRate}
             />
           </Suspense>
         </Auction3DErrorBoundary>
       ) : (
         <WebGLUnavailable tournamentId={tournamentId} auctionId={auctionId} />
       )}
+
+      {contextLost && <GraphicsRecovery timedOut={recoveryTimedOut} onRetry={retryRenderer} />}
 
       <Auction3DHud
         tournamentId={tournamentId}
@@ -177,13 +223,22 @@ export default function LiveAuction3DPage() {
         totalMoneySpent={live.totalMoneySpent ?? 0}
         permissions={permissions}
         quality={preferences.quality}
+        qualityPreference={preferences.qualityPreference}
+        fps={preferences.fps}
+        recoveryMode={preferences.recoveryMode}
+        reducedMotion={preferences.reducedMotion}
+        motionPaused={preferences.motionPaused}
+        onToggleMotion={preferences.toggleMotion}
+        followBids={preferences.followBids}
+        onFollowBidsChange={preferences.setFollowBids}
+        onCameraAction={cameraAction}
         onQualityChange={preferences.setQuality}
         cameraMode={preferences.cameraMode}
         onCameraModeChange={preferences.setCameraMode}
         fullscreenTarget={roomRef}
       />
 
-      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-40 -translate-x-1/2">
+      <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-40 flex justify-center">
         <Auction3DBidDock
           auctionId={auctionId}
           player={live.currentPlayer}
@@ -207,5 +262,6 @@ export default function LiveAuction3DPage() {
         </div>
       )}
     </div>
+    </MotionConfig>
   );
 }

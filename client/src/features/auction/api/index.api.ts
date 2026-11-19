@@ -1,7 +1,8 @@
+import { parseRetryAfter } from "../utils/requestBackoff";
 import { useAuthStore } from "@/store/authStore";
 import type {
   Auction, AuctionPermissions, AuctionRound, Bid, Franchise, Player,
-  BidIncrementTier, AuctionSnapshot, PlayerRole,
+  BidIncrementTier, AuctionSnapshot, PlayerRole, LotTimeResponse,
 } from "@/features/auction/types/index.types";
 import { normalizeAuctionPermissions } from "@/features/auction/utils/index.utils";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
@@ -10,6 +11,7 @@ export class AuctionApiError extends Error {
   status: number;
   code?: string;
   details?: unknown;
+  retryAfterMs?: number;
   constructor(message: string, status: number, code?: string, details?: unknown) {
     super(message); this.name = "AuctionApiError"; this.status = status; this.code = code; this.details = details;
   }
@@ -17,17 +19,34 @@ export class AuctionApiError extends Error {
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = useAuthStore.getState().accessToken;
-  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  });
-  const data: any = await res.json().catch(() => ({ success: false, message: res.statusText || `HTTP ${res.status}` }));
-  if (!res.ok) throw new AuctionApiError(data.message || `Request failed: ${res.status}`, res.status, data.code, data.details);
-  return data as T;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+  try {
+    const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...options, signal: controller.signal, cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+    const data: any = await res.json().catch(() => ({ success: false, message: res.statusText || `HTTP ${res.status}` }));
+    if (!res.ok) {
+      const error = new AuctionApiError(data?.message || `Request failed: ${res.status}`, res.status, data?.code, data?.details);
+      error.retryAfterMs = parseRetryAfter(res.headers?.get('Retry-After'), data?.retryAfter);
+      throw error;
+    }
+    return data as T;
+  } catch (error) {
+    if (controller.signal.aborted) throw new AuctionApiError('Request timed out or was cancelled. Check the live state before retrying an action.', 408, 'REQUEST_TIMEOUT');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', abort);
+  }
 }
 
 const stringId = (value: any): string => value?.toString?.() || value || "";
@@ -247,6 +266,10 @@ function toBackendPayload(payload: AuctionSavePayload): Record<string, unknown> 
 const dataOf = (res: any) => res?.data ?? res;
 
 export const auctionApi = {
+  extendLotTime: async (auctionId: string, tournamentPlayerId: string, seconds: number, requestId: string): Promise<LotTimeResponse> =>
+    dataOf(await request<any>(`/auctions/${auctionId}/lot/time`, {
+      method: 'POST', body: JSON.stringify({ tournamentPlayerId, seconds, requestId }),
+    })),
   undoAction: async (auctionId: string, actionId: string, reason?: string) =>
     dataOf(await request<any>(`/auctions/${auctionId}/undo`, {
       method: "POST", body: JSON.stringify({ actionId, reason }),

@@ -1,5 +1,6 @@
 import { seedAuction as seed } from './fixtures/auction.js';
 import mongoose from 'mongoose';
+import { randomUUID } from 'node:crypto';
 import { jest } from '@jest/globals';
 import { setupTestApp, teardownTestApp, request, authHeader } from './helpers.js';
 import { Player } from '../src/models/Player.js';
@@ -256,6 +257,125 @@ describe('next-player selection and public watching', () => {
     }
     await request(app).post(root + '/undo').set(authHeader(fixture.token(fixture.organizer))).send({ actionId: id(await head()), reason: 'Accidental bid' }).expect(200);
     expect((await state()).currentBid.amount).toBe(0);
+  });
+});
+
+describe('audited per-lot extra time', () => {
+  const extend = (seconds = 30, requestId = randomUUID(), player = fixture.players[0]) => AuctionService.extendLotTime(fixture.auction._id, fixture.organizer,
+    { tournamentPlayerId: id(player), seconds, requestId });
+  const expire = () => Auction.updateOne({ _id: fixture.auction._id }, { $set: { 'liveState.remainingTimeSeconds': 0, 'liveState.updatedAt': new Date(Date.now() - 1000) } });
+
+  test('an expired lot rejects bids, then an explicit organizer extension reopens the same lot immediately', async () => {
+    await start(); await open(); await expire();
+    await expect(bid(fixture.owner1, 100)).rejects.toMatchObject({ statusCode: 409 });
+    await extend(30);
+    let snapshot = await state();
+    expect(snapshot.status).toBe('LIVE'); expect(snapshot.timer.isRunning).toBe(true);
+    expect(snapshot.timer.remaining).toBeGreaterThan(27); expect(snapshot.timer.remaining).toBeLessThanOrEqual(30);
+    expect(snapshot.timer.total).toBe(630);
+    await bid(fixture.owner1, 100); snapshot = await state();
+    expect(snapshot.currentBid.amount).toBe(100);
+    expect(id(snapshot.currentPlayerId)).toBe(id(fixture.players[0]));
+  });
+
+  test('adds to the elapsed-adjusted remainder, and never changes the configured duration for the next lot', async () => {
+    await start(); await open();
+    await Auction.updateOne({ _id: fixture.auction._id }, { $set: { 'liveState.remainingTimeSeconds': 20, 'liveState.updatedAt': new Date(Date.now() - 5000) } });
+    await extend(10);
+    const snapshot = await state();
+    expect(snapshot.timer.remaining).toBeGreaterThan(23); expect(snapshot.timer.remaining).toBeLessThanOrEqual(25);
+    expect(snapshot.timer.total).toBe(610);
+    await bid(fixture.owner1, 100); await settle(); await open(1);
+    expect((await state()).timer.total).toBe(600);
+    expect((await Auction.findById(fixture.auction._id)).lotTimerSeconds).toBe(600);
+  });
+
+  test('extra time while paused stays paused and only resumes when the organizer resumes', async () => {
+    await start(); await open(); await AuctionService.pause(fixture.auction._id, fixture.organizer); await expire();
+    await extend(45);
+    let snapshot = await state(); expect(snapshot.status).toBe('PAUSED');
+    expect(snapshot.timer).toMatchObject({ remaining: 45, total: 645, isRunning: false });
+    await expect(bid(fixture.owner1, 100)).rejects.toMatchObject({ statusCode: 403 });
+    await AuctionService.resume(fixture.auction._id, fixture.organizer);
+    await bid(fixture.owner1, 100); snapshot = await state();
+    expect(snapshot.timer.isRunning).toBe(true); expect(snapshot.timer.remaining).toBeGreaterThan(42);
+  });
+
+  test('identical concurrent retries add time only once, reject changed input, and cannot replay an undone command', async () => {
+    await start(); await open(); await expire();
+    const requestId = randomUUID(); const before = (await state()).version;
+    await Promise.all([extend(30, requestId), extend(30, requestId)]);
+    const snapshot = await state();
+    expect(snapshot.version).toBe(before + 1); expect(snapshot.timer.remaining).toBeLessThanOrEqual(30);
+    expect(await AuctionAction.countDocuments({ kind: 'LOT_TIME_EXTENDED' })).toBe(1);
+    await expect(extend(60, requestId)).rejects.toMatchObject({ statusCode: 409 });
+    await undo();
+    await expect(extend(30, requestId)).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  test('undo restores clock duration and the preceding bid without changing the wallet or roster', async () => {
+    await start(); await open(); await bid(fixture.owner1, 100);
+    const before = await wallets(); await extend(30); await undo();
+    const snapshot = await state();
+    expect(snapshot.status).toBe('PAUSED'); expect(snapshot.timer.total).toBe(600);
+    expect(snapshot.currentBid.amount).toBe(100); expect(await wallets()).toEqual(before);
+    expect(snapshot.undoAction.kind).toBe('BID_PLACED');
+    await undo(); expect((await state()).currentBid.amount).toBe(0);
+  });
+
+  test('a delayed extension for the previous player cannot affect a newly opened lot', async () => {
+    await start(); await open(); await bid(fixture.owner1, 100); await settle(); await open(1);
+    const version = (await state()).version;
+    await expect(extend()).rejects.toMatchObject({ statusCode: 409 });
+    expect((await state()).version).toBe(version);
+  });
+
+  test('an aborted journal write cannot extend the clock or broadcast extra time', async () => {
+    await start(); await open(); const before = await state();
+    const listener = jest.fn(); eventBus.on(AUCTION_EVENTS.LOT_TIME_EXTENDED, listener);
+    try {
+      jest.spyOn(AuctionAction.prototype, 'save').mockRejectedValueOnce(new Error('journal unavailable'));
+      await expect(extend()).rejects.toThrow('journal unavailable');
+      expect((await state()).version).toBe(before.version);
+      expect((await state()).timer.total).toBe(600); expect(listener).not.toHaveBeenCalled();
+    } finally { eventBus.off(AUCTION_EVENTS.LOT_TIME_EXTENDED, listener); }
+  });
+
+  test('the API denies guests, owners, players and unrelated organizers, and validates the lot/amount/request ID', async () => {
+    await start(); await open();
+    const root = `/api/v1/auctions/${fixture.auction._id}/lot/time`;
+    const body = { tournamentPlayerId: id(fixture.players[0]), seconds: 30, requestId: randomUUID() };
+    await request(app).post(root).send(body).expect(401);
+    for (const user of [fixture.owner1, fixture.playerUsers[0], fixture.otherOrganizer]) {
+      await request(app).post(root).set(authHeader(fixture.token(user))).send(body).expect(403);
+    }
+    const auth = authHeader(fixture.token(fixture.organizer));
+    for (const seconds of [0, 4, 301, 3.5, '30', null]) await request(app).post(root).set(auth).send({ ...body, seconds }).expect(400);
+    await request(app).post(root).set(auth).send({ ...body, requestId: 'invalid' }).expect(400);
+    const response = await request(app).post(root).set(auth).send(body).expect(200);
+    expect(response.body.data.liveState.timerTotalSeconds).toBe(630);
+    expect(response.body.data.timer.isRunning).toBe(true);
+    expect(JSON.stringify(response.body)).not.toContain('undoHeadActionId');
+  });
+
+  test('a successful HTTP retry reports the current expired clock without adding time twice', async () => {
+    await start(); await open(); await expire();
+    const root = `/api/v1/auctions/${fixture.auction._id}/lot/time`;
+    const body = { tournamentPlayerId: id(fixture.players[0]), seconds: 30, requestId: randomUUID() };
+    const auth = authHeader(fixture.token(fixture.organizer));
+    const first = await request(app).post(root).set(auth).send(body).expect(200);
+    expect(first.body.data.timer.remaining).toBeGreaterThan(25);
+    await expire();
+    const retry = await request(app).post(root).set(auth).send(body).expect(200);
+    expect(retry.body.data.liveState.version).toBe(first.body.data.liveState.version);
+    expect(retry.body.data.timer).toMatchObject({ remaining: 0, total: 630, isRunning: false });
+    expect(await AuctionAction.countDocuments({ kind: 'LOT_TIME_EXTENDED' })).toBe(1);
+  });
+
+  test('rejects no active lot and a clock above the one-hour remaining ceiling', async () => {
+    await start(); await expect(extend()).rejects.toMatchObject({ statusCode: 409 }); await open();
+    await Auction.updateOne({ _id: fixture.auction._id }, { $set: { 'liveState.remainingTimeSeconds': 3595, 'liveState.updatedAt': new Date() } });
+    await expect(extend()).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 

@@ -14,6 +14,7 @@ import { connectDatabase, registerDatabaseShutdownHooks } from './config/databas
 import { env } from './config/env.js';
 import { initSocket, closeSocketIO } from './socket/index.js';
 import { logger } from './config/logger.js';
+import { closeRateLimitStores } from './middleware/rateLimitStore.js';
 import { setupGracefulShutdown } from './config/gracefulShutdown.js';
 
 async function bootstrap() {
@@ -51,7 +52,7 @@ async function bootstrap() {
         const { disconnectDatabase } = await import('./config/database.js');
         await disconnectDatabase();
       },
-      cleanupJobs: [closeSocketIO],
+      cleanupJobs: [closeSocketIO, closeRateLimitStores],
     });
 
   } catch (error) {

@@ -6,6 +6,8 @@ const actionSchema = new mongoose.Schema({
   auctionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Auction', required: true },
   previousActionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AuctionAction', default: null },
   kind: { type: String, required: true },
+  commandId: { type: String, maxlength: 150 },
+  commandFingerprint: { type: String, maxlength: 255 },
   label: { type: String, required: true, maxlength: 500 },
   actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   status: { type: String, enum: ['APPLIED', 'UNDONE'], default: 'APPLIED', required: true },
@@ -15,6 +17,7 @@ const actionSchema = new mongoose.Schema({
   undoReason: { type: String, maxlength: 500 },
 }, { timestamps: true });
 actionSchema.index({ auctionId: 1, createdAt: -1, _id: -1 });
+actionSchema.index({ auctionId: 1, commandId: 1 }, { unique: true, partialFilterExpression: { commandId: { $type: 'string' } } });
 
 const changeSchema = new mongoose.Schema({
   actionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AuctionAction', required: true },

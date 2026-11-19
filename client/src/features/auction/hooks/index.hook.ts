@@ -1,3 +1,4 @@
+import { requestBackoffMs } from "../utils/requestBackoff";
 import { upcomingAuctionPlayers } from "../utils/roundSelection";
 import { getAuctionViewerId } from "../utils/viewerIdentity";
 import { useQuery } from "@tanstack/react-query";
@@ -5,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { auctionApi, auctionRoundApi, franchiseApi, liveAuctionApi } from "@/features/auction/api/index.api";
 import type { AuctionSavePayload } from "@/features/auction/api/index.api";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
-import { useBidUiStore, useLiveAuctionStore, useRoleStore } from "@/features/auction/store/index.store";
+import { getAuctionEngine, useBidUiStore, useLiveAuctionStore, useRoleStore } from "@/features/auction/store/index.store";
 import { useAuthStore } from "@/store/authStore";
 import type { Auction, AuctionPermissions, AuctionRound, Franchise } from "@/features/auction/types/index.types";
 import {
@@ -197,7 +198,7 @@ export function useAuctionPermissions(auctionId?: string) {
     queryFn: () => auctionApi.getPermissions(effectiveAuctionId!),
     enabled,
     staleTime: 5_000,
-    retry: 1,
+    retry: (failureCount, error) => failureCount < 1 && (error as { status?: number }).status !== 429,
   });
   const refetch = query.refetch;
   const refresh = useCallback(() => { if (enabled) void refetch(); }, [enabled, refetch]);
@@ -409,7 +410,7 @@ export function useAuctionRounds(auctionId?: string) {
 // ============================================================================
 // useAuctionViewerPresence — live "N watching" counter
 // ============================================================================
-// Heartbeats this client's presence via REST on an interval well under the
+// Heartbeats via the joined socket (one bounded REST fallback) well under the
 // backend's VIEWER_HEARTBEAT_TTL_SECONDS (45s). The returned count is now
 // superseded in real-time by viewerCount from useLiveAuctionStore, which is
 // pushed via Socket.IO (SOCKET_EVENTS.VIEWER_COUNT_UPDATED). This hook still
@@ -426,25 +427,42 @@ export function useAuctionViewerPresence(auctionId?: string) {
     if (!auctionId) return;
     const viewerId = viewerIdRef.current as string;
     let cancelled = false;
-
-    const beat = () => {
-      auctionApi
-        .heartbeatViewer(auctionId, viewerId)
-        .then(({ viewerCount: count }) => {
-          if (!cancelled) {
-            setViewerCount(count);
-            if (useLiveAuctionStore.getState().auctionId === auctionId) useLiveAuctionStore.setState({ viewerCount: count });
-          }
-        })
-        .catch(() => {
-          // A missed heartbeat isn't fatal: the next interval tick retries,
-          // and the backend TTL means a genuinely dead client ages out on
-          // its own regardless of whether this call ever lands.
-        });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    let failures = 0;
+    const beat = async () => {
+      if (cancelled || inFlight) return;
+      if (document.visibilityState === 'hidden') {
+        timer = setTimeout(() => void beat(), VIEWER_HEARTBEAT_INTERVAL_MS);
+        return;
+      }
+      inFlight = true;
+      let delay = VIEWER_HEARTBEAT_INTERVAL_MS;
+      try {
+        // Use the already-joined socket whenever possible: no extra HTTP
+        // quota or simultaneous REST/socket identity for every heartbeat.
+        const { viewerCount: count } = await getAuctionEngine().heartbeatViewer(auctionId, viewerId);
+        failures = 0;
+        if (!cancelled) {
+          setViewerCount(count);
+          if (useLiveAuctionStore.getState().auctionId === auctionId) useLiveAuctionStore.setState({ viewerCount: count });
+        }
+      } catch (error) {
+        failures += 1;
+        delay = Math.max(delay, requestBackoffMs(error, failures));
+      } finally {
+        inFlight = false;
+        if (!cancelled) timer = setTimeout(() => void beat(), delay);
+      }
     };
-
-    beat();
-    const interval = setInterval(beat, VIEWER_HEARTBEAT_INTERVAL_MS);
+    const resume = () => {
+      if (document.visibilityState === 'visible' && !inFlight) {
+        clearTimeout(timer);
+        void beat();
+      }
+    };
+    void beat();
+    document.addEventListener('visibilitychange', resume);
 
     const leaveBeacon = () => {
       navigator.sendBeacon?.(
@@ -456,7 +474,8 @@ export function useAuctionViewerPresence(auctionId?: string) {
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("beforeunload", leaveBeacon);
       leaveBeacon();
     };

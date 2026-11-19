@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { AuctionEngine } from "@/features/auction/engine/AuctionEngine";
-import type { LiveAuctionSnapshot } from "@/features/auction/types/index.types";
+import type { LiveAuctionSnapshot, LotTimeCommandResult } from "@/features/auction/types/index.types";
 
 let engineInstance: AuctionEngine | null = null;
 let engineUnsubscribe: (() => void) | null = null;
@@ -46,6 +46,7 @@ interface LiveAuctionState extends LiveAuctionSnapshot {
     pause: () => Promise<{ success: boolean; error?: string }>;
     resume: () => Promise<{ success: boolean; error?: string }>;
     complete: () => Promise<{ success: boolean; error?: string }>;
+    extendLotTime: (playerId: string, seconds: number, requestId: string) => Promise<LotTimeCommandResult>;
     openNextLot: (playerId?: string) => Promise<{ success: boolean; error?: string }>;
     undo: (actionId: string, reason?: string) => Promise<{ success: boolean; error?: string }>;
     placeBid: (teamId: string, amount?: number, isUser?: boolean) => Promise<{ ok: boolean; reason?: string }>;
@@ -147,6 +148,7 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
     pause: () => getAuctionEngine().pause(),
     resume: () => getAuctionEngine().resume(),
     complete: () => getAuctionEngine().complete(),
+    extendLotTime: (playerId, seconds, requestId) => getAuctionEngine().extendLotTime(playerId, seconds, requestId),
     openNextLot: (playerId) => getAuctionEngine().openNextLot(playerId),
     undo: (actionId, reason) => getAuctionEngine().undo(actionId, reason),
     placeBid: (teamId, amount, isUser) => getAuctionEngine().placeBid(teamId, amount, isUser),

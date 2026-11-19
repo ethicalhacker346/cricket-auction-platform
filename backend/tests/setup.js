@@ -15,3 +15,7 @@ process.env.SMTP_PORT = '1025';
 process.env.SMTP_USER = '';
 process.env.SMTP_PASS = '';
 process.env.LOG_LEVEL = 'fatal';
+
+// Never contact a developer/production Redis from the integration suite.
+process.env.REDIS_URL = '';
+process.env.TRUST_PROXY_HOPS = '0';

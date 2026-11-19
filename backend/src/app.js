@@ -18,7 +18,7 @@ import pinoHttp from 'pino-http';
 import { logger } from './config/logger.js';
 import { env } from './config/env.js';
 import routes from './routes/index.js';
-import { globalRateLimiter } from './middleware/rateLimiter.js';
+import { createApiRateLimiter } from './middleware/rateLimiter.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
 let dbHealthCheck = null;
@@ -32,6 +32,7 @@ async function getDbHealthCheck() {
 
 export function createApp() {
   const app = express();
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
   app.use(helmet({
     contentSecurityPolicy: {
@@ -91,7 +92,7 @@ export function createApp() {
       'X-Requested-With',
       'X-Request-ID',
     ],
-    exposedHeaders: ['X-Request-ID'],
+    exposedHeaders: ['X-Request-ID', 'Retry-After', 'RateLimit', 'RateLimit-Policy'],
     maxAge: 86400,
   }));
 
@@ -159,7 +160,7 @@ export function createApp() {
     }
   });
 
-  app.use(globalRateLimiter);
+  app.use(createApiRateLimiter());
   app.use('/api/v1', routes);
   app.use(notFoundHandler);
   app.use(errorHandler);
