@@ -1,17 +1,17 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Activity, History } from "lucide-react";
-import { useAuctionLogs, useBidHistory, useAuth } from "@/features/auction/hooks/index.hook";
+import { useAuctionLogs, useBidHistory, useAuctionPermissions } from "@/features/auction/hooks/index.hook";
 import { LOG_ICON } from "@/features/auction/constants/index.constants";
 import { formatLakhs, initials, timeAgo } from "@/features/auction/utils/index.utils";
 
 export function BidHistoryPanel({ playerId, limit = 12 }: { playerId?: string; limit?: number }) {
   const bids = useBidHistory(playerId, limit);
-  const { user } = useAuth();
+  const permissions = useAuctionPermissions();
 
   // Compute isUser for better alignment with new auth model if not already in bid data
   const enhancedBids = bids.map((bid) => ({
     ...bid,
-    isUser: bid.isUser ?? (user && bid.teamId === user.teamId),
+    isUser: permissions.authenticated && bid.teamId === permissions.tournamentTeamId,
   }));
 
   return (
@@ -55,10 +55,11 @@ export function BidHistoryPanel({ playerId, limit = 12 }: { playerId?: string; l
                     {bid.isUser && <span className="ml-1 text-sky-400">(You)</span>}
                   </p>
                   <p className="truncate text-[10px] text-slate-500">{bid.player?.name ?? "Unknown Player"}</p>
+                  {bid.status === 'CANCELLED' && <p className="text-[10px] font-semibold text-rose-300">Cancelled · organizer undo</p>}
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-xs font-bold text-amber-400">{formatLakhs(bid.amount)}</p>
+                <p className={`text-xs font-bold ${bid.status === 'CANCELLED' ? 'text-slate-500 line-through' : 'text-amber-400'}`}>{formatLakhs(bid.amount)}</p>
                 <p className="text-[9px] text-slate-600">{timeAgo(bid.timestamp)}</p>
               </div>
             </motion.div>

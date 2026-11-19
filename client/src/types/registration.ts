@@ -11,6 +11,8 @@ export interface PaginationParams {
 }
 
 export interface PlayerListQueryParams extends PaginationParams {
+  userId?: string;
+  search?: string;
   status?: RegistrationStatus;
   isSold?: boolean;
   lotOutcome?: LotOutcome;
@@ -32,6 +34,7 @@ export interface PaginatedResult<T> {
 export interface PopulatedPlayer {
   _id: string;
   fullName: string;
+  cricHeroesUrl?: string | null;
   primaryRole?: PlayerRole;
   [key: string]: unknown;
 }
@@ -58,13 +61,31 @@ export interface PlayerRegistration {
   updatedAt: string;
 }
 
-// Player registration payload: basePrice is omitted — organizer sets it.
-// primaryRole is auto-pulled from the Player profile by the backend.
-// The only thing a player CAN supply is... nothing. But we keep the type
-// extensible for future fields (e.g. preferred auction slot, special requests).
+/** Public flat list projection; create/update endpoints return PlayerRegistration. */
+export interface PlayerRegistrationListItem {
+  id: string;
+  registrationId: string;
+  rejectedReason?: string;
+  playerId?: string;
+  name: string;
+  role: PlayerRole;
+  basePrice: number;
+  basePriceUpdatedAt?: string | null;
+  status: RegistrationStatus;
+  lotOutcome: LotOutcome;
+  isSold: boolean;
+  soldPrice?: number;
+  profileImage?: string | null;
+  cricHeroesUrl?: string | null;
+  createdAt: string;
+  userId?: string;
+  isMine?: boolean;
+}
+
+// Role and base price remain server-derived; the optional profile link is
+// saved to the canonical Player in the same transaction as registration.
 export interface RegisterPlayerPayload {
-  // Intentionally empty for now. Backend derives everything from Player profile.
-  // If you add optional fields later, add them here without breaking existing calls.
+  cricHeroesUrl?: string;
 }
 
 export interface TeamWallet {

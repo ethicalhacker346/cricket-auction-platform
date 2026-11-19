@@ -122,6 +122,10 @@ export class StateDiffEmitter {
   }
 
   private seed(snapshot: LiveAuctionSnapshot) {
+    // Historical/undo baselines must include rounds, not just bids/verdicts.
+    // Keeping only rounds that are STILL completed also permits a legitimately
+    // reopened round to celebrate its eventual completion once again.
+    this.completedRounds = new Set(snapshot.rounds.filter((round) => round.status === 'completed').map((round) => round.id));
     this.last = {
       currentBidAmount: snapshot.currentBid.amount,
       currentBidTeamId: snapshot.currentBid.teamId,

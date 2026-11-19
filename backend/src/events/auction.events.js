@@ -8,8 +8,17 @@
  * This layer does NOT know about socket.io — only eventBus.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import eventBus from './eventBus.js';
 import { toTransportDTO } from '../utils/transport-serializer.js'; // ← NEW
+// A command's post-commit batch shares its monotonic transport revision.
+// AsyncLocalStorage prevents overlapping auctions/requests from borrowing one
+// another's revision, including round/completion cascades with no liveState DTO.
+const commandEvents = new AsyncLocalStorage();
+export function withAuctionEventVersion(auctionId, version, work) {
+  return commandEvents.run({ auctionId: String(auctionId), version }, work);
+}
+
 /**
  * All domain events in the auction bounded context
  * Naming: {aggregate}:{action} in past-tense where possible
@@ -17,6 +26,8 @@ import { toTransportDTO } from '../utils/transport-serializer.js'; // ← NEW
 export const AUCTION_EVENTS = Object.freeze({
   // Auction lifecycle
   AUCTION_CREATED: 'auction:created',
+  ACTION_RECORDED: 'auction:action:recorded',
+  ACTION_UNDONE: 'auction:action:undone',
   AUCTION_STARTED: 'auction:started',
   AUCTION_PAUSED: 'auction:paused',
   AUCTION_RESUMED: 'auction:resumed',
@@ -60,10 +71,11 @@ function emitAuctionEvent(eventName, auctionId, data = {}) {
     console.warn(`[auction.events] Missing auctionId for ${eventName}`);
     return false;
   }
-  // ← NEW: Convert entire payload to transport-safe DTO before it hits the bus
+  const context = commandEvents.getStore();
+  const version = data.version ?? data.liveState?.version ?? data.auction?.liveState?.version
+    ?? (context?.auctionId === String(auctionId) ? context.version : undefined);
   return eventBus.safeEmit(eventName, toTransportDTO({
-    auctionId: auctionId.toString(),
-    ...data,
+    auctionId: String(auctionId), ...data, ...(version !== undefined ? { version } : {}),
   }));
 }
 
@@ -209,11 +221,13 @@ export function emitLotPermanentUnsold(auctionId, {
   tournamentPlayerId,
   roundId,
   markedBy,
+  version,
 } = {}) {
   return emitAuctionEvent(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, auctionId, {
     tournamentPlayerId,
     roundId,
     markedBy,
+    version,
   });
 }
 
@@ -240,3 +254,9 @@ export function emitViewerCountUpdated(auctionId, viewerCount, meta = {}) {
 }
 
 export default AUCTION_EVENTS;
+export function emitActionRecorded(auctionId, payload) {
+  return emitAuctionEvent(AUCTION_EVENTS.ACTION_RECORDED, auctionId, payload);
+}
+export function emitActionUndone(auctionId, payload) {
+  return emitAuctionEvent(AUCTION_EVENTS.ACTION_UNDONE, auctionId, payload);
+}

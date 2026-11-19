@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { PLAYER_ROLES } from '../config/constants.js';
+import { normalizeCricHeroesUrl } from '../utils/cricheroes.js';
 
 const MIN_AGE_YEARS = 15;
 
@@ -58,6 +59,11 @@ const playerSchema = new mongoose.Schema(
         validator: (v) => !v || /^https?:\/\//.test(v),
         message: 'profileImage must be a valid URL',
       },
+    },
+    cricHeroesUrl: {
+      type: String, trim: true, maxlength: 500,
+      set: (value) => value ? (normalizeCricHeroesUrl(value) || value) : undefined,
+      validate: { validator: (value) => !value || Boolean(normalizeCricHeroesUrl(value)), message: 'Enter a valid CricHeroes player profile or share link' },
     },
     profileImagePublicId: {
       type: String,

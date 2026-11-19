@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { Link, useParams } from "react-router-dom";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
@@ -13,7 +14,6 @@ import {
   TrendingUp,
   Users,
   Loader2,
-  ShieldAlert,
   Settings2,
   History,
   BarChart3,
@@ -86,6 +86,7 @@ function deriveUiCapabilities(
 
   return {
     showOrganizerPanel:
+      permissions.canUndo ||
       permissions.canManageAuction ||
       permissions.canAccessAuctionControls ||
       permissions.canStart ||
@@ -166,25 +167,6 @@ function DashboardSkeleton() {
 }
 
 /** Shown when the user is not authenticated. */
-function AuthRequiredState() {
-  return (
-    <div className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-4 py-32 text-center">
-      <ShieldAlert className="h-12 w-12 text-rose-400" />
-      <h2 className="text-lg font-bold text-white">Authentication Required</h2>
-      <p className="max-w-sm text-sm text-slate-400">
-        Please sign in to view the auction dashboard and manage live bidding.
-      </p>
-      <Link
-        to="/login"
-        className="rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:brightness-110"
-      >
-        Sign In
-      </Link>
-    </div>
-  );
-}
-
-/** Shown when the auction document could not be loaded. */
 function AuctionErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <motion.div
@@ -565,7 +547,7 @@ function DashboardHero({
 // ============================================================================
 
 export default function AuctionDashboardPage() {
-  const { isAuthenticated, hasHydrated, user } = useAuth();
+  const { hasHydrated, user } = useAuth();
 
   // ── Resolve IDs from URL (AuctionShell guarantees these exist) ──
   const { tournamentId, auctionId } = useParams<DashboardRouteParams>();
@@ -600,7 +582,6 @@ export default function AuctionDashboardPage() {
 
   // ── Render guards ──
   if (!hasHydrated) return <DashboardSkeleton />;
-  if (!isAuthenticated) return <AuthRequiredState />;
 
   // If the auction API returned an error and we have no live data either
   if (auctionError && !activeAuction) {
@@ -682,6 +663,7 @@ export default function AuctionDashboardPage() {
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-lg font-bold text-white">{live.currentPlayer.name}</p>
+                  <CricHeroesLink url={live.currentPlayer.cricHeroesUrl} playerName={live.currentPlayer.name} className="text-emerald-300" />
                   <p className="truncate text-xs text-slate-400">{live.currentPlayer.role}</p>
                 </div>
                 <div className="shrink-0 text-right">

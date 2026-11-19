@@ -179,6 +179,9 @@ const auctionSchema = new mongoose.Schema(
       type: liveStateSchema,
       default: () => ({}),
     },
+    lastUndoVersion: { type: Number, default: 0, min: 0 },
+    // Server-side undo stack pointer, never a client-writable field.
+    undoHeadActionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AuctionAction', default: null, select: false },
     logs: {
       type: [auctionLogSchema],
       default: [],
@@ -197,6 +200,7 @@ const auctionSchema = new mongoose.Schema(
       virtuals: true,
       transform(_doc, ret) {
         delete ret.__v;
+        delete ret.undoHeadActionId;
         return ret;
       },
     },

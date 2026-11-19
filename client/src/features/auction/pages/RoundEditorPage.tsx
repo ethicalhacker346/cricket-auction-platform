@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, GripVertical, Loader2, Lock, Plus, Save, ShieldAlert, Trash2 } from "lucide-react";
@@ -361,6 +362,7 @@ export default function RoundEditorPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-slate-200">{p.name}</p>
+                  <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                   <p className="text-[10px] text-slate-500">
                     {ROLE_ICONS[p.role]} {p.role} · {formatLakhs(p.basePrice)}
                   </p>
@@ -427,6 +429,7 @@ export default function RoundEditorPage() {
                       >
                         {p.name}
                       </p>
+                      <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                       <p className="text-[10px] text-slate-500">
                         {ROLE_ICONS[p.role]} {p.role} · {formatLakhs(p.basePrice)}
                         {isInCurrentRound && (

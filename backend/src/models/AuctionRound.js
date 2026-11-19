@@ -101,7 +101,7 @@ auctionRoundSchema.pre('validate', async function enforceUnsoldRoundIsLast(next)
       auctionId: this.auctionId,
       type: ROUND_TYPE.UNSOLD,
       order: { $lte: this.order },
-    });
+    }).session(this.$session());
     if (unsoldExists) {
       return next(new Error('Normal rounds cannot be added after the unsold round'));
     }

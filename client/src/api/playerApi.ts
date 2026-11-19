@@ -17,6 +17,7 @@ export interface Player {
   primaryRole: PlayerRole;
   battingStyle?: string;
   bowlingStyle?: string;
+  cricHeroesUrl?: string;
   profileImage?: string;
   bio?: string;
   isActive: boolean;
@@ -31,6 +32,7 @@ export interface PlayerPayload {
   nationality?: string;
   battingStyle?: string;
   bowlingStyle?: string;
+  cricHeroesUrl?: string;
   profileImage?: string;   // ← LIBRARY PATH: pass a public URL string
   bio?: string;
 }

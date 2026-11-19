@@ -13,8 +13,7 @@ export function LifecycleStepper({ status }: { status: TournamentStatus }) {
     );
   }
 
-  const effectiveStatus = status === "AUCTION_PAUSED" ? "AUCTION_LIVE" : status;
-  const currentIndex = LIFECYCLE_STEPS.indexOf(effectiveStatus);
+  const currentIndex = LIFECYCLE_STEPS.indexOf(status);
 
   return (
     <div
@@ -51,7 +50,7 @@ export function LifecycleStepper({ status }: { status: TournamentStatus }) {
                     current ? "text-emerald-700" : done ? "text-slate-600" : "text-slate-400"
                   )}
                 >
-                  {step === "AUCTION_LIVE" && status === "AUCTION_PAUSED" ? "Auction Paused" : STATUS_META[step].label}
+                  {STATUS_META[step].label}
                 </span>
               </div>
               {!isLast && (

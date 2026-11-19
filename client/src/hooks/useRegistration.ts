@@ -1,6 +1,7 @@
 // src/hooks/useRegistration.ts
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
+import { playerKeys } from "./usePlayers";
 import { registrationApi } from "@/api/registrationApi";
 import { getErrorMessage } from "@/lib/utils/errorMessage";
 import type {
@@ -109,6 +110,8 @@ export function useRegisterPlayer(tournamentId: string) {
       registrationApi.registerPlayer(tournamentId, payload),
     onSuccess: () => {
       invalidateAllRegistrationQueries(queryClient, tournamentId);
+      // Submission may update the canonical CricHeroes profile link.
+      queryClient.invalidateQueries({ queryKey: playerKeys.all });
       toast.success("Registration submitted. Awaiting organizer approval.");
     },
     onError: (error) => {

@@ -1,4 +1,4 @@
-import { Loader2, ShieldAlert, Gavel, WifiOff, RadioTower, Boxes } from "lucide-react";
+import { Loader2, Gavel, WifiOff, RadioTower, Boxes } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
 import {
@@ -6,7 +6,7 @@ import {
   useLiveAuction,
   useAuctionPermissions,
 } from "@/features/auction/hooks/index.hook";
-import { useLiveAuctionStore } from "@/features/auction/store/index.store";
+import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
 import { AuctionControls } from "@/features/auction/components/AuctionControls";
 import { AuctionClock } from "@/features/auction/components/AuctionClock";
 import { CurrentHighestBid } from "@/features/auction/components/CurrentHighestBid";
@@ -20,14 +20,12 @@ import { AuctionFooter } from "@/features/auction/components/AuctionFooter";
 import { CurrentRoundBadge, AuctionStatusBadge } from "@/features/auction/components/Badges";
 import { ConnectionDot } from "@/features/auction/components/Badges";
 
-import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
 import { AuctionRoutes } from "@/features/auction/routes/auction.routes";
 
 export default function LiveAuctionPage() {
   const { tournamentId, auctionId } = useAuctionContext();
-  const { isAuthenticated, hasHydrated } = useAuth();
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
-  const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
+  const { hasHydrated } = useAuth();
+  const { auctionId: storeAuctionId, tournamentId: storeTournamentId } = useAuctionContext();
   
 
   const {
@@ -54,23 +52,7 @@ export default function LiveAuctionPage() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="mx-auto flex max-w-[1500px] flex-col items-center justify-center gap-4 py-32 text-center">
-        <ShieldAlert className="h-12 w-12 text-rose-400" />
-        <h2 className="text-lg font-bold text-white">Authentication Required</h2>
-        <p className="max-w-sm text-sm text-slate-400">
-          Sign in to watch and participate in the live auction.
-        </p>
-        <Link
-          to="/login"
-          className="rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:brightness-110"
-        >
-          Sign In
-        </Link>
-      </div>
-    );
-  }
+
 
   if (!storeAuctionId || !storeTournamentId) {
     return (

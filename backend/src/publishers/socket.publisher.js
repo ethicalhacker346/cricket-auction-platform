@@ -23,6 +23,8 @@ class SocketEventPublisher {
     // auctionId -> { remaining, total, lotStatus, expiresAt, version }
     this.timerState = new Map();
     this.isListening = false;
+    this.domainListeners = new Map();
+    this.revisions = new Map();
   }
 
   /**
@@ -32,62 +34,89 @@ class SocketEventPublisher {
     if (this.isListening) return;
     this.isListening = true;
 
+    // Journal corrections are room-scoped and visible to anonymous viewers too.
+    this.listen(AUCTION_EVENTS.ACTION_RECORDED, (payload) => this.handleActionRecorded(payload));
+    this.listen(AUCTION_EVENTS.ACTION_UNDONE, (payload) => this.handleActionUndone(payload));
+
     // Auction lifecycle
-    eventBus.on(AUCTION_EVENTS.AUCTION_CREATED, (p) =>
+    this.listen(AUCTION_EVENTS.AUCTION_CREATED, (p) =>
       this.handleAuctionCreated(p),
     );
-    eventBus.on(AUCTION_EVENTS.AUCTION_STARTED, (p) =>
+    this.listen(AUCTION_EVENTS.AUCTION_STARTED, (p) =>
       this.handleAuctionStarted(p),
     );
-    eventBus.on(AUCTION_EVENTS.AUCTION_PAUSED, (p) =>
+    this.listen(AUCTION_EVENTS.AUCTION_PAUSED, (p) =>
       this.handleAuctionPaused(p),
     );
-    eventBus.on(AUCTION_EVENTS.AUCTION_RESUMED, (p) =>
+    this.listen(AUCTION_EVENTS.AUCTION_RESUMED, (p) =>
       this.handleAuctionResumed(p),
     );
-    eventBus.on(AUCTION_EVENTS.AUCTION_COMPLETED, (p) =>
+    this.listen(AUCTION_EVENTS.AUCTION_COMPLETED, (p) =>
       this.handleAuctionCompleted(p),
     );
-    eventBus.on(AUCTION_EVENTS.AUCTION_RULES_UPDATED, (p) =>
+    this.listen(AUCTION_EVENTS.AUCTION_RULES_UPDATED, (p) =>
       this.handleRulesUpdated(p),
     );
 
     // Round
-    eventBus.on(AUCTION_EVENTS.ROUND_ADDED, (p) => this.handleRoundAdded(p));
-    eventBus.on(AUCTION_EVENTS.ROUND_UPDATED, (p) =>
+    this.listen(AUCTION_EVENTS.ROUND_ADDED, (p) => this.handleRoundAdded(p));
+    this.listen(AUCTION_EVENTS.ROUND_UPDATED, (p) =>
       this.handleRoundUpdated(p),
     );
-    eventBus.on(AUCTION_EVENTS.ROUND_DELETED, (p) =>
+    this.listen(AUCTION_EVENTS.ROUND_DELETED, (p) =>
       this.handleRoundDeleted(p),
     );
-    eventBus.on(AUCTION_EVENTS.ROUND_COMPLETED, (p) =>
+    this.listen(AUCTION_EVENTS.ROUND_COMPLETED, (p) =>
       this.handleRoundCompleted(p),
     );
 
     // Lot
-    eventBus.on(AUCTION_EVENTS.LOT_OPENED, (p) => this.handleLotOpened(p));
-    eventBus.on(AUCTION_EVENTS.LOT_SOLD, (p) => this.handleLotSold(p));
-    eventBus.on(AUCTION_EVENTS.LOT_UNSOLD, (p) => this.handleLotUnsold(p));
-    eventBus.on(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, (p) =>
+    this.listen(AUCTION_EVENTS.LOT_OPENED, (p) => this.handleLotOpened(p));
+    this.listen(AUCTION_EVENTS.LOT_SOLD, (p) => this.handleLotSold(p));
+    this.listen(AUCTION_EVENTS.LOT_UNSOLD, (p) => this.handleLotUnsold(p));
+    this.listen(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, (p) =>
       this.handleLotPermanentUnsold(p),
     );
-    eventBus.on(AUCTION_EVENTS.LIVE_STATE_UPDATED, (p) =>
+    this.listen(AUCTION_EVENTS.LIVE_STATE_UPDATED, (p) =>
       this.handleLiveStateUpdated(p),
     );
 
     // Bidding
-    eventBus.on(AUCTION_EVENTS.BID_PLACED, (p) => this.handleBidPlaced(p));
+    this.listen(AUCTION_EVENTS.BID_PLACED, (p) => this.handleBidPlaced(p));
 
     // Presence
-    eventBus.on(AUCTION_EVENTS.VIEWER_COUNT_UPDATED, (p) =>
+    this.listen(AUCTION_EVENTS.VIEWER_COUNT_UPDATED, (p) =>
       this.handleViewerCountUpdated(p),
     );
-    eventBus.on(AUCTION_EVENTS.VIEWER_JOINED, (p) =>
+    this.listen(AUCTION_EVENTS.VIEWER_JOINED, (p) =>
       this.handleViewerJoined(p),
     );
-    eventBus.on(AUCTION_EVENTS.VIEWER_LEFT, (p) => this.handleViewerLeft(p));
+    this.listen(AUCTION_EVENTS.VIEWER_LEFT, (p) => this.handleViewerLeft(p));
 
     console.log("[SocketPublisher] Listening to auction domain events");
+  }
+
+  listen(event, handler) {
+    const listener = (payload) => {
+      const version = payload.version ?? payload.liveState?.version ?? payload.auction?.liveState?.version;
+      const key = String(payload.auctionId);
+      if (Number.isFinite(version)) {
+        if (version < (this.revisions.get(key) ?? -1)) return;
+        this.revisions.delete(key);
+        this.revisions.set(key, version);
+        // Bounded worker-local high watermarks. Clients also fence revisions,
+        // including timers broadcast by a different Redis-adapter worker.
+        if (this.revisions.size > 10_000) this.revisions.delete(this.revisions.keys().next().value);
+      }
+      handler(payload);
+    };
+    this.domainListeners.set(event, listener);
+    eventBus.on(event, listener);
+  }
+
+  clockRemaining(remaining, liveState) {
+    const elapsed = liveState?.updatedAt ? Math.max(0, (Date.now() - new Date(liveState.updatedAt).getTime()) / 1000) : 0;
+    return Math.max(0, (remaining ?? 0) - elapsed);
   }
 
   /**
@@ -134,6 +163,8 @@ class SocketEventPublisher {
   }
 
   publishToAuction(auctionId, socketEvent, payload) {
+    const version = payload.version ?? payload.liveState?.version ?? payload.auction?.liveState?.version;
+    if (Number.isFinite(version) && version < (this.revisions.get(String(auctionId)) ?? -1)) return;
     try {
       const room = `auction:${auctionId}`;
      
@@ -191,6 +222,31 @@ class SocketEventPublisher {
   }
 
   // ---------- Auction handlers ----------
+  handleActionRecorded(payload) {
+    this.publishToAuction(payload.auctionId, "auction:action:recorded", payload);
+    // Any command advances the revision, even a round rename. Re-anchor from
+    // the persisted clock so timer syncs never carry a superseded revision or
+    // add network/notification latency to the bidding window.
+    if (payload.status === 'LIVE' && payload.liveState?.lotStatus === 'BIDDING') {
+      this.startTimer(payload.auctionId, payload.liveState.remainingTimeSeconds, {
+        ...payload.liveState, lotTimerSeconds: payload.lotTimerSeconds,
+      });
+    } else {
+      this.stopTimer(payload.auctionId, payload.version);
+    }
+  }
+
+  handleActionUndone(payload) {
+    const { auctionId, auction, liveState } = payload;
+    this.stopTimer(auctionId, payload.version);
+    // Publish the correction before any timer sync; clients must adopt the
+    // recovered PAUSED/LIVE status before they decide whether to count down.
+    this.publishToAuction(auctionId, "auction:action:undone", payload);
+    if (liveState?.lotStatus === 'BIDDING' && auction?.status === 'LIVE') {
+      this.startTimer(auctionId, liveState.remainingTimeSeconds, { ...liveState, lotTimerSeconds: auction.lotTimerSeconds });
+    }
+  }
+
   handleAuctionCreated({
     auctionId,
     auction,
@@ -214,7 +270,7 @@ class SocketEventPublisher {
     startedBy,
     _emittedAt,
   }) {
-    this.stopTimer(auctionId); // clear any stale timer
+    this.stopTimer(auctionId, auction?.liveState?.version); // clear any stale timer
     this.publishToAuction(auctionId, "auction:started", {
       auctionId,
       auction,
@@ -232,7 +288,7 @@ class SocketEventPublisher {
   }
 
   handleAuctionPaused({ auctionId, auction, pausedBy, _emittedAt }) {
-    this.pauseTimer(auctionId);
+    this.stopTimer(auctionId, auction?.liveState?.version);
     this.publishToAuction(auctionId, "auction:paused", {
       auctionId,
       auction,
@@ -242,17 +298,17 @@ class SocketEventPublisher {
   }
 
   handleAuctionResumed({ auctionId, auction, resumedBy, _emittedAt }) {
-    this.resumeTimer(auctionId);
     this.publishToAuction(auctionId, "auction:resumed", {
-      auctionId,
-      auction,
-      resumedBy,
-      timestamp: _emittedAt,
+      auctionId, auction, resumedBy, timestamp: _emittedAt,
     });
+    const live = auction?.liveState;
+    if (live?.lotStatus === 'BIDDING') {
+      this.startTimer(auctionId, live.remainingTimeSeconds, { ...live, lotTimerSeconds: auction.lotTimerSeconds });
+    }
   }
 
   handleAuctionCompleted({ auctionId, auction, completedBy, _emittedAt }) {
-    this.stopTimer(auctionId);
+    this.stopTimer(auctionId, auction?.liveState?.version);
     this.publishToAuction(auctionId, "auction:completed", {
       auctionId,
       auction,
@@ -277,35 +333,39 @@ class SocketEventPublisher {
   }
 
   // ---------- Round handlers ----------
-  handleRoundAdded({ auctionId, round, _emittedAt }) {
+  handleRoundAdded({ auctionId, round, _emittedAt, version }) {
     this.publishToAuction(auctionId, "auction:round:added", {
       auctionId,
+      version,
       round,
       timestamp: _emittedAt,
     });
   }
 
-  handleRoundUpdated({ auctionId, round, patch, _emittedAt }) {
+  handleRoundUpdated({ auctionId, round, patch, _emittedAt, version }) {
     this.publishToAuction(auctionId, "auction:round:updated", {
       auctionId,
+      version,
       round,
       patch,
       timestamp: _emittedAt,
     });
   }
 
-  handleRoundDeleted({ auctionId, roundId, roundName, _emittedAt }) {
+  handleRoundDeleted({ auctionId, roundId, roundName, _emittedAt, version }) {
     this.publishToAuction(auctionId, "auction:round:deleted", {
       auctionId,
+      version,
       roundId,
       roundName,
       timestamp: _emittedAt,
     });
   }
 
-  handleRoundCompleted({ auctionId, roundId, round, _emittedAt }) {
+  handleRoundCompleted({ auctionId, roundId, round, _emittedAt, version }) {
     this.publishToAuction(auctionId, "auction:round:completed", {
       auctionId,
+      version,
       roundId,
       round,
       timestamp: _emittedAt,
@@ -363,7 +423,7 @@ class SocketEventPublisher {
     settledBy,
     _emittedAt,
   }) {
-    this.stopTimer(auctionId);
+    this.stopTimer(auctionId, liveState?.version);
     this.publishToAuction(auctionId, "auction:lot:sold", {
       auctionId,
       tournamentPlayerId,
@@ -391,7 +451,7 @@ class SocketEventPublisher {
     settledBy,
     _emittedAt,
   }) {
-    this.stopTimer(auctionId);
+    this.stopTimer(auctionId, liveState?.version);
     this.publishToAuction(auctionId, "auction:lot:unsold", {
       auctionId,
       tournamentPlayerId,
@@ -413,6 +473,7 @@ class SocketEventPublisher {
     tournamentPlayerId,
     roundId,
     markedBy,
+    version,
     _emittedAt,
   }) {
     this.publishToAuction(auctionId, "auction:lot:permanent_unsold", {
@@ -420,6 +481,7 @@ class SocketEventPublisher {
       tournamentPlayerId,
       roundId,
       markedBy,
+      version,
       timestamp: _emittedAt,
     });
     this.publishToAuction(auctionId, "auction:log", {
@@ -535,10 +597,16 @@ class SocketEventPublisher {
    * broadcast every second + sync every 5 sec.
    */
   startTimer(auctionId, remainingSeconds, liveState = {}) {
-    this.stopTimer(auctionId);
-
-    const totalSeconds = liveState?.lotTimerSeconds || remainingSeconds || 30;
+    const version = liveState.version;
+    if (Number.isFinite(version) && version < (this.revisions.get(String(auctionId)) ?? -1)) return;
+    this.stopTimer(auctionId, version);
+    remainingSeconds = this.clockRemaining(remainingSeconds, liveState);
+    const totalSeconds = liveState.lotTimerSeconds || remainingSeconds || 30;
     const expiresAt = Date.now() + remainingSeconds * 1000;
+    if (remainingSeconds <= 0) {
+      this.publishToAuction(auctionId, "auction:timer:expired", { auctionId, version });
+      return;
+    }
 
     this.timerState.set(auctionId, {
       remainingSeconds,
@@ -574,6 +642,7 @@ class SocketEventPublisher {
         this.publishToAuction(auctionId, "auction:timer:sync", {
           auctionId,
           remaining: trueRemaining,
+          version: state.version,
           total: state.totalSeconds,
           serverTime: new Date().toISOString(),
           expiresAt: new Date(state.expiresAt).toISOString(),
@@ -583,6 +652,7 @@ class SocketEventPublisher {
       if (trueRemaining <= 0) {
         this.publishToAuction(auctionId, "auction:timer:expired", {
           auctionId,
+          version: state.version,
           timestamp: new Date().toISOString(),
         });
         this.stopTimer(auctionId);
@@ -595,6 +665,7 @@ class SocketEventPublisher {
     this.publishToAuction(auctionId, "auction:timer:sync", {
       auctionId,
       remaining: remainingSeconds,
+      version: liveState?.version,
       total: totalSeconds,
       serverTime: new Date().toISOString(),
       expiresAt: new Date(expiresAt).toISOString(),
@@ -603,11 +674,12 @@ class SocketEventPublisher {
   }
 
   adjustTimer(auctionId, newRemainingSeconds, liveState = {}) {
+    newRemainingSeconds = this.clockRemaining(newRemainingSeconds, liveState);
     const state = this.timerState.get(auctionId);
     if (!state) {
       // No active timer — start one if lot is BIDDING
       if (liveState?.lotStatus === "BIDDING") {
-        this.startTimer(auctionId, newRemainingSeconds, liveState);
+        this.startTimer(auctionId, liveState.remainingTimeSeconds ?? newRemainingSeconds, liveState);
       }
       return;
     }
@@ -626,27 +698,8 @@ class SocketEventPublisher {
     });
   }
 
-  pauseTimer(auctionId) {
-    const state = this.timerState.get(auctionId);
-    if (state) {
-      state.isPaused = true;
-      state.pausedRemaining = Math.max(
-        0,
-        (state.expiresAt - Date.now()) / 1000,
-      );
-    }
-  }
-
-  resumeTimer(auctionId) {
-    const state = this.timerState.get(auctionId);
-    if (state && state.isPaused) {
-      state.isPaused = false;
-      state.expiresAt = Date.now() + (state.pausedRemaining || 0) * 1000;
-      delete state.pausedRemaining;
-    }
-  }
-
-  stopTimer(auctionId) {
+  stopTimer(auctionId, version = this.timerState.get(auctionId)?.version) {
+    if (Number.isFinite(version) && version < (this.revisions.get(String(auctionId)) ?? -1)) return;
     if (this.activeTimers.has(auctionId)) {
       clearInterval(this.activeTimers.get(auctionId));
       this.activeTimers.delete(auctionId);
@@ -657,6 +710,7 @@ class SocketEventPublisher {
     // Notify clients timer stopped
     this.publishToAuction(auctionId, "auction:timer:stopped", {
       auctionId,
+      version,
       timestamp: new Date().toISOString(),
     });
   }
@@ -667,6 +721,10 @@ class SocketEventPublisher {
     }
     this.activeTimers.clear();
     this.timerState.clear();
+    for (const [event, listener] of this.domainListeners) eventBus.off(event, listener);
+    this.domainListeners.clear();
+    this.revisions.clear();
+    this.isListening = false;
   }
 }
 
@@ -674,7 +732,7 @@ class SocketEventPublisher {
 let publisherInstance = null;
 
 export function initSocketPublisher(io) {
-  if (publisherInstance) return publisherInstance;
+  if (publisherInstance) { publisherInstance.io = io; publisherInstance.init(); return publisherInstance; }
   publisherInstance = new SocketEventPublisher(io);
   publisherInstance.init();
   return publisherInstance;

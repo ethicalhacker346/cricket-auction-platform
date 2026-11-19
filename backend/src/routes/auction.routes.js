@@ -16,6 +16,7 @@ import {
   updateAuctionRoundSchema, // NEW — add to validators/schemas.js, see note below
   placeBidSchema,
   openLotSchema,
+  undoAuctionActionSchema,
   auctionIdParamSchema,
   auctionRoundIdParamSchema, // NEW — add to validators/schemas.js, see note below
   tournamentIdParamSchema,
@@ -61,6 +62,11 @@ auctionRouter.get(
   loadAuctionAuthorization,
   asyncHandler(auctionController.getPermissions)
 );
+
+auctionRouter.get('/:auctionId/actions', authenticate, validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.UNDO_ACTION), asyncHandler(auctionController.actionHistory));
+auctionRouter.post('/:auctionId/undo', authenticate, validate(auctionIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.UNDO_ACTION), validate(undoAuctionActionSchema), asyncHandler(auctionController.undo));
 
 auctionRouter.get('/:auctionId/live', validate(auctionIdParamSchema, 'params'), asyncHandler(auctionController.getLiveState));
 

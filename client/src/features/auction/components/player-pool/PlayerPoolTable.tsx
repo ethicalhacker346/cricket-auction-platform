@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 "use client";
 
 import { useMemo, useState } from "react";
@@ -218,6 +219,7 @@ export function PlayerPoolTable({
                     </span>
                   )}
                 </div>
+                  <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="px-0 text-emerald-300" />
                 {assignedRoundName && (
                   <span
                     className={cn(

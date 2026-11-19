@@ -144,7 +144,7 @@ export function useUpdatePlayerMe() {
 
       const publicFields: (keyof PlayerPayload)[] = [
         "fullName", "primaryRole", "battingStyle",
-        "bowlingStyle", "profileImage", "nationality", "bio",
+        "bowlingStyle", "profileImage", "nationality", "bio", "cricHeroesUrl",
       ];
       const touchedPublic = publicFields.some((f) => f in variables);
       if (touchedPublic) {

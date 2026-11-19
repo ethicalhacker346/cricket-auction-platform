@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeCricHeroesUrl } from '../utils/cricheroes.js';
 import { USER_ROLES, PLAYER_ROLES } from '../config/constants.js';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
@@ -66,7 +67,12 @@ export const createTournamentSchema = z.object({
 
 export const updateTournamentSchema = createTournamentSchema.partial();
 
+export const cricHeroesUrlSchema = z.string().trim().max(500)
+  .refine((value) => value === '' || Boolean(normalizeCricHeroesUrl(value)), 'Enter a valid CricHeroes player profile or share link')
+  .transform((value) => value ? normalizeCricHeroesUrl(value) : '').optional();
+
 export const createPlayerSchema = z.object({
+  cricHeroesUrl: cricHeroesUrlSchema,
   fullName: z.string().trim().min(2).max(120),
   dateOfBirth: z.coerce.date().optional(),
   nationality: z.string().trim().optional(),
@@ -99,6 +105,7 @@ export const createFranchiseSchema = z.object({
 });
 
 export const registerTournamentPlayerSchema = z.object({
+  cricHeroesUrl: cricHeroesUrlSchema,
   basePrice: z.number().min(0).optional(),
   category: z.string().trim().optional(),
   primaryRole: z.enum(Object.values(PLAYER_ROLES)).optional(),
@@ -139,6 +146,11 @@ export const placeBidSchema = z.object({
   // ValidationError.
   amount: z.number().int().min(1),
 });
+
+export const undoAuctionActionSchema = z.object({
+  actionId: objectId,
+  reason: z.string().trim().max(500).optional(),
+}).strict();
 
 export const openLotSchema = z.object({
   tournamentPlayerId: objectId,

@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useMemo } from "react";
 import {
   Award,
@@ -10,7 +11,6 @@ import {
   MapPin,
   Medal,
   Radio,
-  ShieldAlert,
   Users,
   Ban,
   Wallet,
@@ -21,7 +21,7 @@ import {
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useAuth, useLiveAuction } from "@/features/auction/hooks/index.hook";
-import { useLiveAuctionStore } from "@/features/auction/store/index.store";
+import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
 import { formatLakhs, initials, timeAgo } from "@/features/auction/utils/index.utils";
 import { FranchiseLogo, PlayerAvatar, ROLE_META, StatBar } from "@/features/auction/components/LiveStatistics";
 import {
@@ -48,9 +48,8 @@ const MEDAL_STYLES = [
 ];
 
 export default function AuctionAnalyticsPage() {
-  const { isAuthenticated, hasHydrated } = useAuth();
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
-  const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
+  const { hasHydrated } = useAuth();
+  const { auctionId: storeAuctionId, tournamentId: storeTournamentId } = useAuctionContext();
 
   const {
     auction,
@@ -128,7 +127,7 @@ export default function AuctionAnalyticsPage() {
 
     // Bidding intensity — which lots drew the most competing bids.
     const bidCounts = new Map<string, number>();
-    for (const b of bidHistory) bidCounts.set(b.playerId, (bidCounts.get(b.playerId) ?? 0) + 1);
+    for (const b of bidHistory.filter((bid) => bid.status !== 'CANCELLED')) bidCounts.set(b.playerId, (bidCounts.get(b.playerId) ?? 0) + 1);
     const mostContested = [...bidCounts.entries()]
       .map(([playerId, count]) => ({ player: players.find((p) => p.id === playerId), count }))
       .filter((x): x is { player: Player; count: number } => !!x.player && x.count > 1)
@@ -163,23 +162,7 @@ export default function AuctionAnalyticsPage() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 py-32 text-center">
-        <ShieldAlert className="h-12 w-12 text-rose-400" />
-        <h2 className="text-lg font-bold text-white">Authentication Required</h2>
-        <p className="max-w-sm text-sm text-slate-400">
-          Sign in to view auction analytics and insights.
-        </p>
-        <Link
-          to="/login"
-          className="rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:brightness-110"
-        >
-          Sign In
-        </Link>
-      </div>
-    );
-  }
+
 
   if (!storeAuctionId || !storeTournamentId) {
     return (
@@ -395,6 +378,7 @@ export default function AuctionAnalyticsPage() {
                       <PlayerAvatar player={topBuy} size="xs" />
                       <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">
                         Top buy: <span className="text-slate-200">{topBuy.name}</span>
+                        <CricHeroesLink url={topBuy.cricHeroesUrl} playerName={topBuy.name} className="text-emerald-300" />
                       </span>
                       <span className="shrink-0 text-[11px] font-bold text-emerald-400">
                         {formatLakhs(topBuy.soldPrice ?? 0)}
@@ -505,6 +489,7 @@ export default function AuctionAnalyticsPage() {
                     <PlayerAvatar player={p} size="sm" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-slate-200">{p.name}</p>
+                      <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                       <p className="flex items-center gap-1 truncate text-[10px] text-slate-500">
                         <meta.icon className="h-2.5 w-2.5" /> {p.role}
                         {f && (
@@ -540,6 +525,7 @@ export default function AuctionAnalyticsPage() {
                     <div key={p.id} className="flex items-center gap-2.5 text-xs">
                       <PlayerAvatar player={p} size="xs" />
                       <span className="min-w-0 flex-1 truncate text-slate-300">{p.name}</span>
+                      <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="text-emerald-300" />
                       {f && <span className="shrink-0 truncate text-slate-500">{f.shortName}</span>}
                       <span className="shrink-0 font-semibold text-emerald-400">
                         {formatLakhs(p.soldPrice ?? 0)}
@@ -564,6 +550,7 @@ export default function AuctionAnalyticsPage() {
                   <div key={player.id} className="flex items-center gap-2.5 text-xs">
                     <PlayerAvatar player={player} size="xs" />
                     <span className="min-w-0 flex-1 truncate text-slate-300">{player.name}</span>
+                    <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
                     <span className="shrink-0 rounded-full bg-orange-500/10 px-2 py-0.5 font-semibold text-orange-300">
                       {count} bids
                     </span>

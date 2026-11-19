@@ -55,6 +55,7 @@ function _convert(val, seen, depth, maxDepth, keepDates) {
         flattenObjectIds: false,  // We handle ObjectId conversion ourselves
         transform: (_doc, ret) => {
           delete ret.__v;
+          delete ret.undoHeadActionId;
           return ret;
         },
       });
@@ -83,7 +84,7 @@ function _convert(val, seen, depth, maxDepth, keepDates) {
   const out = {};
   for (const key of Object.keys(val)) {
     // Strip Mongoose internals and metadata that leak onto plain objects
-    if (typeof key === 'string' && (key.startsWith('$') || key === '__v' || key === '_doc')) {
+    if (typeof key === 'string' && (key.startsWith('$') || key === '__v' || key === '_doc' || key === 'undoHeadActionId')) {
       continue;
     }
     const converted = _convert(val[key], seen, depth + 1, maxDepth, keepDates);

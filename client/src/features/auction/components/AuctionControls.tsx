@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
-  Ban,
   CheckCircle2,
   Gavel,
   Hammer,
@@ -15,6 +14,10 @@ import {
 import { useAuctionPermissions, useLiveAuction } from "@/features/auction/hooks/index.hook";
 import { formatLakhs } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
+import { AuctionDialog } from './AuctionDialog';
+import { AuctionUndoPanel } from './AuctionUndoPanel';
+import { NextLotPicker } from './NextLotPicker';
+import { eligibleRoundPlayers, runningAuctionRound } from '../utils/roundSelection';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -85,7 +88,7 @@ function ConfirmModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <AuctionDialog title={config.title} onClose={onClose} busy={isProcessing}>
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/95 p-6 shadow-2xl animate-in zoom-in-95 fade-in duration-200">
         <div className="flex items-center gap-3 mb-4">
           <div
@@ -129,7 +132,7 @@ function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </AuctionDialog>
   );
 }
 
@@ -171,6 +174,8 @@ function ControlButton({
 
   return (
     <button
+      type="button"
+      aria-label={label}
       onClick={onClick}
       disabled={disabled || loading}
       title={tooltip || label}
@@ -195,13 +200,20 @@ function ControlButton({
 /* ------------------------------------------------------------------ */
 
 export function AuctionControls() {
-  const { actions, currentPlayer, currentRound, leadingFranchise, currentBid, auction, currentPlayerId } =
+  const { actions, currentPlayer, currentRound, leadingFranchise, currentBid, auction, currentPlayerId, rounds, players, undoAction } =
     useLiveAuction();
   const permissions = useAuctionPermissions();
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirm, setConfirm] = useState<ConfirmConfig | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [selectedPlayerId, setSelectedPlayerId] = useState('');
+  const runningRound = runningAuctionRound(rounds);
+  const eligiblePlayers = runningRound ? eligibleRoundPlayers(runningRound, players) : [];
+  // Derive a safe fallback synchronously; a stale selection is never submitted.
+  const nextPlayerId = eligiblePlayers.some((player) => player.id === selectedPlayerId)
+    ? selectedPlayerId : eligiblePlayers[0]?.id;
+  const anyLoading = Object.values(loading).some(Boolean);
 
   /* ---------------- Toasts ---------------- */
   const showToast = useCallback((message: string, type: ToastType = "info") => {
@@ -256,7 +268,7 @@ export function AuctionControls() {
     openConfirm({
       title: "Complete Auction",
       description:
-        "This will permanently close the auction. No further bidding, lot openings, or player changes will be allowed. Are you sure?",
+        "This closes the auction once every player is resolved. You can reverse the latest recorded action with organizer undo. Continue?",
       variant: "danger",
       confirmLabel: "Complete Auction",
       action: () => withAction("complete", actions.complete, "Auction completed"),
@@ -264,7 +276,7 @@ export function AuctionControls() {
   };
 
   const onOpenNextLot = () =>
-    withAction("openNextLot", actions.openNextLot, "Next lot opened");
+    withAction("openNextLot", () => actions.openNextLot(nextPlayerId), "Selected player lot opened");
 
   const onForceSold = () => {
     if (!currentPlayer) {
@@ -279,7 +291,7 @@ export function AuctionControls() {
       title: "Force Mark as Sold",
       description: `You are about to mark ${currentPlayer.name} as SOLD to ${
         leadingFranchise?.name || "highest bidder"
-      } for ${formatLakhs(currentBid.amount)}. This action is irreversible and bypasses the timer.`,
+      } for ${formatLakhs(currentBid.amount)}. This settles the lot immediately. Organizer undo can reverse the latest action.`,
       variant: "primary",
       confirmLabel: "Confirm Sale",
       action: () =>
@@ -299,25 +311,6 @@ export function AuctionControls() {
       confirmLabel: "Confirm Unsold",
       action: () =>
         withAction("forceUnsold", actions.forceUnsold, `${currentPlayer.name} marked as unsold`),
-    });
-  };
-
-  const onMarkPermanentUnsold = () => {
-    if (!currentPlayer) {
-      showToast("No active player to retire", "error");
-      return;
-    }
-    openConfirm({
-      title: "Permanently Retire Player",
-      description: `${currentPlayer.name} will be permanently withdrawn from the auction and will never be re-listed. This is a terminal state — the auction can only complete once all remaining players are sold or permanently retired. Are you absolutely sure?`,
-      variant: "danger",
-      confirmLabel: "Retire Permanently",
-      action: () =>
-        withAction(
-          "markPermanentUnsold",
-          () => actions.markPermanentUnsold(currentPlayer.id),
-          `${currentPlayer.name} permanently retired`
-        ),
     });
   };
 
@@ -357,6 +350,7 @@ export function AuctionControls() {
   }
 
   const noOrganizerAccess =
+    !permissions.canUndo &&
     !permissions.canStart &&
     !permissions.canPause &&
     !permissions.canResume &&
@@ -370,7 +364,7 @@ export function AuctionControls() {
     return (
       <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-slate-500">
         <PowerOff className="h-4 w-4" />
-        <span className="text-sm">Switch to Organizer view to control the auction</span>
+        <span className="text-sm">Read-only spectator view. Only the tournament organizer can control this auction.</span>
       </div>
     );
   }
@@ -473,7 +467,7 @@ export function AuctionControls() {
             variant="success"
             loading={loading.openNextLot}
             onClick={onOpenNextLot}
-            disabled={!permissions.canOpenLot}
+            disabled={!permissions.canOpenLot || !nextPlayerId || anyLoading}
             title={!permissions.canOpenLot ? "Wait for current lot to settle" : "Open Next Lot"}
           />
 
@@ -485,7 +479,7 @@ export function AuctionControls() {
             label="Force Sold"
             loading={loading.forceSold}
             onClick={onForceSold}
-            disabled={!permissions.canMarkSold || !currentPlayerId}
+            disabled={!permissions.canMarkSold || !currentPlayerId || !currentBid.teamId || anyLoading}
             title={
               !permissions.canMarkSold
                 ? "You do not have permission"
@@ -495,53 +489,24 @@ export function AuctionControls() {
             }
           />
 
-          {/*
-            CRITICAL FIX:
-            - Normal round  → show Force Unsold (moves player to unsold pool for re-listing)
-            - Unsold round  → show Retire Player (permanent unsold, terminal state)
-            The two buttons are mutually exclusive by round type.
-          */}
-          {!isUnsoldRound ? (
-            <ControlButton
-              icon={XCircle}
-              label="Force Unsold"
-              loading={loading.forceUnsold}
-              onClick={onForceUnsold}
-              disabled={!permissions.canMarkUnsold || !currentPlayerId}
-              title={
-                !permissions.canMarkUnsold
-                  ? "You do not have permission"
-                  : !currentPlayerId
-                  ? "No active lot"
-                  : "Move player to unsold pool"
-              }
-            />
-          ) : (
-            <ControlButton
-              icon={Ban}
-              label="Retire Player"
-              variant="ghost"
-              loading={loading.markPermanentUnsold}
-              onClick={onMarkPermanentUnsold}
-              disabled={!permissions.canMarkPermanentUnsold || !currentPlayerId}
-              title={
-                !permissions.canMarkPermanentUnsold
-                  ? "You do not have permission"
-                  : !currentPlayerId
-                  ? "No active player"
-                  : "Permanently retire from auction"
-              }
-            />
-          )}
+          <ControlButton icon={XCircle} label="Force Unsold" loading={loading.forceUnsold}
+            onClick={onForceUnsold} disabled={!permissions.canMarkUnsold || !currentPlayerId || anyLoading}
+            title="Release the winning reservation and return the player to the unsold pool" />
         </div>
+
+        {permissions.canUndo && <AuctionUndoPanel auctionId={auction.id} action={undoAction} onUndo={actions.undo} />}
+        {(permissions.canOpenLot || permissions.canPause || permissions.canResume) && (
+          <NextLotPicker rounds={rounds} players={players} selectedId={nextPlayerId || ''}
+            onSelect={setSelectedPlayerId} disabled={!!currentPlayerId || anyLoading} />
+        )}
 
         {/* Contextual micro-copy */}
         {isUnsoldRound && currentPlayer && (
           <div className="mt-3 flex items-center gap-2 rounded-xl bg-slate-800/40 px-3 py-2 text-xs text-slate-400 ring-1 ring-white/5">
             <Info className="h-3.5 w-3.5 text-sky-400" />
             <span>
-              Unsold Round: {currentPlayer.name} can be re-bid on, or permanently retired to allow
-              auction completion.
+              Unsold Round: settle {currentPlayer.name} first. Unsold players may be re-listed,
+              or retired from the Rounds page to allow auction completion.
             </span>
           </div>
         )}

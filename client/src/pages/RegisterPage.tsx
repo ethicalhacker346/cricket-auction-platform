@@ -30,7 +30,7 @@ export default function RegisterPage() {
       phone: "",
       password: "",
       confirmPassword: "",
-      role: "player",
+      role: "PLAYER",
       terms: false,
     },
   });

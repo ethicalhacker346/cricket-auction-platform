@@ -40,17 +40,19 @@ interface LiveAuctionState extends LiveAuctionSnapshot {
   tournamentId: string | null;
   bootstrap: (auctionId: string, tournamentId: string) => void;
   setTournamentContext: (tournamentId: string) => void;
+  release: (auctionId: string) => void;
   actions: {
-    start: () => void;
-    pause: () => void;
-    resume: () => void;
-    complete: () => void;
-    openNextLot: () => void;
+    start: () => Promise<{ success: boolean; error?: string }>;
+    pause: () => Promise<{ success: boolean; error?: string }>;
+    resume: () => Promise<{ success: boolean; error?: string }>;
+    complete: () => Promise<{ success: boolean; error?: string }>;
+    openNextLot: (playerId?: string) => Promise<{ success: boolean; error?: string }>;
+    undo: (actionId: string, reason?: string) => Promise<{ success: boolean; error?: string }>;
     placeBid: (teamId: string, amount?: number, isUser?: boolean) => Promise<{ ok: boolean; reason?: string }>;
-    forceSold: () => void;
-    forceUnsold: () => void;
+    forceSold: () => Promise<{ success: boolean; error?: string }>;
+    forceUnsold: () => Promise<{ success: boolean; error?: string }>;
     // NEW: aligns with AuctionService.markPermanentUnsold and liveAuctionApi
-    markPermanentUnsold: (tournamentPlayerId: string) => void;
+    markPermanentUnsold: (tournamentPlayerId: string) => Promise<{ success: boolean; error?: string }>;
   };
 }
 
@@ -77,6 +79,8 @@ const emptySnapshot: LiveAuctionSnapshot = {
   playersPermanentUnsoldCount: 0,
   totalMoneySpent: 0,
   viewerCount: 0,
+  undoAction: null,
+  undoVersion: 0,
 };
 
 export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
@@ -93,28 +97,7 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
     const sameAuction =
       engine.getAuctionId() === auctionId;
 
-  /*
-   * Terminal auctions are intentionally offline.
-   * Never reconnect them, even if bootstrap() is called again
-   * by AuctionShell or a child route.
-   */
-    if (sameAuction && engine.isTerminal()) {
-      if (!state._subscribed) {
-        set({
-          auctionId,
-          tournamentId,
-          _initialized: true,
-          _subscribed: true,
-        });
-
-        subscribeEngine(engine, set);
-      }
-
-      return;
-    }
-
-    const engineIsLiveForThisAuction =
-      sameAuction && engine.isConnected();
+    const engineIsLiveForThisAuction = sameAuction && state._initialized;
 
     if (
       state._initialized &&
@@ -123,7 +106,7 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
     ) {
       if (!state._subscribed) {
         set({ _subscribed: true });
-        engine.subscribe((snapshot) => set(snapshot));
+        subscribeEngine(engine, set);
       }
 
       return;
@@ -136,9 +119,15 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
       _subscribed: true,
     });
 
-    engine.subscribe((snapshot) => set(snapshot));
+    subscribeEngine(engine, set);
 
     void engine.connect(auctionId, tournamentId);
+  },
+
+  release: (auctionId) => {
+    if (get().auctionId !== auctionId) return;
+    resetAuctionEngine();
+    set({ ...emptySnapshot, _subscribed: false, _initialized: false, auctionId: null, tournamentId: null });
   },
 
   setTournamentContext: (tournamentId) => {
@@ -158,7 +147,8 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
     pause: () => getAuctionEngine().pause(),
     resume: () => getAuctionEngine().resume(),
     complete: () => getAuctionEngine().complete(),
-    openNextLot: () => getAuctionEngine().openNextLot(),
+    openNextLot: (playerId) => getAuctionEngine().openNextLot(playerId),
+    undo: (actionId, reason) => getAuctionEngine().undo(actionId, reason),
     placeBid: (teamId, amount, isUser) => getAuctionEngine().placeBid(teamId, amount, isUser),
     forceSold: () => getAuctionEngine().forceSold(),
     forceUnsold: () => getAuctionEngine().forceUnsold(),

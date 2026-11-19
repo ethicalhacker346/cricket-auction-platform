@@ -6,6 +6,31 @@
 
 ---
 
+## Current implementation checkpoint — 2026-11-18
+
+The review below is chronological. **Parts 1–5 preserve findings and verification
+at their original checkpoints**; historical blocked tests and compiler counts
+are not the current result. [Part 6](#part-6--audited-undo-player-links-next-lot-selection-and-public-spectators)
+records the latest implementation and remaining limits.
+
+| Requested capability | Current implementation |
+|---|---|
+| Organizer undo | Persistent, latest-action-first compensation for bids, decisions, lifecycle, rules, rounds and automatic cascades; confirmed, audited, conflict-checked |
+| CricHeroes profiles | Optional create/edit/submission field, validated persistence and safe links throughout public player/auction views |
+| Arbitrary next player | Search/select any eligible player in the **running round**, enforced inside the transaction |
+| Guest watching | Public live/3D/dashboard/history/analytics/results; no bidding or management privileges |
+
+**Final verification:** 80 client tests / 10 files; 43 backend tests / 4 suites;
+hooks lint, 22-event socket contract, syntax checks, diff checks and production
+PWA build pass. A separate backend run with open-handle detection exits cleanly
+without forced termination. Nine real-browser acceptance checks pass against a
+disposable API. Typecheck still fails with **228 diagnostics vs 290 before the
+features**, with no new normalized diagnostic messages. Large-bundle warnings
+remain. See [the repeatable checks](client/TESTING.md) and the
+[operator/deployment guide](docs/AUCTION_SAFETY_AND_SPECTATORS.md).
+
+# Part 1 — Initial architecture and findings (historical baseline)
+
 ## 1. What This System Is
 
 **GullyBid** — a production-grade, IPL-style live player auction platform.
@@ -867,3 +892,154 @@ Verified in this patch:
 Test dependencies are dev-only. Temporary browser binaries, screenshots and
 fixture pages are not shipped or committed. See `client/TESTING.md` for the
 repeatable checks.
+
+
+---
+
+# Part 6 — Audited undo, player links, next-lot selection and public spectators
+
+## R6.1 — The auction command boundary is now the integrity boundary
+
+`AuctionCommandService.run` wraps auction mutations in a snapshot/majority
+transaction. It rebuilds authorization **inside** that transaction, journals
+scoped business values, writes the Auction as a serialization fence, and
+publishes only after commit. Transaction retries recreate their journal and
+side-effect queues; aborted transactions cannot announce a sale or completion.
+Notifications run after realtime publications and cannot fake-fail a committed
+bid. Version/write conflicts return a clean 409.
+
+```
+Auction (private head, monotonic liveState.version, lastUndoVersion)
+   └─ AuctionAction (small audit header, previousActionId)
+         └─ AuctionActionChange × related resource
+              field-scoped before / after / mutable fields / safety guards
+```
+
+`AuctionActionChange` stores separate per-resource images rather than embedding
+an ever-growing undo stack in Auction. No player-profile/user credential data or
+presence is captured. Wallets, rosters, player outcomes, round assignment/state,
+lifecycle/configuration and bid status are compensated together. Bid records
+created by undone bids remain **CANCELLED**, not deleted; bid analytics exclude
+them while the feed/history retain explicit labels.
+
+`POST /auctions/:id/undo` requires the exact current action ID and the auction's
+organizer/admin. `GET /auctions/:id/actions` returns the latest 30 audit headers
+to the same audience; private images/head are never serialized publicly. Undo
+validates **all** post-images before any restoration. Independent profile edits
+survive; incompatible wallet, approval, ownership or base-price changes block
+compensation instead of being overwritten. Reasons and the compensating actor
+are retained in the audit trail.
+
+Commands covered: bids, sold/unsold, lot opening, start/pause/resume, explicit
+completion, rule updates, round add/update/delete, permanent-unsold retirement,
+and their automatic round/unsold-round/auction/tournament consequences. A final
+sale undo reopens the actual final lot and financial state. Undo can repeat one
+step at a time, including across process restarts; there is no selective undo or
+redo. Auction creation, actions before this journal existed, profile edits and
+presence are not reconstructable auction actions.
+
+Transport revisions never rewind. Restored bidding pauses for review with at
+least the bid-reset window available; explicit pause/resume undo restores the
+lifecycle transition itself. Timer-expired bids are now rejected server-side;
+expiry still never automatically decides sold/unsold.
+
+## R6.2 — Revision-aware observation, including completed rooms
+
+New `auction:action:recorded` / `auction:action:undone` events complement the
+snapshot's `undoAction` / `lastUndoVersion`. An AsyncLocalStorage command context
+stamps all cascade frames with one revision, including events produced by a
+helper holding an earlier Auction instance. Publisher listeners are explicitly
+owned and disposed; bounded worker-local high-watermarks and stale-timer fences
+reject older work without rejecting same-revision sibling events. Snapshot
+business reads share one transaction, with presence read separately.
+
+The client fences HTTP/socket work by auction identity, connection generation
+and revision. Socket `connect` always rejoins the current room, not just initial
+startup. A delayed bid response never optimistically replays an already-undone
+bid. HTTP and socket undo acknowledgements are deduplicated. Completed auctions
+stop active bidding/ticking but **remain observed**: a legitimate later undo can
+reopen them. This intentionally supersedes the original permanent terminal
+seal described in Part 1.
+
+Corrections clear pending verdicts, timers and stale celebration baselines
+silently. Existing completed rounds seed the audio baseline, so the next poll
+cannot replay historical applause; a truly re-completed reopened round still
+celebrates exactly once. Shared confirmation dialogs move a stable portal into
+and out of native fullscreen without losing the typed reason, remounting, or
+breaking focus containment. Component and actual Chromium fullscreen checks
+cover that transition.
+
+## R6.3 — Running-round choice, with no queue loss
+
+`runningAuctionRound` / `eligibleRoundPlayers` define client selection; the API
+independently verifies the first nonempty unfinished round, approval, membership
+and outcome inside the command transaction. The organizer may select any
+eligible player there, not a later round or an unavailable player. The queue is
+deduplicated and based on remaining eligibility rather than slicing after the
+current array index, so selecting a later player cannot hide earlier pending
+players. Engine-managed unsold-round re-listing remains supported.
+
+## R6.4 — One optional, canonical profile link
+
+`Player.cricHeroesUrl` is accepted by profile creation/editing and player
+registration. Submission persists the canonical link in the same transaction
+as registration; duplicate/failing registration cannot partially modify it.
+Explicit empty edits clear the field. Projections and typed mappers carry it to
+player/tournament listings, cards/queues/pools/round editor, rosters,
+analytics/history/results, share/PDF layouts and 3D displays.
+
+Both ends enforce the same host/path allowlist, HTTPS normalization, size and
+credential/port checks. `CricHeroesLink` opens a safe, accessible external link
+without triggering parent card selection. No scraping, embedded content or
+claim of profile verification is involved. Actual create/edit form tests cover
+normalization and explicit clearing, and API tests cover submission/list/snapshot
+persistence. Flat registration-list types now match their real wire shape;
+player rejection feedback stays private to that player.
+
+## R6.5 — Public watching does not confer authority
+
+Viewing routes and the shell no longer require sign-in. Server-policy,
+identity/resource/status-keyed permission queries fail closed, and guests do
+not fetch private policy. Management and team-console routes require actual
+resource ownership, not merely an ORGANIZER role. Franchise pages and bidding
+use the server's tournament-team mapping; a missing legacy `user.id` or a cached
+team from another login cannot confer bidding identity. Bid controls also
+require connected/live state and a positive running timer.
+
+REST and Socket.IO share a per-tab viewer ID. One workspace-owned heartbeat
+serves all auction pages and releases resources on departure. Socket joins
+check auction existence, bound identity and room caps. Unjoined/mismatched
+heartbeats and changing identity without leaving are rejected. Multiple sockets
+sharing a tab ID retain presence until the final socket leaves. Presence remains
+TTL-backed and approximate, never part of financial journal writes. Three tests
+exercise actual anonymous Socket.IO clients, including real bid/undo delivery
+and last-socket cleanup.
+
+Development uses same-origin REST/socket URLs through Vite proxies, which also
+works in the proxied browser preview. Production API defaults are preserved.
+Browser-facing code never needs to contact the browser's own localhost.
+
+## R6.6 — Verified outcome and honest deployment limits
+
+The current 80-client / 43-backend automated checks and nine disposable-API
+browser checks are detailed in `client/TESTING.md`. Browser acceptance includes
+real owner UI bids, live guest corrections, sale/purse/roster restoration,
+390px layouts, public/private-route separation and native fullscreen. Browser
+profile/submission, unsold reversal and final-auction recovery were not
+separately exercised; their component/API/engine regressions pass. The earlier
+claim that backend integration tests could not run is superseded: a compatible
+local MongoDB binary allowed real replica-set tests. A final full backend run
+also exited normally with `--detectOpenHandles` and without `--forceExit`.
+
+Deployment requires MongoDB replica-set/sharded transactions and the new model
+indexes, as documented in the operator guide. There is no destructive migration
+or journal backfill. Back up and retain audit headers/images together.
+
+The deferred side-effect arrays are **not a durable distributed message
+outbox**: a crash after commit can lose a broadcast. REST reconciliation is the
+correctness floor. High-watermarks/timers remain worker-local; revisions fence
+stale cross-worker delivery and clocks re-anchor from persisted state, but this
+is not a Redis-elected timer-owner implementation. Shared MongoDB and the
+existing Redis Socket.IO adapter are still required when scaling horizontally.
+Large PWA bundles and 228 pre-existing TypeScript diagnostics remain technical
+debt; neither a passing build nor these feature tests claims to resolve them.

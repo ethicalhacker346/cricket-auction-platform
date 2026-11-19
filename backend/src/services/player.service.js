@@ -4,7 +4,7 @@ import * as ImageService from '../services/image.service.js';
 
 const UPDATABLE_FIELDS = [
   'fullName', 'dateOfBirth', 'nationality', 'primaryRole',
-  'battingStyle', 'bowlingStyle', 'profileImage', 'bio',
+  'battingStyle', 'bowlingStyle', 'profileImage', 'bio', 'cricHeroesUrl',
 ];
 
 export class PlayerService {

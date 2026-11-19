@@ -51,7 +51,7 @@ export function AuctionHeader({ onMenuClick }: AuctionHeaderProps) {
   const [connTooltipOpen, setConnTooltipOpen] = useState(false);
 
   // Align with new normalized permissions + auth
-  const userRole = user?.role ?? permissions.role;
+  const userRole = isAuthenticated ? user?.role ?? permissions.role : "GUEST";
 
 const normalizedRole = String(userRole).toUpperCase();
 
@@ -87,10 +87,10 @@ const roleConfig = (() => {
 
     default:
       return {
-        label: "User",
+        label: "Guest spectator",
         icon: Users2,
         description:
-          "Authenticated user with access to this auction.",
+          "Watch the live auction, bids, teams and results. No bidding or organizer permissions.",
         className: "text-slate-300",
       };
   }
@@ -125,18 +125,6 @@ const RoleIcon = roleConfig.icon;
     );
   }
 
-  if (!isAuthenticated || !user || !auction) {
-    return (
-      <HeaderShell onMenuClick={onMenuClick}>
-        <div className="flex min-w-0 items-center gap-3 text-slate-400">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-rose-500 shadow-lg sm:h-12 sm:w-12 sm:rounded-2xl">
-            <Gavel className="h-5 w-5 text-slate-950 sm:h-7 sm:w-7" />
-          </div>
-          <span className="truncate font-semibold">Auction Platform</span>
-        </div>
-      </HeaderShell>
-    );
-  }
 
   return (
     <HeaderShell onMenuClick={onMenuClick}>
@@ -259,7 +247,7 @@ const RoleIcon = roleConfig.icon;
                   <RoleIcon className="h-5 w-5" />
                 </div>
                 <div className="space-y-1.5 text-sm">
-                  <p className="font-semibold text-white">Signed in as <span className="font-mono">{userRole}</span></p>
+                  <p className="font-semibold text-white">{isAuthenticated ? "Signed in as" : "Watching as"} <span className="font-mono">{userRole}</span></p>
                   <p className="text-slate-400 leading-snug">
                     {roleConfig.description}
                   </p>

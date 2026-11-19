@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { createRoot } from "react-dom/client";
@@ -559,6 +560,7 @@ export function TeamRosterCard({
                       </span>
                     )}
                   </div>
+                  <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="px-0 text-emerald-300" />
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span className="text-[10px] text-slate-400">
                       {ROLE_ICONS[p.role] ?? "🏏"} {p.role}

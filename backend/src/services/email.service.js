@@ -15,8 +15,8 @@ const transporter = nodemailer.createTransport({
   pool: true,
   maxConnections: 5,
 });
-// Verify connection on startup (fail fast in development)
-transporter.verify((error) => {
+// Tests must not contact an external SMTP service.
+if (env.NODE_ENV !== 'test') transporter.verify((error) => {
   if (error) {
     console.error('❌ SMTP connection failed:', error.message);
   } else {

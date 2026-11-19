@@ -9,8 +9,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { useBid, useLiveAuction, useAuth } from "@/features/auction/hooks/index.hook";
-import { useRoleStore } from "@/features/auction/store/index.store";
+import { useBid, useLiveAuction, useResolvedUserTeam } from "@/features/auction/hooks/index.hook";
 import { formatLakhs, getNextIncrement } from "@/features/auction/utils/index.utils";
 import { cn } from "@/utils/cn";
 
@@ -25,14 +24,11 @@ interface Toast {
 
 // ── Component ───────────────────────────────────────────────────────────────
 export function BidPanel({ teamId }: { teamId?: string }) {
-  const userTeamId = useRoleStore((s) => s.userTeamId);
-  const { user } = useAuth();
-  const activeTeamId = teamId ?? userTeamId ?? user?.teamId;
+  const { currentPlayer, currentBid, franchises, auction, status, timer, connection } = useLiveAuction();
+  const { franchise, resolvedId, permissions } = useResolvedUserTeam(franchises);
+  const activeTeamId = !teamId || teamId === resolvedId ? resolvedId : null;
+  const { placeBid, isPlacing, lastError, flashSeq } = useBid(activeTeamId ?? '');
 
-  const { currentPlayer, currentBid, franchises, auction, status } = useLiveAuction();
-  const { placeBid, isPlacing, lastError, flashSeq } = useBid(activeTeamId!);
-
-  const franchise = franchises.find((f) => f.id === activeTeamId);
   const isLeading = currentBid.teamId === activeTeamId;
 
   // ── Viewport Breakpoint Detection (for toast physics direction) ─────────
@@ -70,7 +66,7 @@ export function BidPanel({ teamId }: { teamId?: string }) {
     // CRITICAL: If no one has bid yet, the first bid must be the player's
     // base price — not an empty increment above zero.
     if (!currentBid.teamId) {
-      return currentPlayer.basePrice;
+      return Math.max(1, currentPlayer.basePrice);
     }
     // Subsequent bids follow normal increment rules.
     return getNextIncrement(currentBid.amount, increments) + currentBid.amount;
@@ -86,7 +82,8 @@ export function BidPanel({ teamId }: { teamId?: string }) {
 
   const canAfford = effectiveBidAmount <= remainingPurse;
   const canBid =
-    status === "live" &&
+    permissions.canBid &&
+    status === "live" && connection === "connected" && timer.isRunning && timer.remaining > 0 &&
     !!currentPlayer &&
     !isLeading &&
     !!franchise &&

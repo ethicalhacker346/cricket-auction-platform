@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "react-router-dom";
 import {
@@ -25,10 +24,9 @@ import {
 import {
   useAuth,
   useLiveAuction,
-  useAuctionPermissions,
   useResolvedUserTeam,
 } from "@/features/auction/hooks/index.hook";
-import { useRoleStore, useLiveAuctionStore } from "@/features/auction/store/index.store";
+import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
 import { AuctionClock } from "@/features/auction/components/AuctionClock";
 import { CurrentHighestBid } from "@/features/auction/components/CurrentHighestBid";
 import { PlayerAuctionCard } from "@/features/auction/components/PlayerAuctionCard";
@@ -114,10 +112,8 @@ function StatCard({
    MAIN PAGE
    ═══════════════════════════════════════════════════════════════════════════════ */
 export default function FranchiseAuctionPage() {
-  const { isAuthenticated, hasHydrated, user } = useAuth();
-  const storeAuctionId = useLiveAuctionStore((s) => s.auctionId);
-  const storeTournamentId = useLiveAuctionStore((s) => s.tournamentId);
-  const userTeamId = useRoleStore((s) => s.userTeamId);
+  const { isAuthenticated, hasHydrated } = useAuth();
+  const { auctionId: storeAuctionId, tournamentId: storeTournamentId } = useAuctionContext();
 
   /* ── CORRECT: useLiveAuction expects an options object, not positional args ── */
   const liveAuction = useLiveAuction(
@@ -143,16 +139,9 @@ export default function FranchiseAuctionPage() {
     actions,
   } = liveAuction;
 
-  /* ── CORRECT: pass auctionId so permissions fetch the right policy ── */
-  const permissions = useAuctionPermissions(storeAuctionId || undefined);
-
-  const franchise = useMemo(() => {
-    if (!user) return null;
-
-    return franchises.find(
-        f => f.ownerId === user.id
-    ) ?? null;
-}, [franchises, user]);
+  // Resolve the team by this auction's server-authoritative ownership, not
+  // the optional legacy user.id field or another session's cached team.
+  const { franchise, permissions, isLoading: teamLoading } = useResolvedUserTeam(franchises);
 
   const remaining = franchise
     ? franchise.purseTotal - franchise.spent - (franchise.reservedBudget || 0)
@@ -169,7 +158,7 @@ export default function FranchiseAuctionPage() {
   /* ═══════════════════════════════════════════════════════════════════════════
      GUARDS
      ═══════════════════════════════════════════════════════════════════════════ */
-  if (!hasHydrated) {
+  if (!hasHydrated || teamLoading) {
     return (
       <div className="mx-auto flex max-w-7xl items-center justify-center py-32">
         <Loader2 className="h-8 w-8 animate-spin text-amber-400" />

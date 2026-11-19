@@ -1,8 +1,8 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useState, useEffect } from "react";
 import { ListOrdered, Users, Globe2, TrendingUp } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLiveAuction } from "@/features/auction/hooks/index.hook";
-import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { RoundStatusBadge, RoundTypeBadge, RoundCategoryBadge } from "./Badges";
 import { cn } from "@/utils/cn";
@@ -110,7 +110,7 @@ export function PlayerQueue() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.04, duration: 0.3 }}
               className={cn(
-                "flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors",
+                "grid grid-cols-[1.25rem_2rem_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2.5 transition-colors",
                 isMarquee
                   ? "border-amber-400/10 bg-amber-400/[0.02] hover:bg-amber-400/[0.04]"
                   : "border-white/[0.04] bg-white/[0.02] hover:bg-white/[0.04]"
@@ -118,14 +118,14 @@ export function PlayerQueue() {
             >
               <span
                 className={cn(
-                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+                  "flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold",
                   isMarquee ? "bg-amber-400/20 text-amber-300" : "bg-white/5 text-slate-400"
                 )}
               >
                 {i + 1}
               </span>
 
-              <GradientAvatar player={p} size="md" />
+              <GradientAvatar player={p} size="sm" />
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -133,17 +133,16 @@ export function PlayerQueue() {
                   {p.tag && <TagBadge tag={p.tag} compact />}
                   {p.overseas && <Globe2 className="h-3 w-3 shrink-0 text-sky-400" title={p.country} />}
                 </div>
-                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                  <span className="text-[10px] text-slate-400">
-                    {ROLE_ICONS[p.role as keyof typeof ROLE_ICONS] ?? "🏏"} {p.role}
-                  </span>
-                  {p.battingStyle && <StyleChip>{p.battingStyle}</StyleChip>}
-                  {p.bowlingStyle && <StyleChip>{p.bowlingStyle}</StyleChip>}
-                  {p.age > 0 && <StyleChip>{p.age}y</StyleChip>}
-                </div>
+                <p className="mt-0.5 truncate text-[10px] text-slate-400">{p.role}</p>
               </div>
 
-              <span className="shrink-0 text-xs font-bold text-slate-300">{formatLakhs(p.basePrice)}</span>
+              <span className="text-xs font-bold text-slate-300">{formatLakhs(p.basePrice)}</span>
+              <div className="col-span-2 col-start-3 flex flex-wrap items-center gap-1.5">
+                {p.battingStyle && <StyleChip>{p.battingStyle}</StyleChip>}
+                {p.bowlingStyle && <StyleChip>{p.bowlingStyle}</StyleChip>}
+                {p.age > 0 && <StyleChip>{p.age}y</StyleChip>}
+              </div>
+              <CricHeroesLink url={p.cricHeroesUrl} playerName={p.name} className="col-span-2 col-start-3 min-h-7 px-0 text-[10px] text-emerald-300" />
             </motion.div>
           );
         })}

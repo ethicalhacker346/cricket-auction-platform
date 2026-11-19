@@ -1,3 +1,4 @@
+import { AuctionAccessRoute } from "@/features/auction/routes/AuctionAccessRoute";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   BrowserRouter,
@@ -269,20 +270,16 @@ export default function App() {
           {/* ═══════════════ AUCTION WORKSPACE ═══════════════ */}
           <Route
             path="/tournaments/:tournamentId/auction/:auctionId"
-            element={
-              <ProtectedRoute>
-                <AuctionShell />
-              </ProtectedRoute>
-            }
+            element={<AuctionShell />}
           >
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<AuctionDashboardPage />} />
-            <Route path="configuration" element={<CreateAuctionPage />} />
-            <Route path="rounds" element={<AuctionRoundsPage />} />
-            <Route path="rounds/:roundId" element={<RoundEditorPage />} />
+            <Route path="configuration" element={<AuctionAccessRoute access="manage"><CreateAuctionPage /></AuctionAccessRoute>} />
+            <Route path="rounds" element={<AuctionAccessRoute access="manage"><AuctionRoundsPage /></AuctionAccessRoute>} />
+            <Route path="rounds/:roundId" element={<AuctionAccessRoute access="manage"><RoundEditorPage /></AuctionAccessRoute>} />
             <Route path="live" element={<LiveAuctionPage />} />
             <Route path="live/3d" element={<LiveAuction3DPage />} />
-            <Route path="team" element={<FranchiseAuctionPage />} />
+            <Route path="team" element={<AuctionAccessRoute access="team"><FranchiseAuctionPage /></AuctionAccessRoute>} />
             <Route path="history" element={<AuctionHistoryPage />} />
             <Route path="analytics" element={<AuctionAnalyticsPage />} />
             <Route path="results" element={<AuctionResultPage />} />

@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
@@ -593,6 +594,7 @@ function PlayerHologram({
                     <h2 className="mt-1 truncate text-[17px] font-black leading-none tracking-[-0.04em]">
                       {player.name}
                     </h2>
+                    <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="rounded-full bg-white/8 px-2 py-0.5 text-[8px] font-bold uppercase text-slate-300">
                         {player.role}

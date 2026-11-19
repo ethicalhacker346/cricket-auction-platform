@@ -56,6 +56,8 @@ export const franchise: Franchise = {
 export function makeSnapshot(overrides: Partial<AuctionSnapshot> = {}): AuctionSnapshot {
   return {
     auction,
+    undoAction: null,
+    undoVersion: 0,
     rounds: [],
     players: [makePlayer()],
     franchises: [franchise],

@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Trophy, MapPin, UserCircle, Edit3, ArrowRight, PlusCircle } from "lucide-react";
@@ -40,6 +41,7 @@ export function PlayerHero({ user, profile }: PlayerHeroProps) {
           >
             {hasProfile ? profile.fullName ?? user?.name : user?.name}
           </motion.h1>
+          <CricHeroesLink url={profile?.cricHeroesUrl} playerName={profile?.fullName} className="bg-white/10 text-white hover:text-emerald-100" />
 
           {hasProfile ? (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="flex flex-wrap gap-2">

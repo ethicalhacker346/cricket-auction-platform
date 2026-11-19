@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Link } from "react-router-dom";
@@ -49,6 +50,7 @@ interface HudPermissionShape {
   loading: boolean;
   canBid: boolean;
   canManageAuction: boolean;
+  canUndo?: boolean;
 }
 
 interface Auction3DHudProps {
@@ -214,6 +216,7 @@ function PlayerHudCard({
             <TinyAvatar player={player} className="h-14 w-14" />
             <div className="min-w-0 flex-1">
               <h1 className="truncate text-lg font-black tracking-[-0.04em] text-white">{player.name}</h1>
+              <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
               <p className="mt-1 text-xs font-semibold text-slate-400">
                 {player.role} {player.country ? <span className="text-slate-600">· {player.country}</span> : null}
               </p>
@@ -390,6 +393,7 @@ function QueueDrawer({
               <TinyAvatar player={player} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-black text-white">{player.name}</p>
+                <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
                 <p className="mt-0.5 text-[9px] text-slate-500">{player.role} · {formatLakhs(player.basePrice)}</p>
               </div>
             </div>
@@ -726,7 +730,7 @@ export function Auction3DHud(props: Auction3DHudProps) {
         <IconAction label="Player queue" active={drawer === "queue"} onClick={() => toggleDrawer("queue")}>
           <ListOrdered className="h-3.5 w-3.5" /><span className="hidden sm:inline">Queue</span>
         </IconAction>
-        {props.permissions.canManageAuction ? (
+        {props.permissions.canManageAuction || props.permissions.canUndo ? (
           <IconAction label="Organizer controls" active={drawer === "controls"} onClick={() => toggleDrawer("controls")}>
             <Settings2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Control</span>
           </IconAction>

@@ -3,12 +3,7 @@ import type { BidIncrementTier } from "@/features/auction/types/index.types";
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
-export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "https://gullybid-api.up.railway.app/api/v1";
-
-// Socket.IO endpoint — now actively used by AuctionEngine.ts.
-export const WS_URL =
-  import.meta.env.VITE_SOCKET_URL || "https://gullybid-api.up.railway.app";
+export { API_BASE_URL, SOCKET_URL as WS_URL } from '@/lib/network';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -135,6 +130,8 @@ export const CRORE = 100; // 1 crore = 100 lakh
 export const SOCKET_EVENTS = {
   // Auction lifecycle
   AUCTION_CREATED: "auction:created",
+  ACTION_RECORDED: "auction:action:recorded",
+  ACTION_UNDONE: "auction:action:undone",
   AUCTION_STARTED: "auction:started",
   AUCTION_PAUSED: "auction:paused",
   AUCTION_RESUMED: "auction:resumed",

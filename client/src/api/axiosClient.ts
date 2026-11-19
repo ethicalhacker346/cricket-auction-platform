@@ -1,8 +1,8 @@
 import axios, { type AxiosRequestConfig } from "axios";
 import { useAuthStore } from "@/store/authStore";
 
-export const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "https://gullybid-api.up.railway.app/api/v1";
+import { API_BASE_URL } from '@/lib/network';
+export { API_BASE_URL };
 
 export const axiosClient = axios.create({
   baseURL: API_BASE_URL,

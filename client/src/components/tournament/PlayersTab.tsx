@@ -1,3 +1,4 @@
+import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { AnimatePresence, motion, LayoutGroup } from "framer-motion";
 import {
@@ -49,7 +50,7 @@ interface Player {
   name: string;
   role: string;
   basePrice: number;
-  basePriceUpdatedAt?: string;
+  basePriceUpdatedAt?: string | null;
   status: string;
   lotOutcome: string;
   isSold: boolean;
@@ -58,7 +59,8 @@ interface Player {
   createdAt?: string;
   /** Player.js's `profileImage` — an absolute http(s) URL, or absent if
    * the player never selected one. Falls back to initials when missing. */
-  profileImage?: string;
+  profileImage?: string | null;
+  cricHeroesUrl?: string | null;
 }
 
 type ModalType = "verify" | "reject" | "setBasePrice";
@@ -468,6 +470,7 @@ function ConfirmModal({
                   />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-slate-900">{player.name}</p>
+                    <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} />
                     <p className="text-xs text-slate-500">
                       {PLAYER_ROLE_META[player.role]?.label ?? player.role} ·{" "}
                       {formatCurrency(player.basePrice, currency)}
@@ -745,7 +748,7 @@ function PriceBadge({
   isConstrained,
 }: {
   basePrice: number;
-  basePriceUpdatedAt?: string;
+  basePriceUpdatedAt?: string | null;
   currency: string;
   maxBasePrice: number | null;
   isConstrained: boolean;
@@ -1059,14 +1062,11 @@ export function PlayersTab({
                               name={player.name}
                               image={player.profileImage}
                               sizeClass="h-9 w-9 text-xs"
-                              fallbackClassName={
-                                roleMeta?.color
-                                  ? `bg-${roleMeta.color}-50 text-${roleMeta.color}-700 ring-${roleMeta.color}-100`
-                                  : "bg-emerald-50 text-emerald-700 ring-emerald-100"
-                              }
+                              fallbackClassName="bg-emerald-50 text-emerald-700 ring-emerald-100"
                             />
                             <div>
                               <p className="font-medium text-slate-800">{player.name}</p>
+                              <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} />
                               {player.createdAt && (
                                 <p className="text-[11px] text-slate-400">
                                   Registered {format(new Date(player.createdAt), "d MMM")}

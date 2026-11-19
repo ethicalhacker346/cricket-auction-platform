@@ -108,6 +108,7 @@ export function EditPlayerPage() {
       bowlingStyle: player.bowlingStyle ?? "",
       profileImage: activeImageUrl || "",
       bio: player.bio ?? "",
+      cricHeroesUrl: player.cricHeroesUrl ?? "",
     };
   }, [player, activeImageUrl]);
 
