@@ -11,8 +11,10 @@
 
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { createClient } from 'redis';
+import { connectSocketRedis, destroySocketRedis } from './redisAdapter.js';
 import { logger } from '../config/logger.js';
+import { env } from '../config/env.js';
+import { SocketConnectionGate, socketClientIp } from './connectionGate.js';
 import { socketAuth } from './middleware/socketAuth.js';
 import { handleConnection } from './handlers/connection.handler.js';
 import { handleAuctionEvents } from './handlers/auction.handler.js';
@@ -20,7 +22,7 @@ import { initSocketPublisher, getSocketPublisher } from '../publishers/socket.pu
 
 let ioInstance = null;
 let redisAdapter = null;
-let ipCleanupInterval = null;
+let connectionGate = null;
 
 export async function initSocket(httpServer, options = {}) {
   const {
@@ -61,49 +63,33 @@ export async function initSocket(httpServer, options = {}) {
   });
 
   // ─── Redis Adapter ───
-  if (process.env.REDIS_URL) {
-    try {
-      const pubClient = createClient({ url: process.env.REDIS_URL });
-      const subClient = pubClient.duplicate();
-      
-      pubClient.on('error', (err) => logger.error({ err }, 'Redis pub client error'));
-      subClient.on('error', (err) => logger.error({ err }, 'Redis sub client error'));
-      
-      await Promise.all([pubClient.connect(), subClient.connect()]);
-      io.adapter(createAdapter(pubClient, subClient));
-      redisAdapter = { pubClient, subClient };
-      
-      logger.info('🔗 Socket.IO Redis adapter initialized');
-    } catch (err) {
-      logger.error(err, 'Failed to initialize Redis adapter — falling back to single-instance mode');
-    }
+  redisAdapter = await connectSocketRedis(env.REDIS_URL);
+  if (redisAdapter) {
+    io.adapter(createAdapter(redisAdapter.pubClient, redisAdapter.subClient));
+    logger.info('Socket.IO Redis adapter initialized');
   }
 
-  // ─── Connection Rate Limiting per IP ───
-  const connectionCounts = new Map();
-  const MAX_CONNECTIONS_PER_IP = 10;
-  const CLEANUP_INTERVAL_MS = 60000;
-
-  ipCleanupInterval = setInterval(() => {
-    connectionCounts.clear();
-  }, CLEANUP_INTERVAL_MS);
-
-  io.use((socket, next) => {
-    const clientIp = socket.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim() 
-      || socket.handshake.address;
-    
-    const count = connectionCounts.get(clientIp) || 0;
-    if (count >= MAX_CONNECTIONS_PER_IP) {
-      logger.warn({ clientIp, socketId: socket.id }, 'Connection limit exceeded');
-      return next(new Error('Too many connections from this IP address'));
-    }
-    
-    connectionCounts.set(clientIp, count + 1);
-    socket.__clientIp = clientIp;
-    next();
+  // Shared venues are normal. Bound reconnect attempts separately from live
+  // leases, and never erase active counts at a minute boundary.
+  connectionGate = new SocketConnectionGate();
+  const gate = connectionGate;
+  io.use(async (socket, next) => {
+    try {
+      socket.__clientIp = socketClientIp(socket);
+      await gate.checkAttempt(socket.__clientIp);
+      next();
+    } catch (error) { next(error); }
   });
-
   io.use(socketAuth({ allowAnonymous }));
+  io.use(async (socket, next) => {
+    try {
+      const release = await gate.acquire(socket.__clientIp, socket.user?._id);
+      // A disconnect before the namespace's connection callback also releases.
+      socket.once('disconnect', release);
+      socket.conn.once('close', release);
+      next();
+    } catch (error) { next(error); }
+  });
 
   initSocketPublisher(io);
 
@@ -122,12 +108,6 @@ export async function initSocket(httpServer, options = {}) {
     handleAuctionEvents(io, socket);
 
     socket.on('disconnect', (reason) => {
-      const clientIp = socket.__clientIp;
-      if (clientIp) {
-        const count = connectionCounts.get(clientIp) || 1;
-        connectionCounts.set(clientIp, Math.max(0, count - 1));
-      }
-      
       const rooms = Array.from(socket.rooms);
       rooms.forEach((room) => {
         if (room !== socket.id && io.sockets.adapter.rooms.get(room)?.size === 0) {
@@ -158,7 +138,7 @@ export async function initSocket(httpServer, options = {}) {
     path,
     cors: Array.isArray(origins) ? origins.join(', ') : origins,
     redis: !!redisAdapter,
-    maxConnPerIp: MAX_CONNECTIONS_PER_IP,
+    maxConnPerIp: env.SOCKET_MAX_CONNECTIONS_PER_IP,
   }, 'Socket.IO initialized');
 
   return io;
@@ -176,7 +156,8 @@ export function getIOOptional() {
 }
 
 export async function closeSocketIO() {
-  if (ipCleanupInterval) { clearInterval(ipCleanupInterval); ipCleanupInterval = null; }
+  connectionGate?.close();
+  connectionGate = null;
   if (!ioInstance) return;
 
   logger.info('Closing Socket.IO...');
@@ -186,13 +167,8 @@ export async function closeSocketIO() {
   
   await new Promise((resolve) => ioInstance.close(resolve));
   
-  if (redisAdapter) {
-    await Promise.all([
-      redisAdapter.pubClient.quit().catch(() => {}),
-      redisAdapter.subClient.quit().catch(() => {}),
-    ]);
-  }
-  
+  destroySocketRedis(redisAdapter);
+
   ioInstance = null;
   redisAdapter = null;
   logger.info('Socket.IO closed');

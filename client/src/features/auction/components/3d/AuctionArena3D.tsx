@@ -1,12 +1,10 @@
-import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import {
   ContactShadows,
   Float,
   Html,
   Line,
-  OrbitControls,
   RoundedBox,
   Sparkles,
 } from "@react-three/drei";
@@ -18,30 +16,26 @@ import {
   MathUtils,
   MeshStandardMaterial,
   Object3D,
-  Spherical,
-  TOUCH,
   Vector3,
+  type RingGeometry,
   type Vector3Tuple,
 } from "three";
 import type {
   Line2,
   LineMaterial,
-  OrbitControls as OrbitControlsImpl,
 } from "three-stdlib";
 import type { AuctionStatus, Franchise, Player } from "@/features/auction/types/index.types";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
+import { ArenaCameraRig, type ArenaCameraCommand, type BidCameraFocus } from './ArenaCameraRig';
+import { ArenaRendererHealth } from './ArenaRendererHealth';
+import { arenaColor as safeColor } from '../../utils/arenaColor';
+import { stageTeams, type ArenaRenderConfig } from '../../utils/arenaQuality';
 import type {
   Auction3DCameraMode,
   Auction3DQuality,
 } from "@/features/auction/hooks/useAuction3DPreferences";
 
-export interface Auction3DRenderConfig {
-  maxDpr: number;
-  antialias: boolean;
-  shadows: boolean;
-  sparkles: number;
-  contactShadowResolution: number;
-}
+export type Auction3DRenderConfig = ArenaRenderConfig;
 
 interface AuctionArena3DProps {
   player: Player | null;
@@ -57,14 +51,14 @@ interface AuctionArena3DProps {
   renderConfig: Auction3DRenderConfig;
   reducedMotion: boolean;
   pageVisible: boolean;
-}
-
-function safeColor(value: string | undefined, fallback: string) {
-  try {
-    return new Color(value || fallback);
-  } catch {
-    return new Color(fallback);
-  }
+  motionPaused: boolean;
+  followBids: boolean;
+  contextLost: boolean;
+  cameraCommand: ArenaCameraCommand | null;
+  onRendererReady: () => void;
+  onContextLost: () => void;
+  onContextRestored: () => void;
+  onFrameRate: (fps: number) => void;
 }
 
 function seededAccent(seed: string) {
@@ -72,7 +66,7 @@ function seededAccent(seed: string) {
   for (let index = 0; index < seed.length; index += 1) {
     hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
   }
-  return `hsl(${hash % 360}, 82%, 58%)`;
+  return ['#22d3ee', '#a78bfa', '#60a5fa', '#2dd4bf', '#fbbf24'][hash % 5];
 }
 
 function getBidderPositions(count: number): Vector3Tuple[] {
@@ -82,170 +76,6 @@ function getBidderPositions(count: number): Vector3Tuple[] {
     const angle = MathUtils.lerp(-1.18, 1.18, t);
     return [Math.sin(angle) * 5.8, 0.34, -0.45 - Math.cos(angle) * 3.55];
   });
-}
-
-interface BidCameraFocus {
-  key: string;
-  position: Vector3Tuple;
-}
-
-function CameraRig({
-  mode,
-  reducedMotion,
-  bidFocus,
-}: {
-  mode: Auction3DCameraMode;
-  reducedMotion: boolean;
-  bidFocus: BidCameraFocus | null;
-}) {
-  const { camera, gl } = useThree();
-  const controls = useRef<OrbitControlsImpl>(null);
-  const destination = useRef(new Vector3());
-  const lookAt = useRef(new Vector3(0, 1.55, -0.35));
-  const offset = useRef(new Vector3());
-  const spherical = useRef(new Spherical());
-  const savedPosition = useRef(new Vector3());
-  const transitionStart = useRef(new Vector3());
-  const focusCamera = useRef(new Vector3());
-  const focusTarget = useRef(new Vector3());
-  const transitionTarget = useRef(new Vector3());
-  const animatedTarget = useRef(new Vector3());
-  const focusStartedAt = useRef<number | null>(null);
-  const focusKey = bidFocus?.key ?? null;
-  const focusX = bidFocus?.position[0] ?? 0;
-  const focusY = bidFocus?.position[1] ?? 0;
-  const focusZ = bidFocus?.position[2] ?? 0;
-  const lastBidKey = useRef<string | null>(focusKey);
-  const [isBidFocusing, setIsBidFocusing] = useState(false);
-
-  useEffect(() => {
-    if (!focusKey) {
-      lastBidKey.current = null;
-      focusStartedAt.current = null;
-      setIsBidFocusing(false);
-      return;
-    }
-    if (lastBidKey.current === focusKey) return;
-    lastBidKey.current = focusKey;
-
-    // Preserve the viewer's exact orbit position so the cinematic cut can
-    // return them to the same 360° view after spotlighting the new leader.
-    if (focusStartedAt.current == null) savedPosition.current.copy(camera.position);
-    transitionStart.current.copy(camera.position);
-    transitionTarget.current.copy(controls.current?.target ?? lookAt.current);
-
-    focusTarget.current.set(focusX, focusY + 0.68, focusZ);
-    focusCamera.current.set(focusX * 0.54, 2.65, focusZ + 6.1);
-    focusStartedAt.current = performance.now();
-    setIsBidFocusing(true);
-
-    const totalMs = reducedMotion ? 1_150 : 2_050;
-    const timer = window.setTimeout(() => {
-      focusStartedAt.current = null;
-      setIsBidFocusing(false);
-    }, totalMs);
-    return () => window.clearTimeout(timer);
-  }, [focusKey, focusX, focusY, focusZ, camera, reducedMotion]);
-
-  /*
-   * Trackpads emit WheelEvents for two-finger swipes. OrbitControls normally
-   * interprets those as zoom only, which makes an immersive room feel stuck.
-   * In orbit mode we map horizontal swipe -> 360° azimuth and vertical swipe
-   * -> top/floor elevation. A native pinch (ctrlKey) is left to OrbitControls
-   * for dolly zoom. Capture phase prevents both handlers acting on one swipe.
-   */
-  useEffect(() => {
-    const element = gl.domElement;
-    const onTrackpadGesture = (event: WheelEvent) => {
-      if (mode !== "orbit" || event.ctrlKey || !controls.current) return;
-
-      event.preventDefault();
-      event.stopImmediatePropagation();
-
-      const target = controls.current.target;
-      offset.current.copy(camera.position).sub(target);
-      spherical.current.setFromVector3(offset.current);
-      spherical.current.theta -= event.deltaX * 0.0032;
-      spherical.current.phi = MathUtils.clamp(
-        spherical.current.phi + event.deltaY * 0.0026,
-        Math.PI * 0.1,
-        Math.PI * 0.64,
-      );
-      offset.current.setFromSpherical(spherical.current);
-      camera.position.copy(target).add(offset.current);
-      camera.lookAt(target);
-      controls.current.update();
-    };
-
-    element.addEventListener("wheel", onTrackpadGesture, { passive: false, capture: true });
-    return () => element.removeEventListener("wheel", onTrackpadGesture, { capture: true });
-  }, [camera, gl, mode]);
-
-  useFrame(({ clock }, delta) => {
-    const presets: Record<Exclude<Auction3DCameraMode, "orbit">, Vector3Tuple> = {
-      broadcast: [0, 5.65, 14.6],
-      stage: [0, 3.65, 10.2],
-      top: [0, 13.4, 4.8],
-      floor: [0, 1.2, 12.8],
-    };
-
-    if (focusStartedAt.current != null) {
-      const elapsed = (performance.now() - focusStartedAt.current) / 1000;
-      const intro = reducedMotion ? 0.16 : 0.38;
-      const holdEnd = reducedMotion ? 0.79 : 1.3;
-      const total = reducedMotion ? 1.15 : 2.05;
-      const returnPosition = mode === "orbit"
-        ? savedPosition.current
-        : destination.current.set(...presets[mode]);
-
-      if (elapsed <= intro) {
-        const progress = MathUtils.smootherstep(elapsed, 0, intro);
-        camera.position.lerpVectors(transitionStart.current, focusCamera.current, progress);
-        animatedTarget.current.lerpVectors(transitionTarget.current, focusTarget.current, progress);
-      } else if (elapsed <= holdEnd) {
-        camera.position.copy(focusCamera.current);
-        animatedTarget.current.copy(focusTarget.current);
-      } else {
-        const progress = MathUtils.smootherstep(elapsed, holdEnd, total);
-        camera.position.lerpVectors(focusCamera.current, returnPosition, progress);
-        animatedTarget.current.lerpVectors(focusTarget.current, lookAt.current, progress);
-      }
-
-      camera.lookAt(animatedTarget.current);
-      if (controls.current) controls.current.target.copy(animatedTarget.current);
-      return;
-    }
-
-    if (controls.current && !controls.current.target.equals(lookAt.current)) {
-      controls.current.target.lerp(lookAt.current, 1 - Math.exp(-delta * 6));
-    }
-    if (mode === "orbit") return;
-
-    const base = presets[mode];
-    const canSway = mode === "broadcast" && !reducedMotion;
-    const sway = canSway ? Math.sin(clock.elapsedTime * 0.18) * 0.24 : 0;
-    destination.current.set(base[0] + sway, base[1], base[2]);
-    camera.position.lerp(destination.current, 1 - Math.exp(-delta * 2.8));
-    camera.lookAt(lookAt.current);
-  });
-
-  return (
-    <OrbitControls
-      ref={controls}
-      enabled={mode === "orbit" && !isBidFocusing}
-      makeDefault
-      target={[0, 1.55, -0.35]}
-      minDistance={7.5}
-      maxDistance={19}
-      minPolarAngle={Math.PI * 0.1}
-      maxPolarAngle={Math.PI * 0.64}
-      enablePan={false}
-      enableDamping
-      dampingFactor={0.06}
-      touches={{ ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_ROTATE }}
-      autoRotate={false}
-    />
-  );
 }
 
 function BrandMonolith() {
@@ -261,7 +91,7 @@ function BrandMonolith() {
           clearcoat={1}
         />
       </RoundedBox>
-      <Html transform center distanceFactor={7.2} position={[0, 0, 0.1]} style={{ pointerEvents: "none" }}>
+      <Html zIndexRange={[10, 0]} transform center distanceFactor={7.2} position={[0, 0, 0.1]} style={{ pointerEvents: "none" }}>
         <div className="flex w-[390px] select-none items-center justify-center gap-4 text-center [text-shadow:0_0_26px_rgba(34,211,238,.32)]">
           <span className="text-[9px] font-black uppercase tracking-[0.34em] text-cyan-300/60">Live arena</span>
           <span className="h-5 w-px bg-white/15" />
@@ -330,13 +160,13 @@ function AudienceBowl({ quality }: { quality: Auction3DQuality }) {
   );
 }
 
-function ArenaArchitecture({ quality }: { quality: Auction3DQuality }) {
+function ArenaArchitecture({ quality, motionless }: { quality: Auction3DQuality; motionless: boolean }) {
   const roof = useRef<Group>(null);
 
   useFrame(({ clock }, delta) => {
-    if (!roof.current) return;
+    if (!roof.current || motionless) return;
     roof.current.rotation.y += delta * (quality === "performance" ? 0.008 : 0.018);
-    roof.current.position.y = 6.2 + Math.sin(clock.elapsedTime * 0.25) * 0.04;
+    roof.current.position.y = 8.1 + Math.sin(clock.elapsedTime * 0.25) * 0.04;
   });
 
   return (
@@ -364,10 +194,10 @@ function ArenaArchitecture({ quality }: { quality: Auction3DQuality }) {
         </mesh>
       ))}
 
-      <group ref={roof}>
+      <group ref={roof} position={[0, 8.1, 0]}>
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[8.7, 0.055, 10, 128]} />
-          <meshStandardMaterial color="#172033" emissive="#0e7490" emissiveIntensity={1.4} />
+          <meshStandardMaterial color="#172033" emissive="#0e7490" emissiveIntensity={0.7} />
         </mesh>
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[6.6, 0.018, 8, 128]} />
@@ -409,11 +239,14 @@ function HologramRingSystem({
   accent,
   critical,
   reducedMotion,
+  quality,
 }: {
   accent: Color;
   critical: boolean;
   reducedMotion: boolean;
+  quality: Auction3DQuality;
 }) {
+  const segments = quality === 'performance' ? 64 : 128;
   const outerOrbit = useRef<Group>(null);
   const diagonalOrbit = useRef<Group>(null);
   const horizontalOrbit = useRef<Group>(null);
@@ -443,11 +276,11 @@ function HologramRingSystem({
         {/* Vertical broadcast ring: wide glow + sharp energy core. */}
         <group ref={outerOrbit} rotation={[0.03, 0.18, 0]}>
           <mesh>
-            <torusGeometry args={[2.04, 0.07, 14, 144]} />
+            <torusGeometry args={[2.04, 0.07, 14, segments]} />
             <meshBasicMaterial color={accent} transparent opacity={0.075} toneMapped={false} depthWrite={false} blending={AdditiveBlending} />
           </mesh>
           <mesh>
-            <torusGeometry args={[2.04, 0.019, 12, 144]} />
+            <torusGeometry args={[2.04, 0.019, 12, segments]} />
             <meshBasicMaterial color={accent} transparent opacity={0.68} toneMapped={false} depthWrite={false} blending={AdditiveBlending} />
           </mesh>
           <mesh position={[2.04, 0, 0]}>
@@ -459,7 +292,7 @@ function HologramRingSystem({
         {/* Counter-rotating diagonal orbit adds genuine spatial depth. */}
         <group ref={diagonalOrbit} rotation={[0.42, -0.58, 0.24]}>
           <mesh>
-            <torusGeometry args={[2.28, 0.012, 10, 144]} />
+            <torusGeometry args={[2.28, 0.012, 10, segments]} />
             <meshBasicMaterial color={ice} transparent opacity={0.34} toneMapped={false} depthWrite={false} blending={AdditiveBlending} />
           </mesh>
           <mesh position={[-2.28, 0, 0]}>
@@ -471,7 +304,7 @@ function HologramRingSystem({
         {/* Horizontal scanner ring intersects the vertical orbits cleanly. */}
         <group ref={horizontalOrbit} rotation={[Math.PI / 2, 0, 0.18]}>
           <mesh>
-            <torusGeometry args={[1.78, 0.026, 12, 128]} />
+            <torusGeometry args={[1.78, 0.026, 12, segments]} />
             <meshBasicMaterial color={accent} transparent opacity={0.48} toneMapped={false} depthWrite={false} blending={AdditiveBlending} />
           </mesh>
           {[0, Math.PI].map((angle) => (
@@ -487,13 +320,13 @@ function HologramRingSystem({
       <group position={[0, 0.565, 0]}>
         <group ref={floorPulseA}>
           <mesh rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[2.22, 0.035, 10, 120]} />
+            <torusGeometry args={[2.22, 0.035, 10, segments]} />
             <meshBasicMaterial color={accent} transparent opacity={0.42} toneMapped={false} depthWrite={false} blending={AdditiveBlending} />
           </mesh>
         </group>
         <group ref={floorPulseB}>
           <mesh rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[2.48, 0.016, 8, 120]} />
+            <torusGeometry args={[2.48, 0.016, 8, segments]} />
             <meshBasicMaterial color={ice} transparent opacity={0.2} toneMapped={false} depthWrite={false} blending={AdditiveBlending} />
           </mesh>
         </group>
@@ -502,16 +335,31 @@ function HologramRingSystem({
   );
 }
 
+function LotClockRing({ timer }: { timer: AuctionArena3DProps['timer'] }) {
+  const geometry = useRef<RingGeometry>(null);
+  const progress = timer.total > 0 ? MathUtils.clamp(timer.remaining / timer.total, 0, 1) : 0;
+  useLayoutEffect(() => {
+    if (geometry.current?.index) geometry.current.setDrawRange(0, Math.floor(geometry.current.index.count * progress / 6) * 6);
+  }, [progress]);
+  const color = timer.remaining <= 0 ? '#fb7185' : !timer.isRunning ? '#fcd34d' : timer.remaining <= 5 ? '#fb7185' : '#67e8f9';
+  return <group position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, Math.PI / 2]}>
+    <mesh><ringGeometry args={[2.95, 3.015, 128]} /><meshBasicMaterial color="#123045" transparent opacity={0.6} depthWrite={false} /></mesh>
+    <mesh position={[0, 0, 0.005]}><ringGeometry ref={geometry} args={[2.95, 3.015, 128]} /><meshBasicMaterial color={color} transparent opacity={0.9} toneMapped={false} depthWrite={false} /></mesh>
+  </group>;
+}
+
 function PlayerHologram({
   player,
   currentBid,
   timer,
   reducedMotion,
+  quality,
 }: {
   player: Player | null;
   currentBid: { amount: number; teamId: string | null };
   timer: { remaining: number; total: number; isRunning: boolean };
   reducedMotion: boolean;
+  quality: Auction3DQuality;
 }) {
   const critical = timer.isRunning && timer.remaining > 0 && timer.remaining <= 5;
   const accent = useMemo(
@@ -541,14 +389,16 @@ function PlayerHologram({
       </mesh>
       <mesh position={[0, 0.48, 0]}>
         <cylinderGeometry args={[2.15, 2.35, 0.08, 72]} />
-        <meshStandardMaterial color="#0b1220" emissive={accent} emissiveIntensity={0.7} />
+        <meshStandardMaterial color="#0b1220" emissive={accent} emissiveIntensity={0.1} />
       </mesh>
       <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0.55, 0]}>
         <torusGeometry args={[2.2, 0.045, 12, 100]} />
         <meshBasicMaterial color={accent} transparent opacity={0.78} toneMapped={false} />
       </mesh>
 
+      <LotClockRing timer={timer} />
       <HologramRingSystem
+        quality={quality}
         accent={accent}
         critical={critical}
         reducedMotion={reducedMotion}
@@ -567,23 +417,23 @@ function PlayerHologram({
               opacity={0.82}
               metalness={0.52}
               roughness={0.22}
-              transmission={0.04}
+              transmission={0}
               clearcoat={1}
               emissive={accent}
               emissiveIntensity={0.12}
             />
           </RoundedBox>
 
-          <Html transform center distanceFactor={6} position={[0, 0, 0.1]} style={{ pointerEvents: "none" }}>
+          <Html zIndexRange={[10, 0]} transform center distanceFactor={6} position={[0, 0, 0.1]} style={{ pointerEvents: "none" }}>
             {player ? (
               <article
                 className="w-[232px] select-none overflow-hidden rounded-[18px] border bg-[#040711]/90 p-2.5 text-white shadow-[0_0_42px_rgba(34,211,238,.16)] backdrop-blur-xl"
-                style={{ borderColor: `${accent.getStyle()}70` }}
+                style={{ borderColor: `#${accent.getHexString()}70` }}
               >
                 <div className="flex items-center gap-3">
                   <div
                     className="h-14 w-[52px] shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-xl"
-                    style={{ boxShadow: `0 0 26px ${accent.getStyle()}36` }}
+                    style={{ boxShadow: `0 0 26px #${accent.getHexString()}36` }}
                   >
                     <PlayerPortrait player={player} />
                   </div>
@@ -594,7 +444,6 @@ function PlayerHologram({
                     <h2 className="mt-1 truncate text-[17px] font-black leading-none tracking-[-0.04em]">
                       {player.name}
                     </h2>
-                    <CricHeroesLink url={player.cricHeroesUrl} playerName={player.name} className="text-emerald-300" />
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="rounded-full bg-white/8 px-2 py-0.5 text-[8px] font-bold uppercase text-slate-300">
                         {player.role}
@@ -631,7 +480,7 @@ function PlayerHologram({
         </group>
       </Float>
 
-      <pointLight position={[0, 2.2, 0.8]} color={accent} intensity={critical ? 18 : player ? 12 : 5} distance={7} />
+      <pointLight position={[0, 2.2, 0.8]} color={accent} intensity={critical ? 7 : player ? 4.5 : 2} distance={7} />
     </group>
   );
 }
@@ -677,11 +526,11 @@ function TeamPod({
   const color = useMemo(() => safeColor(franchise.colorFrom, "#38bdf8"), [franchise.colorFrom]);
   const remaining = Math.max(0, franchise.purseTotal - franchise.spent - (franchise.reservedBudget ?? 0));
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, delta) => {
     if (!group.current || !material.current) return;
     const pulse = reducedMotion ? 0 : (Math.sin(clock.elapsedTime * 3.2) + 1) * 0.5;
     const targetScale = leading ? 1.04 + pulse * 0.035 : 1;
-    group.current.scale.setScalar(MathUtils.lerp(group.current.scale.x, targetScale, 0.08));
+    group.current.scale.setScalar(reducedMotion ? targetScale : MathUtils.lerp(group.current.scale.x, targetScale, 1 - Math.exp(-Math.min(delta, 0.1) * 5)));
     group.current.position.y = position[1] + (leading && !reducedMotion ? pulse * 0.06 : 0);
     material.current.emissiveIntensity = leading ? 0.7 + pulse * 1.1 : 0.09;
   });
@@ -703,7 +552,7 @@ function TeamPod({
         <meshBasicMaterial color={color} transparent opacity={leading ? 0.9 : 0.36} />
       </mesh>
 
-      <Html transform sprite center distanceFactor={7.8} position={[0, 0.7, 0]} style={{ pointerEvents: "none" }}>
+      <Html zIndexRange={[10, 0]} transform sprite center distanceFactor={7.8} position={[0, 0.7, 0]} style={{ pointerEvents: "none" }}>
         <div
           className={`w-[128px] select-none rounded-xl border px-2 py-1.5 text-white shadow-2xl backdrop-blur-xl ${
             leading ? "border-amber-300/50 bg-amber-300/10" : "border-white/10 bg-[#050812]/88"
@@ -746,7 +595,7 @@ function BidBeam({
   );
   const end = useMemo(() => new Vector3(0, 1.18, 0), []);
   const beamColor = useMemo(() => safeColor(color, "#fbbf24"), [color]);
-  const hotColor = useMemo(() => beamColor.clone().lerp(new Color("#ffffff"), 0.42), [beamColor]);
+  const hotColor = useMemo(() => beamColor.clone().lerp(new Color("#ffffff"), 0.3), [beamColor]);
 
   useEffect(() => {
     if (lastPulse.current === pulseKey) return;
@@ -778,7 +627,7 @@ function BidBeam({
     const burstElapsed = burstStartedAt.current == null
       ? Number.POSITIVE_INFINITY
       : (performance.now() - burstStartedAt.current) / 1000;
-    const burst = burstElapsed < 0.7 ? 1 - burstElapsed / 0.7 : 0;
+    const burst = !reducedMotion && burstElapsed < 0.7 ? 1 - burstElapsed / 0.7 : 0;
     impact.current.scale.setScalar(0.86 + wave * 0.2 + burst * 0.65);
     impact.current.rotation.z += reducedMotion ? 0 : delta * (1.4 + burst * 2.4);
   });
@@ -798,7 +647,7 @@ function BidBeam({
         ref={glow}
         points={points}
         color={beamColor}
-        lineWidth={10}
+        lineWidth={8}
         transparent
         opacity={0.16}
         depthWrite={false}
@@ -809,7 +658,7 @@ function BidBeam({
         ref={energy}
         points={points}
         color={beamColor}
-        lineWidth={4.5}
+        lineWidth={3}
         transparent
         opacity={0.78}
         dashed
@@ -823,7 +672,7 @@ function BidBeam({
       <Line
         points={points}
         color={hotColor}
-        lineWidth={1.8}
+        lineWidth={1.2}
         transparent
         opacity={0.95}
         depthWrite={false}
@@ -848,7 +697,7 @@ function BidBeam({
           <sphereGeometry args={[0.13, 16, 16]} />
           <meshBasicMaterial color={hotColor} transparent opacity={0.9} toneMapped={false} blending={AdditiveBlending} />
         </mesh>
-        <pointLight color={beamColor} intensity={7} distance={4.5} />
+        <pointLight color={beamColor} intensity={2.8} distance={4.5} />
       </group>
     </group>
   );
@@ -865,7 +714,7 @@ function BidderRing({
   bidAmount: number;
   reducedMotion: boolean;
 }) {
-  const visibleTeams = franchises.slice(0, 12);
+  const visibleTeams = useMemo(() => stageTeams(franchises, leadingId), [franchises, leadingId]);
   const positions = useMemo(
     () => getBidderPositions(visibleTeams.length),
     [visibleTeams.length],
@@ -1023,7 +872,7 @@ function OutcomeShockwave({
   );
 }
 
-function StatusLights({ status }: { status: AuctionStatus }) {
+function StatusLights({ status, quality }: { status: AuctionStatus; quality: Auction3DQuality }) {
   const statusColor =
     status === "live" ? "#34d399" : status === "paused" ? "#fbbf24" : status === "completed" ? "#a78bfa" : "#38bdf8";
 
@@ -1038,7 +887,9 @@ function StatusLights({ status }: { status: AuctionStatus }) {
         angle={0.36}
         penumbra={0.92}
         distance={26}
-        castShadow
+        castShadow={quality !== 'performance'}
+        shadow-mapSize-width={quality === 'cinematic' ? 1024 : 512}
+        shadow-mapSize-height={quality === 'cinematic' ? 1024 : 512}
         shadow-bias={-0.0001}
       />
       <spotLight position={[-8, 5, 3]} color="#06b6d4" intensity={65} angle={0.48} penumbra={1} />
@@ -1049,7 +900,8 @@ function StatusLights({ status }: { status: AuctionStatus }) {
 }
 
 function ArenaScene(props: AuctionArena3DProps) {
-  const visibleTeams = props.franchises.slice(0, 12);
+  const motionless = props.reducedMotion || props.motionPaused;
+  const visibleTeams = useMemo(() => stageTeams(props.franchises, props.currentBid.teamId), [props.franchises, props.currentBid.teamId]);
   const positions = useMemo(
     () => getBidderPositions(visibleTeams.length),
     [visibleTeams.length],
@@ -1069,31 +921,28 @@ function ArenaScene(props: AuctionArena3DProps) {
     <>
       <color attach="background" args={["#02030a"]} />
       <fog attach="fog" args={["#02030a", 13, 30]} />
-      <CameraRig
-        mode={props.cameraMode}
-        reducedMotion={props.reducedMotion}
-        bidFocus={bidFocus}
-      />
-      <StatusLights status={props.status} />
-      <ArenaArchitecture quality={props.quality} />
+      <ArenaCameraRig mode={props.cameraMode} animate={!motionless} followBids={props.followBids} bidFocus={bidFocus} command={props.cameraCommand} />
+      <StatusLights status={props.status} quality={props.quality} />
+      <ArenaArchitecture quality={props.quality} motionless={motionless} />
       <AudienceBowl quality={props.quality} />
       <PlayerHologram
         player={props.player}
         currentBid={props.currentBid}
         timer={props.timer}
-        reducedMotion={props.reducedMotion}
+        quality={props.quality}
+        reducedMotion={motionless}
       />
       <BidderRing
         franchises={props.franchises}
         leadingId={props.currentBid.teamId}
         bidAmount={props.currentBid.amount}
-        reducedMotion={props.reducedMotion}
+        reducedMotion={motionless}
       />
-      <ProceduralGavel soldSequence={props.soldSequence} reducedMotion={props.reducedMotion} />
+      <ProceduralGavel soldSequence={props.soldSequence} reducedMotion={motionless} />
       <OutcomeShockwave
         soldSequence={props.soldSequence}
         unsoldSequence={props.unsoldSequence}
-        reducedMotion={props.reducedMotion}
+        reducedMotion={motionless}
       />
 
       <Sparkles
@@ -1101,13 +950,14 @@ function ArenaScene(props: AuctionArena3DProps) {
         scale={[20, 7, 16]}
         position={[0, 3.2, -1]}
         size={1.5}
-        speed={props.reducedMotion ? 0 : 0.18}
+        speed={motionless ? 0 : 0.18}
         opacity={0.28}
         color="#93c5fd"
       />
 
       {props.renderConfig.shadows ? (
         <ContactShadows
+          frames={props.quality === 'cinematic' && !motionless ? Infinity : 1}
           position={[0, 0.01, 0]}
           opacity={0.5}
           scale={20}
@@ -1123,17 +973,20 @@ function ArenaScene(props: AuctionArena3DProps) {
 
 export default function AuctionArena3D(props: AuctionArena3DProps) {
   return (
-    <div className="absolute inset-0 bg-[#02030a]">
+    <div aria-hidden="true" className="absolute inset-0 isolate z-0 bg-[#02030a]" data-testid="auction-3d-stage">
       <Canvas
         shadows={props.renderConfig.shadows}
-        frameloop={props.pageVisible ? "always" : "never"}
+        frameloop={!props.pageVisible || props.contextLost ? "never" : props.reducedMotion || props.motionPaused ? "demand" : "always"}
         dpr={[1, props.renderConfig.maxDpr]}
         camera={{ position: [0, 5.65, 14.6], fov: 40, near: 0.1, far: 70 }}
-        style={{ touchAction: "none" }}
+        style={{ touchAction: props.cameraMode === "orbit" ? "none" : "pan-y" }}
+        tabIndex={-1}
+        resize={{ scroll: false, debounce: { scroll: 50, resize: 100 } }}
         gl={{
           antialias: props.renderConfig.antialias,
           alpha: false,
-          powerPreference: "high-performance",
+          powerPreference: props.quality === "performance" ? "low-power" : "high-performance",
+          preserveDrawingBuffer: false,
           stencil: false,
           depth: true,
         }}
@@ -1143,6 +996,8 @@ export default function AuctionArena3D(props: AuctionArena3DProps) {
           </div>
         }
       >
+        <ArenaRendererHealth enabled={props.pageVisible && !props.contextLost && !props.reducedMotion && !props.motionPaused}
+          onReady={props.onRendererReady} onContextLost={props.onContextLost} onContextRestored={props.onContextRestored} onFrameRate={props.onFrameRate} />
         <Suspense fallback={null}>
           <ArenaScene {...props} />
         </Suspense>

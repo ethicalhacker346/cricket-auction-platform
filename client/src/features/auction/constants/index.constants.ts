@@ -146,6 +146,7 @@ export const SOCKET_EVENTS = {
 
   // Live bidding
   LOT_OPENED: "auction:lot:opened",
+  LOT_TIME_EXTENDED: "auction:lot:time:extended",
   BID_PLACED: "auction:bid:placed",
   LOT_SOLD: "auction:lot:sold",
   LOT_UNSOLD: "auction:lot:unsold",
@@ -165,4 +166,5 @@ export const SOCKET_EVENTS = {
 export const SOCKET_CLIENT_EVENTS = {
   JOIN_AUCTION: "auction:join",
   LEAVE_AUCTION: "auction:leave",
+  HEARTBEAT: "auction:heartbeat",
 } as const;

@@ -43,6 +43,7 @@ export const AUCTION_EVENTS = Object.freeze({
 
   // Lot lifecycle
   LOT_OPENED: 'auction:lot:opened',
+  LOT_TIME_EXTENDED: 'auction:lot:time:extended',
   LOT_SOLD: 'auction:lot:sold',
   LOT_UNSOLD: 'auction:lot:unsold',
   LOT_PERMANENT_UNSOLD: 'auction:lot:permanent_unsold',
@@ -259,4 +260,8 @@ export function emitActionRecorded(auctionId, payload) {
 }
 export function emitActionUndone(auctionId, payload) {
   return emitAuctionEvent(AUCTION_EVENTS.ACTION_UNDONE, auctionId, payload);
+}
+
+export function emitLotTimeExtended(auctionId, payload) {
+  return emitAuctionEvent(AUCTION_EVENTS.LOT_TIME_EXTENDED, auctionId, payload);
 }

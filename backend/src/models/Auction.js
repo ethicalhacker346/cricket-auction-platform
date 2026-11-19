@@ -36,6 +36,8 @@ const liveStateSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Total dial duration for THIS lot, including organizer extensions.
+    timerTotalSeconds: { type: Number, min: 0 },
     lotStatus: {
       type: String,
       enum: Object.values(LOT_STATUS),

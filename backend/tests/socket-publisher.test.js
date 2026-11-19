@@ -77,3 +77,16 @@ test('shutdown removes only this publisher’s domain listeners and all owned ti
   expect(jest.getTimerCount()).toBe(0);
   eventBus.off(AUCTION_EVENTS.ACTION_UNDONE, other);
 });
+
+
+test('extra time restarts an expired clock with the extended dial total, but never starts a paused clock', () => {
+  send(AUCTION_EVENTS.LOT_OPENED, { liveState: live(1, 1) });
+  jest.advanceTimersByTime(2000); expect(publisher.activeTimers.size).toBe(0);
+  send(AUCTION_EVENTS.LOT_TIME_EXTENDED, { version: 2, status: 'LIVE', seconds: 30, liveState: { ...live(2, 30), timerTotalSeconds: 60 } });
+  expect(last('auction:lot:time:extended').seconds).toBe(30);
+  expect(last('auction:timer:sync')).toMatchObject({ remaining: 30, total: 60, version: 2 });
+  expect(publisher.activeTimers.size).toBe(1);
+  send(AUCTION_EVENTS.LOT_TIME_EXTENDED, { version: 3, status: 'PAUSED', seconds: 15, liveState: { ...live(3, 45), timerTotalSeconds: 75 } });
+  expect(publisher.activeTimers.size).toBe(0);
+  const count = frames.length; jest.advanceTimersByTime(60_000); expect(frames).toHaveLength(count);
+});

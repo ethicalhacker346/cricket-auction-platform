@@ -17,6 +17,7 @@ export const AUCTION_PERMISSIONS: Record<string, AuctionPermission> = {
   COMPLETE_AUCTION: "COMPLETE_AUCTION",
   OPEN_LOT: "OPEN_LOT",
   SETTLE_LOT: "SETTLE_LOT",
+  EXTEND_LOT_TIME: "EXTEND_LOT_TIME",
   PLACE_BID: "PLACE_BID",
   MARK_PERMANENT_UNSOLD: "MARK_PERMANENT_UNSOLD",
 };
@@ -153,6 +154,7 @@ export function normalizeAuctionPermissions(raw: any): AuctionPermissions {
     role: raw?.role ?? "PLAYER",
     auctionStatus: raw?.auctionStatus ?? "",
     canUndo: value("UNDO_ACTION", "canUndo"),
+    canExtendLotTime: value("EXTEND_LOT_TIME", "canExtendLotTime"),
     canManageAuction: value("MANAGE_AUCTION", "canManageAuction"),
     canManageRounds: value("MANAGE_ROUNDS", "canManageRounds"),
     canUpdateRules: value("UPDATE_RULES", "canUpdateRules"),
@@ -192,6 +194,7 @@ export function withLiveStateConstraints(
     ...permissions,
     canOpenLot: permissions.canOpenLot && !hasCurrentPlayer,
     canBid: permissions.canBid && hasCurrentPlayer,
+    canExtendLotTime: permissions.canExtendLotTime && hasCurrentPlayer,
     canMarkSold: permissions.canMarkSold && hasCurrentPlayer,
     canMarkUnsold: permissions.canMarkUnsold && hasCurrentPlayer,
   };

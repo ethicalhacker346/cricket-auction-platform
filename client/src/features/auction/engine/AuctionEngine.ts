@@ -1,3 +1,4 @@
+import { auctionCommandId, requestBackoffMs } from "../utils/requestBackoff";
 import { getAuctionViewerId } from "../utils/viewerIdentity";
 import type {
   Auction,
@@ -6,6 +7,7 @@ import type {
   Bid,
   Franchise,
   LiveAuctionSnapshot,
+  LotTimeCommandResult,
   Player,
 } from "../types/index.types";
 import { eligibleRoundPlayers, runningAuctionRound } from "../utils/roundSelection";
@@ -84,6 +86,11 @@ export class AuctionEngine {
   private pendingSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private bidInFlight: symbol | null = null;
+  private snapshotRequest: { generation: number; auctionId: string; promise: Promise<boolean> } | null = null;
+  private snapshotFollowup = false;
+  private snapshotFailures = 0;
+  private nextSnapshotAt = 0;
+  private roomJoined = false;
   private initialSocketAbort: (() => void) | null = null;
   private recoveryListenersBound = false;
 
@@ -148,6 +155,7 @@ export class AuctionEngine {
 
     const generation = ++this.connectionGeneration;
     if (changingAuction) {
+      this.snapshotFailures = 0; this.nextSnapshotAt = 0;
       this.auction = null;
       this.players = []; this.rounds = []; this.franchises = []; this.bidHistory = []; this.logs = [];
       this.currentPlayerId = null; this.currentRoundId = null;
@@ -181,10 +189,10 @@ export class AuctionEngine {
 
       if (!this.isCurrent(generation, auctionId)) return;
 
-      this.connection = "connected";
+      this.connection = socketReady || (this.auction?.id === auctionId && this.snapshotFailures === 0) ? 'connected' : 'reconnecting';
       this.pushLog(
-        "connect",
-        socketReady ? "Connected to live auction room" : "Connected via REST fallback"
+        this.connection === 'connected' ? 'connect' : 'disconnect',
+        socketReady ? 'Connected to live auction room' : this.connection === 'connected' ? 'Connected via REST fallback' : 'Waiting for the live room to recover'
       );
       this.emit();
 
@@ -278,6 +286,7 @@ export class AuctionEngine {
           return;
         }
         if (res?.success && typeof res.data?.viewerCount === "number") {
+          this.roomJoined = true;
           this.viewerCount = res.data.viewerCount;
           this.emit();
         }
@@ -576,6 +585,15 @@ export class AuctionEngine {
       }
     });
 
+    this.socket.on(SOCKET_EVENTS.LOT_TIME_EXTENDED, (payload: any) => {
+      if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      if (!this.acceptEvent(payload)) return;
+      if (this.auction && payload.status) this.auction.status = String(payload.status).toLowerCase() as Auction['status'];
+      if (payload.liveState) this.applyLiveState(payload.liveState);
+      this.pushLog('lot_time_extended', `Organizer added ${payload.seconds} seconds to this lot`);
+      this.emit();
+    });
+
     this.socket.on(SOCKET_EVENTS.ACTION_RECORDED, (payload: any) => {
       if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (!this.acceptEvent(payload) || payload.version < this.lastActionVersion) return;
@@ -620,6 +638,7 @@ export class AuctionEngine {
 
     this.socket.on("disconnect", (reason: string) => {
       if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
+      this.roomJoined = false;
       this.connection = "reconnecting";
       this.pushLog("disconnect", `Socket disconnected (${reason}) — reconnecting…`);
       this.emit();
@@ -651,9 +670,9 @@ export class AuctionEngine {
     this.currentPlayerId = liveState.currentTournamentPlayerId ?? null;
     this.currentRoundId = liveState.currentRoundId ?? null;
 
-    const total = this.auction?.rules?.lotTimerSeconds ?? 30;
+    const total = liveState.timerTotalSeconds || this.auction?.rules?.lotTimerSeconds || 30;
     const remaining = liveState.remainingTimeSeconds ?? 0;
-    const isRunning = this.auction?.status === "live" && (liveState.lotStatus === "BIDDING" || liveState.lotStatus === "bidding");
+    const isRunning = this.auction?.status === "live" && (liveState.lotStatus === "BIDDING" || liveState.lotStatus === "bidding") && remaining > 0;
 
     this.setTimerBaseline(remaining, total, isRunning);
     this.lastVersion = Math.max(this.lastVersion, liveState.version ?? -1);
@@ -715,6 +734,9 @@ export class AuctionEngine {
   }
 
   private _performCleanup(clearPendingSnapshot: boolean) {
+    this.snapshotRequest = null;
+    this.snapshotFollowup = false;
+    this.roomJoined = false;
     this.initialSocketAbort?.();
     this.initialSocketAbort = null;
     if (clearPendingSnapshot && this.pendingSnapshotTimeout) {
@@ -843,19 +865,36 @@ export class AuctionEngine {
     this.timerSyncedRemaining = remaining;
   }
 
-  private async refreshSnapshot(): Promise<boolean> {
-    if (!this.auctionId || this.destroyed || this.intentionalDisconnect) {
-      return false;
-    }
-
-    const requestedAuctionId = this.auctionId;
+  private refreshSnapshot(): Promise<boolean> {
+    if (!this.auctionId || this.destroyed || this.intentionalDisconnect) return Promise.resolve(false);
+    const auctionId = this.auctionId;
     const generation = this.connectionGeneration;
+    if (Date.now() < this.nextSnapshotAt) return Promise.resolve(true);
+    if (this.snapshotRequest?.auctionId === auctionId && this.snapshotRequest.generation === generation) {
+      this.snapshotFollowup = true;
+      return this.snapshotRequest.promise;
+    }
+    const request = { auctionId, generation, promise: null as unknown as Promise<boolean> };
+    request.promise = this.fetchSnapshot(auctionId, generation).finally(() => {
+      if (this.snapshotRequest !== request) return;
+      this.snapshotRequest = null;
+      if (this.snapshotFollowup && this.isCurrent(generation, auctionId)) {
+        this.snapshotFollowup = false;
+        this.scheduleSnapshot(Math.max(100, this.nextSnapshotAt - Date.now()), generation);
+      }
+    });
+    this.snapshotRequest = request;
+    return request.promise;
+  }
+
+  private async fetchSnapshot(requestedAuctionId: string, generation: number): Promise<boolean> {
     try {
       const start = Date.now();
       const snapshot = await auctionApi.getSnapshot(requestedAuctionId);
       if (generation !== this.connectionGeneration || requestedAuctionId !== this.auctionId) return false;
       if (snapshot.version < this.lastVersion) return true;
       this.latency = Date.now() - start;
+      this.snapshotFailures = 0; this.nextSnapshotAt = 0;
 
       if (this.destroyed || this.intentionalDisconnect) {
         return false;
@@ -906,9 +945,12 @@ export class AuctionEngine {
       this.emit();
 
       return true;
-    } catch {
+    } catch (error) {
       if (!this.isCurrent(generation, requestedAuctionId)) return false;
-      this.connection = "reconnecting";
+      this.snapshotFailures += 1;
+      this.nextSnapshotAt = Date.now() + requestBackoffMs(error, this.snapshotFailures);
+      // An HTTP 429/503 does not mean a healthy live socket disconnected.
+      if (!this.socket?.connected) this.connection = 'reconnecting';
       this.emit();
       return true;
     }
@@ -946,7 +988,7 @@ export class AuctionEngine {
       ) {
         this.scheduleReconciliation(generation);
       }
-    }, this.isTerminal() ? 30_000 : RECONCILE_INTERVAL_MS);
+    }, Math.max(this.isTerminal() ? 30_000 : RECONCILE_INTERVAL_MS, this.nextSnapshotAt - Date.now()));
   }
 
   private isTerminalStatus(status: string | undefined): boolean {
@@ -992,6 +1034,43 @@ export class AuctionEngine {
     } catch (error: any) {
       if (this.isCurrent(generation, auctionId)) await this.refreshSnapshot();
       return { success: false, error: error.message || failure };
+    }
+  }
+
+  async heartbeatViewer(auctionId: string, viewerId: string): Promise<{ viewerCount: number }> {
+    const socket = this.socket;
+    if (auctionId === this.auctionId && socket?.connected && this.roomJoined && typeof socket.timeout === 'function') {
+      try {
+        const response = await new Promise<any>((resolve, reject) => {
+          socket.timeout(5000).emit(SOCKET_CLIENT_EVENTS.HEARTBEAT, { auctionId, viewerId }, (error: Error | null, result: any) => error ? reject(error) : resolve(result));
+        });
+        if (response?.success && typeof response.data?.viewerCount === 'number') return response.data;
+      } catch { /* One bounded REST fallback, never parallel heartbeat loops. */ }
+    }
+    return auctionApi.heartbeatViewer(auctionId, viewerId);
+  }
+
+  async extendLotTime(playerId: string, seconds: number, requestId = auctionCommandId()): Promise<LotTimeCommandResult> {
+    if (!this.auctionId || playerId !== this.currentPlayerId) return { success: false, error: 'The active lot changed. Review the current player.' };
+    const auctionId = this.auctionId;
+    const generation = this.connectionGeneration;
+    try {
+      const result = await auctionApi.extendLotTime(auctionId, playerId, seconds, requestId);
+      // HTTP is also authoritative. A backed-off snapshot or missing socket
+      // frame must not delay a successful extension from reopening bidding.
+      if (this.isCurrent(generation, auctionId) && result?.liveState && this.acceptEvent({ auctionId, liveState: result.liveState })) {
+        if (this.auction && result.status) this.auction.status = String(result.status).toLowerCase() as Auction['status'];
+        this.applyLiveState(result.liveState);
+        if (result.timer) this.setTimerBaseline(result.timer.remaining, result.timer.total, result.timer.isRunning);
+        this.emit();
+      }
+      if (this.isCurrent(generation, auctionId)) this.scheduleSnapshot(100, generation);
+      return { success: true };
+    } catch (error) {
+      if (this.isCurrent(generation, auctionId)) this.scheduleSnapshot(100, generation);
+      const status = (error as { status?: number })?.status;
+      return { success: false, error: error instanceof Error ? error.message : 'Adding time failed',
+        uncertain: !status || status === 408 || status >= 500 };
     }
   }
 

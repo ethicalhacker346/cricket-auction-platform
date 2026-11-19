@@ -14,6 +14,12 @@ const envSchema = z.object({
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(200),
+  // Only the known reverse-proxy hops may supply a client address. Never true/*.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(8).default(0),
+  AUCTION_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1200),
+  AUCTION_GUEST_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(12000),
+  AUCTION_COMMAND_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(180),
+  SOCKET_MAX_CONNECTIONS_PER_IP: z.coerce.number().int().positive().default(2000),
 
   // ════════════════════════════════════════════════════════════════════════
   // NEW: SMTP & EMAIL CONFIGURATION
@@ -39,7 +45,7 @@ const envSchema = z.object({
   
   
   // Redis (optional for dev, required for prod multi-instance)
-  REDIS_URL: z.string().url().optional(),
+  REDIS_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
   // Logging
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   

@@ -51,7 +51,7 @@ function TeamIdentity({ team }: { team: Franchise }) {
       <div className="min-w-0">
         <p className="truncate text-xs font-black text-white">{team.shortName}</p>
         <p className="mt-0.5 flex items-center gap-1 text-[10px] text-slate-400">
-          <Wallet className="h-3 w-3" /> {formatLakhs(Math.max(0, team.purseTotal - team.spent))} left
+          <Wallet className="h-3 w-3" /> {formatLakhs(Math.max(0, team.purseTotal - team.spent - (team.reservedBudget ?? 0)))} left
         </p>
       </div>
     </div>
@@ -131,9 +131,9 @@ export function Auction3DBidDock({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== "b" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented || document.querySelector('[aria-modal="true"]') || event.key.toLowerCase() !== "b" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, button, [contenteditable='true']")) return;
+      if (target?.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
       event.preventDefault();
       submitBid();
     };
@@ -162,7 +162,7 @@ export function Auction3DBidDock({
       animate={flashSeq ? { scale: [1, 1.025, 1] } : undefined}
       transition={{ duration: 0.32 }}
       aria-label="Live bidding console"
-      className="relative w-[min(720px,calc(100vw-24px))] overflow-hidden rounded-[22px] border border-white/12 bg-[#050813]/92 p-2.5 shadow-[0_24px_90px_rgba(0,0,0,.58)] backdrop-blur-2xl sm:p-3"
+      className="relative w-full max-w-[720px] overflow-hidden rounded-[22px] border border-white/12 bg-[#050813]/92 p-2.5 shadow-[0_24px_90px_rgba(0,0,0,.58)] backdrop-blur-2xl sm:p-3"
     >
       <div className="pointer-events-none absolute inset-x-24 -top-px h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 sm:grid-cols-[170px_minmax(145px,1fr)_210px]">
@@ -204,6 +204,7 @@ export function Auction3DBidDock({
           onClick={submitBid}
           disabled={!canSubmit}
           aria-describedby="auction-3d-bid-state"
+          aria-keyshortcuts="B"
           className={`group relative flex h-[54px] min-w-[148px] items-center justify-center gap-2 overflow-hidden rounded-2xl px-4 text-sm font-black transition duration-200 active:translate-y-0 disabled:cursor-not-allowed sm:h-[60px] sm:text-[15px] ${buttonTone} ${canSubmit ? "hover:-translate-y-0.5" : ""}`}
         >
           {!blocker ? (

@@ -3,7 +3,7 @@ import { auction, franchise, makePlayer, makeSnapshot } from '@/test/auctionFixt
 import { auctionApi, bidApi, liveAuctionApi } from '../api/index.api';
 import { auctionEventBus } from '../audio/EventBus';
 import { AuctionEngine } from './AuctionEngine';
-import type { AuctionSnapshot } from '../types/index.types';
+import type { AuctionSnapshot, LotTimeResponse } from '../types/index.types';
 
 type FakeSocket = {
   handlers: Map<string, Array<(payload?: any) => void>>;
@@ -101,7 +101,7 @@ describe('undo and late-frame reconciliation', () => {
     send('auction:action:undone', correction(10)); await flush();
     const before = engine.getSnapshot();
     const old = { auctionId: auction.id, version: 9, liveState: rawLive(9), tournamentPlayerId: 'player-a', roundId: 'round-a', round: { _id: 'round-a', status: 'COMPLETED' }, amount: 999, remaining: 0, action: { id: 'wrong-head' } };
-    for (const event of ['auction:bid:placed', 'auction:lot:sold', 'auction:lot:unsold', 'auction:lot:permanent_unsold', 'auction:round:added', 'auction:round:updated', 'auction:round:completed', 'auction:round:deleted', 'auction:timer:sync', 'auction:timer:stopped', 'auction:timer:expired', 'auction:action:recorded', 'auction:completed']) send(event, old);
+    for (const event of ['auction:bid:placed', 'auction:lot:sold', 'auction:lot:unsold', 'auction:lot:permanent_unsold', 'auction:round:added', 'auction:round:updated', 'auction:round:completed', 'auction:round:deleted', 'auction:timer:sync', 'auction:timer:stopped', 'auction:timer:expired', 'auction:action:recorded', 'auction:lot:time:extended', 'auction:completed']) send(event, old);
     expect(engine.getSnapshot()).toEqual(before);
   });
 
@@ -203,5 +203,104 @@ describe('connection and command ownership', () => {
     expect(open).toHaveBeenCalledWith(auction.id, 'player-b', 'round-a');
     await expect(engine.openNextLot('not-in-round')).resolves.toMatchObject({ success: false });
     expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
+const extendedClock = (version = 2, status = 'LIVE', remaining = 30): LotTimeResponse => ({
+  status, liveState: { ...rawLive(version), timerTotalSeconds: 60, updatedAt: new Date().toISOString() },
+  timer: { remaining, total: 60, isRunning: status === 'LIVE' && remaining > 0 },
+});
+const refresh = () => (engine as unknown as { refreshSnapshot: () => Promise<boolean> }).refreshSnapshot();
+
+describe('bounded live traffic and authoritative lot-time commands', () => {
+  it('coalesces concurrent refreshes into one request and at most one trailing reconciliation', async () => {
+    const fetch = vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot());
+    await engine.connect(auction.id, auction.tournamentId);
+    const pending = deferred<AuctionSnapshot>(); fetch.mockReturnValueOnce(pending.promise);
+    const calls = Array.from({ length: 20 }, refresh);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    pending.resolve(makeSnapshot({ version: 2 })); await Promise.all(calls);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('honors Retry-After without disconnecting a healthy socket or delaying a live extension frame', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetch = vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot());
+    await engine.connect(auction.id, auction.tournamentId);
+    Object.assign(transport.sockets[0], { connected: true });
+    fetch.mockRejectedValueOnce(Object.assign(new Error('Rate limited'), { status: 429, retryAfterMs: 60_000 }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(engine.getSnapshot().connection).toBe('connected');
+    send('auction:lot:time:extended', { auctionId: auction.id, version: 2, status: 'LIVE', seconds: 30,
+      liveState: { ...rawLive(2), remainingTimeSeconds: 30, timerTotalSeconds: 60 } });
+    expect(engine.getSnapshot().timer).toEqual({ remaining: 30, total: 60, isRunning: true });
+    await Promise.all(Array.from({ length: 20 }, refresh));
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    fetch.mockResolvedValue(makeSnapshot({ version: 2 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('adopts the successful HTTP clock immediately even while read reconciliation is backed off', async () => {
+    vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot({ timer: { remaining: 0, total: 30, isRunning: false } }));
+    await engine.connect(auction.id, auction.tournamentId);
+    const extend = vi.spyOn(auctionApi, 'extendLotTime').mockResolvedValue(extendedClock());
+    const requestId = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+    await expect(engine.extendLotTime('player-a', 30, requestId)).resolves.toEqual({ success: true });
+    expect(extend).toHaveBeenCalledExactlyOnceWith(auction.id, 'player-a', 30, requestId);
+    expect(engine.getSnapshot().timer).toEqual({ remaining: 30, total: 60, isRunning: true });
+  });
+
+  it('keeps a paused extension paused, and never reopens an expired deduplicated HTTP response', async () => {
+    vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot());
+    await engine.connect(auction.id, auction.tournamentId);
+    const extend = vi.spyOn(auctionApi, 'extendLotTime').mockResolvedValueOnce(extendedClock(2, 'PAUSED', 45)).mockResolvedValueOnce(extendedClock(3, 'LIVE', 0));
+    await engine.extendLotTime('player-a', 45);
+    expect(engine.getSnapshot()).toMatchObject({ status: 'paused', timer: { remaining: 45, total: 60, isRunning: false } });
+    await engine.extendLotTime('player-a', 30);
+    expect(engine.getSnapshot().timer).toEqual({ remaining: 0, total: 60, isRunning: false });
+    expect(extend).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not replay a failed extension, and distinguishes a definitive refusal from an uncertain timeout', async () => {
+    vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot());
+    await engine.connect(auction.id, auction.tournamentId);
+    const extend = vi.spyOn(auctionApi, 'extendLotTime').mockRejectedValueOnce(Object.assign(new Error('Timed out'), { status: 408 })).mockRejectedValueOnce(Object.assign(new Error('Not permitted'), { status: 403 }));
+    await expect(engine.extendLotTime('player-a', 30)).resolves.toMatchObject({ success: false, uncertain: true });
+    await vi.advanceTimersByTimeAsync(1000); expect(extend).toHaveBeenCalledTimes(1);
+    await expect(engine.extendLotTime('player-a', 30)).resolves.toMatchObject({ success: false, uncertain: false });
+    await expect(engine.extendLotTime('previous-player', 30)).resolves.toMatchObject({ success: false });
+    expect(extend).toHaveBeenCalledTimes(2);
+  });
+
+  it('fences an extension response by auction generation and newer live revisions', async () => {
+    const fetch = vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot());
+    await engine.connect(auction.id, auction.tournamentId);
+    const pending = deferred<LotTimeResponse>(); vi.spyOn(auctionApi, 'extendLotTime').mockReturnValue(pending.promise);
+    const adding = engine.extendLotTime('player-a', 30);
+    fetch.mockResolvedValue(makeSnapshot({ auction: { ...auction, id: 'auction-b' }, timer: { remaining: 9, total: 30, isRunning: false } }));
+    await engine.connect('auction-b', auction.tournamentId);
+    pending.resolve(extendedClock(20)); await adding;
+    expect(engine.getSnapshot().auction.id).toBe('auction-b'); expect(engine.getSnapshot().timer.remaining).toBe(9);
+  });
+
+  it('uses an acknowledged socket heartbeat, with exactly one REST fallback after failure', async () => {
+    vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot());
+    const rest = vi.spyOn(auctionApi, 'heartbeatViewer').mockResolvedValue({ viewerCount: 3 });
+    await engine.connect(auction.id, auction.tournamentId);
+    const socket = transport.sockets[0];
+    const join = socket.emit.mock.calls.find(([event]) => event === 'auction:join')!;
+    join[2]({ success: true, data: { viewerCount: 2 } });
+    const acknowledge = vi.fn((_event, _payload, ack) => ack(null, { success: true, data: { viewerCount: 5 } }));
+    Object.assign(socket, { connected: true, timeout: () => ({ emit: acknowledge }) });
+    await expect(engine.heartbeatViewer(auction.id, 'tab-viewer')).resolves.toEqual({ viewerCount: 5 });
+    expect(rest).not.toHaveBeenCalled();
+    acknowledge.mockImplementation((_event, _payload, ack) => ack(new Error('Transport stalled')));
+    await expect(engine.heartbeatViewer(auction.id, 'tab-viewer')).resolves.toEqual({ viewerCount: 3 });
+    expect(rest).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,147 +1,114 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ARENA_QUALITIES, ARENA_QUALITY_CHOICES, ARENA_RENDER_CONFIG, ArenaQualityGovernor, inferArenaQuality, type ArenaQuality, type ArenaQualityPreference } from '../utils/arenaQuality';
 
-export type Auction3DQuality = "performance" | "balanced" | "cinematic";
-export type Auction3DCameraMode = "broadcast" | "stage" | "top" | "floor" | "orbit";
-
-const QUALITY_KEY = "gullybid:auction-3d-quality";
-const CAMERA_KEY = "gullybid:auction-3d-camera";
-
-const isQuality = (value: string | null): value is Auction3DQuality =>
-  value === "performance" || value === "balanced" || value === "cinematic";
-
-const isCameraMode = (value: string | null): value is Auction3DCameraMode =>
-  value === "broadcast" ||
-  value === "stage" ||
-  value === "top" ||
-  value === "floor" ||
-  value === "orbit";
-
-function inferQuality(): Auction3DQuality {
-  if (typeof window === "undefined") return "balanced";
-
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const cores = nav.hardwareConcurrency ?? 4;
-  const memory = nav.deviceMemory ?? 4;
-  const compactViewport = window.matchMedia("(max-width: 820px)").matches;
-
-  if (compactViewport || cores <= 4 || memory <= 4) return "performance";
-  if (cores >= 8 && memory >= 8) return "cinematic";
-  return "balanced";
+export type Auction3DQuality = ArenaQuality;
+export type Auction3DQualityPreference = ArenaQualityPreference;
+export type Auction3DCameraMode = 'broadcast' | 'stage' | 'top' | 'floor' | 'orbit';
+export const ARENA_CAMERAS: Auction3DCameraMode[] = ['broadcast', 'stage', 'top', 'floor', 'orbit'];
+const KEYS = {
+  quality: 'gullybid:auction-3d-quality', camera: 'gullybid:auction-3d-camera',
+  motion: 'gullybid:auction-3d-motion-paused', follow: 'gullybid:auction-3d-follow-bids',
+};
+function read(key: string) { try { return window.localStorage.getItem(key); } catch { return null; } }
+function save(key: string, value: string) { try { window.localStorage.setItem(key, value); } catch { /* In-session controls remain available. */ } }
+function qualityPreference(): ArenaQualityPreference {
+  const value = read(KEYS.quality) as ArenaQualityPreference;
+  return ARENA_QUALITY_CHOICES.includes(value) ? value : 'auto';
+}
+function cameraPreference(): Auction3DCameraMode {
+  const value = read(KEYS.camera) as Auction3DCameraMode;
+  return ARENA_CAMERAS.includes(value) ? value : 'broadcast';
+}
+function deviceQuality(): ArenaQuality {
+  if (typeof window === 'undefined') return 'balanced';
+  const device = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
+  return inferArenaQuality({ cores: device.hardwareConcurrency, memory: device.deviceMemory,
+    compact: window.matchMedia('(max-width: 820px)').matches, saveData: device.connection?.saveData });
 }
 
-function readQuality(): Auction3DQuality {
-  if (typeof window === "undefined") return "balanced";
-  try {
-    const saved = window.localStorage.getItem(QUALITY_KEY);
-    return isQuality(saved) ? saved : inferQuality();
-  } catch {
-    return inferQuality();
-  }
-}
-
-function readCameraMode(): Auction3DCameraMode {
-  if (typeof window === "undefined") return "broadcast";
-  try {
-    const saved = window.localStorage.getItem(CAMERA_KEY);
-    return isCameraMode(saved) ? saved : "broadcast";
-  } catch {
-    return "broadcast";
-  }
-}
-
-/**
- * Centralizes the expensive-rendering decisions for the immersive room.
- * The initial tier is inferred from memory/CPU/viewport and every explicit
- * choice is persisted. Reduced-motion always wins over decorative motion.
- */
+/** Device-aware defaults, measured adaptation, and explicit viewer agency. */
 export function useAuction3DPreferences() {
-  const [quality, setQualityState] = useState<Auction3DQuality>(readQuality);
-  const [cameraMode, setCameraModeState] = useState<Auction3DCameraMode>(readCameraMode);
-  const [reducedMotion, setReducedMotion] = useState(false);
-  const [pageVisible, setPageVisible] = useState(
-    () => typeof document === "undefined" || document.visibilityState !== "hidden",
-  );
+  const [qualityPreferenceValue, setQualityPreference] = useState(qualityPreference);
+  const [ceiling, setCeiling] = useState(deviceQuality);
+  const [autoQuality, setAutoQuality] = useState(deviceQuality);
+  const [cameraMode, setCameraModeState] = useState(cameraPreference);
+  const [motionPaused, setMotionPaused] = useState(() => read(KEYS.motion) === 'true');
+  const [followBids, setFollowBidsState] = useState(() => read(KEYS.follow) !== 'false');
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [fps, setFps] = useState<number | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(() => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [pageVisible, setPageVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
+  const governor = useRef(new ArenaQualityGovernor());
+  const quality = recoveryMode ? 'performance' : qualityPreferenceValue === 'auto' ? autoQuality : qualityPreferenceValue;
 
   useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const sync = () => setReducedMotion(media.matches);
-    sync();
-    media.addEventListener?.("change", sync);
-    return () => media.removeEventListener?.("change", sync);
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setReducedMotion(media.matches); sync();
+    media.addEventListener?.('change', sync);
+    return () => media.removeEventListener?.('change', sync);
   }, []);
-
   useEffect(() => {
-    const sync = () => setPageVisible(document.visibilityState !== "hidden");
-    document.addEventListener("visibilitychange", sync);
-    return () => document.removeEventListener("visibilitychange", sync);
+    const media = window.matchMedia('(max-width: 820px)');
+    const sync = () => {
+      const next = deviceQuality(); setCeiling(next);
+      setAutoQuality((current) => ARENA_QUALITIES.indexOf(current) > ARENA_QUALITIES.indexOf(next) ? next : current);
+    };
+    media.addEventListener?.('change', sync);
+    return () => media.removeEventListener?.('change', sync);
+  }, []);
+  useEffect(() => {
+    const sync = () => { setPageVisible(document.visibilityState !== 'hidden'); governor.current.reset(); };
+    document.addEventListener('visibilitychange', sync);
+    return () => document.removeEventListener('visibilitychange', sync);
+  }, []);
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key === null || event.key === KEYS.quality) { setQualityPreference(qualityPreference()); setRecoveryMode(false); governor.current.reset(); }
+      if (event.key === null || event.key === KEYS.camera) setCameraModeState(cameraPreference());
+      if (event.key === null || event.key === KEYS.motion) setMotionPaused(read(KEYS.motion) === 'true');
+      if (event.key === null || event.key === KEYS.follow) setFollowBidsState(read(KEYS.follow) !== 'false');
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
   }, []);
 
-  const setQuality = useCallback((next: Auction3DQuality) => {
-    setQualityState(next);
-    try {
-      window.localStorage.setItem(QUALITY_KEY, next);
-    } catch {
-      // Storage can be blocked in private/webview contexts; rendering still works.
-    }
+  const setQuality = useCallback((next: ArenaQualityPreference) => {
+    if (!ARENA_QUALITY_CHOICES.includes(next)) return;
+    setQualityPreference(next); setRecoveryMode(false); governor.current.reset();
+    save(KEYS.quality, next);
   }, []);
-
   const setCameraMode = useCallback((next: Auction3DCameraMode) => {
-    setCameraModeState(next);
-    try {
-      window.localStorage.setItem(CAMERA_KEY, next);
-    } catch {
-      // Non-critical preference.
-    }
+    if (!ARENA_CAMERAS.includes(next)) return;
+    setCameraModeState(next); save(KEYS.camera, next);
   }, []);
-
-  const renderConfig = useMemo(() => {
-    switch (quality) {
-      case "performance":
-        return {
-          maxDpr: 1,
-          antialias: false,
-          shadows: false,
-          sparkles: 42,
-          contactShadowResolution: 256,
-        };
-      case "cinematic":
-        return {
-          maxDpr: 2,
-          antialias: true,
-          shadows: true,
-          sparkles: 150,
-          contactShadowResolution: 1024,
-        };
-      default:
-        return {
-          maxDpr: 1.5,
-          antialias: true,
-          shadows: true,
-          sparkles: 88,
-          contactShadowResolution: 512,
-        };
+  const toggleMotion = useCallback(() => {
+    setMotionPaused((paused) => { save(KEYS.motion, String(!paused)); return !paused; });
+  }, []);
+  const setFollowBids = useCallback((enabled: boolean) => { setFollowBidsState(enabled); save(KEYS.follow, String(enabled)); }, []);
+  const reportFrameRate = useCallback((value: number) => {
+    if (!pageVisible || reducedMotion || motionPaused || !Number.isFinite(value) || value <= 0) return;
+    setFps(Math.round(value));
+    if (qualityPreferenceValue === 'auto' && !recoveryMode) {
+      setAutoQuality(governor.current.sample(value, autoQuality, ceiling, performance.now()));
     }
-  }, [quality]);
+  }, [pageVisible, reducedMotion, motionPaused, qualityPreferenceValue, recoveryMode, ceiling, autoQuality]);
+  const recoverRenderer = useCallback(() => { setRecoveryMode(true); governor.current.reset(); }, []);
 
   return {
-    quality,
-    setQuality,
-    cameraMode,
-    setCameraMode,
-    reducedMotion,
-    pageVisible,
-    renderConfig,
+    quality, qualityPreference: qualityPreferenceValue, setQuality, renderConfig: ARENA_RENDER_CONFIG[quality],
+    cameraMode, setCameraMode, reducedMotion, motionPaused, toggleMotion,
+    followBids, setFollowBids, pageVisible, fps, reportFrameRate, recoveryMode, recoverRenderer,
   };
 }
 
+/** Three.js' renderer requires WebGL 2. Release the probe's GPU allocation. */
 export function supportsWebGL(): boolean {
-  if (typeof document === "undefined") return false;
+  if (typeof document === 'undefined') return false;
+  let context: WebGL2RenderingContext | null = null;
   try {
-    const canvas = document.createElement("canvas");
-    return Boolean(
-      window.WebGL2RenderingContext && canvas.getContext("webgl2", { failIfMajorPerformanceCaveat: true }),
-    ) || Boolean(canvas.getContext("webgl", { failIfMajorPerformanceCaveat: true }));
-  } catch {
-    return false;
-  }
+    const canvas = document.createElement('canvas');
+    context = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: true });
+    return Boolean(context);
+  } catch { return false; }
+  finally { try { context?.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* Best-effort release must not break the live screen. */ } }
 }

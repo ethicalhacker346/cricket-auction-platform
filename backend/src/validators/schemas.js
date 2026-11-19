@@ -152,6 +152,12 @@ export const undoAuctionActionSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 }).strict();
 
+export const extendLotTimeSchema = z.object({
+  tournamentPlayerId: objectId,
+  seconds: z.number().int().min(5).max(300),
+  requestId: z.string().uuid(),
+}).strict();
+
 export const openLotSchema = z.object({
   tournamentPlayerId: objectId,
   roundId: objectId,

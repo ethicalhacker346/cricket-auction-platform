@@ -4,6 +4,20 @@ import { BidService } from '../services/bid.service.js';
 import { AuctionAuthorizationService } from '../services/auction-authorization.service.js';
 
 export const auctionController = {
+  extendLotTime: async (req, res) => {
+    const auction = await AuctionService.extendLotTime(req.params.auctionId, req.user, req.body);
+    // A deduplicated retry returns the CURRENT clock, not the original
+    // stored duration. Do not make an already-expired retry look reopened.
+    const live = auction.liveState;
+    const elapsed = auction.status === 'LIVE' && live?.updatedAt
+      ? Math.max(0, (Date.now() - new Date(live.updatedAt).getTime()) / 1000) : 0;
+    const remaining = Math.max(0, (live?.remainingTimeSeconds ?? 0) - elapsed);
+    return res.json({ success: true, data: { ...auction.toJSON(), timer: {
+      remaining, total: live?.timerTotalSeconds || auction.lotTimerSeconds,
+      isRunning: auction.status === 'LIVE' && live?.lotStatus === 'BIDDING' && remaining > 0,
+    } } });
+  },
+
   undo: async (req, res) => {
     const result = await AuctionCommandService.undo(req.params.auctionId, req.user, req.body);
     return res.json({ success: true, data: result });
@@ -113,6 +127,7 @@ export const auctionController = {
     const aliases = {
       canManageAuction: data.permissions.MANAGE_AUCTION,
       canUndo: data.permissions.UNDO_ACTION,
+      canExtendLotTime: data.permissions.EXTEND_LOT_TIME,
       canStart: data.permissions.START_AUCTION,
       canPause: data.permissions.PAUSE_AUCTION,
       canResume: data.permissions.RESUME_AUCTION,

@@ -16,7 +16,12 @@ export default defineConfig({
     tailwindcss(),
 
     VitePWA({
-      // existing PWA configuration
+      workbox: {
+        // A 2D spectator should not download Three.js in the background.
+        // The immersive renderer is fetched only when its lazy route opens.
+        globIgnores: ['**/AuctionArena3D-*.js', '**/*.map'],
+        navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io(?:\/|$)/],
+      },
     }),
 
     process.env.ANALYZE === "true" &&

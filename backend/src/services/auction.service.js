@@ -47,6 +47,7 @@ import {
   emitRoundDeleted,
   emitRoundCompleted,
   emitLotOpened,
+  emitLotTimeExtended,
   emitLotPermanentUnsold,
   emitViewerCountUpdated,
 } from "../events/auction.events.js";
@@ -366,6 +367,33 @@ export class AuctionService {
     return command.auction;
   }
 
+  /** An explicit lot ID fences delayed clicks; requestId fences HTTP retries. */
+  static async extendLotTime(auctionId, user, { tournamentPlayerId, seconds, requestId }) {
+    if (!Number.isSafeInteger(seconds) || seconds < 5 || seconds > 300) throw new AppError('Add between 5 and 300 whole seconds', 400);
+    if (typeof requestId !== 'string' || !/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(requestId)) throw new AppError('A unique request ID is required', 400);
+    const command = await AuctionCommandService.run({
+      auctionId, user, permission: AUCTION_PERMISSIONS.EXTEND_LOT_TIME,
+      kind: 'LOT_TIME_EXTENDED', label: `Add ${seconds} seconds to the active lot`,
+      commandId: `lot-time:${requestId}`, commandFingerprint: `${tournamentPlayerId}:${seconds}`,
+    }, async ({ auction, session, outbox }) => {
+      const live = auction.liveState;
+      if (live?.lotStatus !== LOT_STATUS.BIDDING || !live.currentTournamentPlayerId) throw new AppError('There is no active lot to extend', 409);
+      if (String(live.currentTournamentPlayerId) !== String(tournamentPlayerId)) throw new AppError('The active player changed. Review the current lot before adding time.', 409);
+      const elapsed = auction.status === AUCTION_STATUS.LIVE && live.updatedAt
+        ? Math.max(0, (Date.now() - new Date(live.updatedAt).getTime()) / 1000) : 0;
+      const remaining = Math.max(0, (live.remainingTimeSeconds ?? 0) - elapsed) + seconds;
+      if (remaining > 3600) throw new AppError('A lot cannot have more than 3600 seconds remaining', 400);
+      live.remainingTimeSeconds = remaining;
+      live.timerTotalSeconds = Math.max(remaining, Math.min(3600, (live.timerTotalSeconds || auction.lotTimerSeconds) + seconds));
+      live.updatedAt = new Date();
+      auction.logs.push({ action: AUCTION_LOG_ACTIONS.LOT_TIME_EXTENDED, userId: user._id,
+        message: `Organizer added ${seconds} seconds to the current lot`, metadata: { tournamentPlayerId, seconds, remaining } });
+      await auction.save({ session });
+      outbox.push(() => emitLotTimeExtended(auctionId, { tournamentPlayerId, seconds, liveState: live, status: auction.status, extendedBy: user._id }));
+    });
+    return command.auction;
+  }
+
   /** The running round wins; otherwise the first configured, uncompleted round. */
   static async runningRound(auctionId, session) {
     const active = await AuctionRound.findOne({ auctionId, status: ROUND_STATUS.ACTIVE }).sort({ order: 1 }).session(session);
@@ -399,6 +427,7 @@ export class AuctionService {
       auction.liveState = {
         currentTournamentPlayerId: tournamentPlayer._id, currentRoundId: round._id,
         currentHighestBid: 0, highestBidderTeamId: null, remainingTimeSeconds: auction.lotTimerSeconds,
+        timerTotalSeconds: auction.lotTimerSeconds,
         lotStatus: LOT_STATUS.BIDDING, version: auction.liveState.version, updatedAt: new Date(),
       };
       const populatedPlayer = await TournamentPlayer.findById(tournamentPlayer._id).session(session).populate({ path: 'playerId', options: { session } }).lean();
@@ -549,9 +578,7 @@ export class AuctionService {
       },
       timer: {
         remaining: trueRemaining,
-        total:
-          auction.auctionConfiguration?.lotTimerSeconds ??
-          auction.lotTimerSeconds,
+        total: liveState.timerTotalSeconds || auction.lotTimerSeconds || auction.auctionConfiguration?.lotTimerSeconds,
         isRunning:
           auction.status === AUCTION_STATUS.LIVE && liveState.lotStatus === LOT_STATUS.BIDDING && trueRemaining > 0,
       },

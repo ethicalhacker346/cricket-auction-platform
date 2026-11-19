@@ -63,6 +63,7 @@ export class BidService {
       live.currentHighestBid = amount;
       live.highestBidderTeamId = team._id;
       live.remainingTimeSeconds = Math.max(remaining, auction.bidResetSeconds);
+      live.timerTotalSeconds = Math.max(live.timerTotalSeconds || auction.lotTimerSeconds, live.remainingTimeSeconds);
       live.updatedAt = new Date();
       scope.label = `${team.name} bid ${amount} for ${player.playerId?.fullName || 'player'}`;
       auction.logs.push({ action: AUCTION_LOG_ACTIONS.BID_PLACED, userId: user._id,
