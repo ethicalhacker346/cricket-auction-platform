@@ -95,13 +95,18 @@ export const auctionController = {
     return res.json({ success: true, data: auction });
   },
 
+  advanceUnsoldPass: async (req, res) => {
+    const auction = await AuctionService.advanceUnsoldPass(req.params.auctionId, req.params.roundId, req.user, req.body);
+    return res.json({ success: true, data: auction });
+  },
+
   settleLotSold: async (req, res) => {
-    const auction = await BidService.settleLot(req.params.auctionId, req.user, true, req.authorization);
+    const auction = await BidService.settleLot(req.params.auctionId, req.user, true, req.body);
     return res.json({ success: true, data: auction });
   },
 
   settleLotUnsold: async (req, res) => {
-    const auction = await BidService.settleLot(req.params.auctionId, req.user, false, req.authorization);
+    const auction = await BidService.settleLot(req.params.auctionId, req.user, false, req.body);
     return res.json({ success: true, data: auction });
   },
 
@@ -113,7 +118,7 @@ export const auctionController = {
       req.params.auctionId,
       req.params.tournamentPlayerId,
       req.user,
-      req.authorization
+      req.body
     );
     return res.json({ success: true, data: player });
   },

@@ -213,8 +213,8 @@ export default function SquadRulesPage() {
             "You cannot place a bid that would reduce your remaining budget below zero.",
             "A player's bought price is permanent. There is no post-auction price adjustment.",
             "Roster order does not affect gameplay — it is for organizational clarity only.",
-            "Unsold players from normal rounds enter the unsold round. You may bid on them again.",
-            "Players marked PERMANENT_UNSOLD by the organizer cannot be acquired by any team.",
+            "Force Unsold defers a player: Unsold Round-1, Unsold Round-2 and later numbered passes are generated as needed, with one offer per player per pass.",
+            "Permanent Unsold excludes a player from every later pass. Only organizer undo can reverse the recorded decision; no team can bid on a retired player.",
           ].map((rule, i) => (
             <div key={i} className="flex items-start gap-3">
               <Target className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-400" />

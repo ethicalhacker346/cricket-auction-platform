@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { AuctionEngine } from "@/features/auction/engine/AuctionEngine";
-import type { LiveAuctionSnapshot, LotTimeCommandResult } from "@/features/auction/types/index.types";
+import type { LiveAuctionSnapshot, LotTimeCommandResult, LotDecisionTarget } from "@/features/auction/types/index.types";
 
 let engineInstance: AuctionEngine | null = null;
 let engineUnsubscribe: (() => void) | null = null;
@@ -50,14 +50,16 @@ interface LiveAuctionState extends LiveAuctionSnapshot {
     openNextLot: (playerId?: string) => Promise<{ success: boolean; error?: string }>;
     undo: (actionId: string, reason?: string) => Promise<{ success: boolean; error?: string }>;
     placeBid: (teamId: string, amount?: number, isUser?: boolean) => Promise<{ ok: boolean; reason?: string }>;
-    forceSold: () => Promise<{ success: boolean; error?: string }>;
-    forceUnsold: () => Promise<{ success: boolean; error?: string }>;
-    // NEW: aligns with AuctionService.markPermanentUnsold and liveAuctionApi
-    markPermanentUnsold: (tournamentPlayerId: string) => Promise<{ success: boolean; error?: string }>;
+    forceSold: (target?: LotDecisionTarget) => Promise<{ success: boolean; error?: string }>;
+    forceUnsold: (target?: LotDecisionTarget) => Promise<{ success: boolean; error?: string }>;
+    advanceUnsoldPass: (roundId: string) => Promise<{ success: boolean; error?: string }>;
+    // Shares the same audited settlement path for active and waiting players.
+    markPermanentUnsold: (tournamentPlayerId: string, target?: LotDecisionTarget) => Promise<{ success: boolean; error?: string }>;
   };
 }
 
 const emptySnapshot: LiveAuctionSnapshot = {
+  version: 0,
   auction: {} as any,
   rounds: [],
   players: [],
@@ -152,11 +154,12 @@ export const useLiveAuctionStore = create<LiveAuctionState>((set, get) => ({
     openNextLot: (playerId) => getAuctionEngine().openNextLot(playerId),
     undo: (actionId, reason) => getAuctionEngine().undo(actionId, reason),
     placeBid: (teamId, amount, isUser) => getAuctionEngine().placeBid(teamId, amount, isUser),
-    forceSold: () => getAuctionEngine().forceSold(),
-    forceUnsold: () => getAuctionEngine().forceUnsold(),
+    forceSold: (target) => getAuctionEngine().forceSold(target),
+    forceUnsold: (target) => getAuctionEngine().forceUnsold(target),
     // NEW: delegate to the engine's permanent-unsold command
-    markPermanentUnsold: (tournamentPlayerId: string) =>
-      getAuctionEngine().markPermanentUnsold(tournamentPlayerId),
+    markPermanentUnsold: (tournamentPlayerId, target) =>
+      getAuctionEngine().markPermanentUnsold(tournamentPlayerId, target),
+    advanceUnsoldPass: (roundId) => getAuctionEngine().advanceUnsoldPass(roundId),
   },
 }));
 

@@ -9,6 +9,7 @@ import {
   Pause,
   Play,
   PowerOff,
+  Ban,
   XCircle,
 } from "lucide-react";
 import { useAuctionPermissions, useLiveAuction } from "@/features/auction/hooks/index.hook";
@@ -17,6 +18,8 @@ import { cn } from "@/utils/cn";
 import { AuctionDialog } from './AuctionDialog';
 import { AuctionUndoPanel } from './AuctionUndoPanel';
 import { LotTimeControls } from './LotTimeControls';
+import { UnsoldPassNotice } from './UnsoldPassNotice';
+import type { LotDecisionTarget } from '../types/index.types';
 import { NextLotPicker } from './NextLotPicker';
 import { eligibleRoundPlayers, runningAuctionRound } from '../utils/roundSelection';
 
@@ -38,6 +41,7 @@ interface ConfirmConfig {
   action: () => Promise<void>;
   variant: "danger" | "warning" | "primary";
   confirmLabel: string;
+  review?: { auctionId: string; playerId: string; roundId: string; version: number };
 }
 
 /* ------------------------------------------------------------------ */
@@ -70,15 +74,18 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
 function ConfirmModal({
   config,
   onClose,
+  stale,
 }: {
   config: ConfirmConfig | null;
   onClose: () => void;
+  stale: boolean;
 }) {
   const [isProcessing, setIsProcessing] = useState(false);
 
   if (!config) return null;
 
   const handleConfirm = async () => {
+    if (stale || isProcessing) return;
     setIsProcessing(true);
     try {
       await config.action();
@@ -107,6 +114,7 @@ function ConfirmModal({
 
         <p className="mb-6 text-sm leading-relaxed text-slate-400">{config.description}</p>
 
+        {stale && !isProcessing && <p role="alert" className="mb-4 rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">The player, pass or bid changed, or the live connection is unavailable. Cancel and review the current lot before confirming a new decision.</p>}
         <div className="flex justify-end gap-3">
           <button
             onClick={onClose}
@@ -117,7 +125,7 @@ function ConfirmModal({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={isProcessing}
+            disabled={isProcessing || stale}
             className={cn(
               "flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-lg transition disabled:opacity-50",
               config.variant === "danger" &&
@@ -149,6 +157,7 @@ function ControlButton({
   variant = "default",
   loading = false,
   title: tooltip,
+  alwaysLabel = false,
 }: {
   onClick: () => void;
   disabled?: boolean;
@@ -157,6 +166,7 @@ function ControlButton({
   variant?: "default" | "primary" | "danger" | "success" | "warning" | "ghost";
   loading?: boolean;
   title?: string;
+  alwaysLabel?: boolean;
 }) {
   const variants: Record<string, string> = {
     default:
@@ -181,7 +191,7 @@ function ControlButton({
       disabled={disabled || loading}
       title={tooltip || label}
       className={cn(
-        "group relative flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200",
+        "group relative flex min-h-11 items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200",
         "disabled:cursor-not-allowed disabled:opacity-30 disabled:shadow-none",
         variants[variant]
       )}
@@ -191,7 +201,7 @@ function ControlButton({
       ) : (
         <Icon className="h-4 w-4 transition-transform group-hover:scale-110" />
       )}
-      <span className="hidden sm:inline">{label}</span>
+      <span className={alwaysLabel ? '' : 'hidden sm:inline'}>{label}</span>
     </button>
   );
 }
@@ -201,7 +211,7 @@ function ControlButton({
 /* ------------------------------------------------------------------ */
 
 export function AuctionControls() {
-  const { actions, currentPlayer, currentRound, leadingFranchise, currentBid, auction, currentPlayerId, rounds, players, undoAction, timer, connection } =
+  const { actions, currentPlayer, currentRound, currentRoundId, leadingFranchise, currentBid, auction, currentPlayerId, rounds, players, undoAction, timer, connection, version } =
     useLiveAuction();
   const permissions = useAuctionPermissions();
 
@@ -215,6 +225,11 @@ export function AuctionControls() {
   const nextPlayerId = eligiblePlayers.some((player) => player.id === selectedPlayerId)
     ? selectedPlayerId : eligiblePlayers[0]?.id;
   const anyLoading = Object.values(loading).some(Boolean);
+  const target: LotDecisionTarget | null = currentPlayerId && currentRoundId
+    ? { tournamentPlayerId: currentPlayerId, roundId: currentRoundId, expectedVersion: version } : null;
+  const review = target ? { auctionId: auction.id, playerId: target.tournamentPlayerId, roundId: target.roundId, version } : undefined;
+  const confirmationStale = Boolean(confirm?.review && (connection !== 'connected' || confirm.review.auctionId !== auction.id
+    || confirm.review.playerId !== currentPlayerId || confirm.review.roundId !== currentRoundId || confirm.review.version !== version));
 
   /* ---------------- Toasts ---------------- */
   const showToast = useCallback((message: string, type: ToastType = "info") => {
@@ -280,7 +295,7 @@ export function AuctionControls() {
     withAction("openNextLot", () => actions.openNextLot(nextPlayerId), "Selected player lot opened");
 
   const onForceSold = () => {
-    if (!currentPlayer) {
+    if (!currentPlayer || !target) {
       showToast("No active player to settle", "error");
       return;
     }
@@ -290,48 +305,45 @@ export function AuctionControls() {
     }
     openConfirm({
       title: "Force Mark as Sold",
+      review,
       description: `You are about to mark ${currentPlayer.name} as SOLD to ${
         leadingFranchise?.name || "highest bidder"
       } for ${formatLakhs(currentBid.amount)}. This settles the lot immediately. Organizer undo can reverse the latest action.`,
       variant: "primary",
       confirmLabel: "Confirm Sale",
       action: () =>
-        withAction("forceSold", actions.forceSold, `${currentPlayer.name} marked as sold`),
+        withAction("forceSold", () => actions.forceSold(target), `${currentPlayer.name} marked as sold`),
     });
   };
 
   const onForceUnsold = () => {
-    if (!currentPlayer) {
+    if (!currentPlayer || !target) {
       showToast("No active player to settle", "error");
       return;
     }
     openConfirm({
-      title: "Mark as Unsold",
-      description: `${currentPlayer.name} will be moved to the unsold pool and may be re-listed in the unsold round. Continue?`,
+      title: "Defer player as unsold?",
+      review,
+      description: `${currentPlayer.name} will finish this pass as UNSOLD and be offered in the next numbered unsold pass, after all remaining players in this phase are processed. Any winning reservation is released. This does not permanently retire the player.`,
       variant: "warning",
       confirmLabel: "Confirm Unsold",
       action: () =>
-        withAction("forceUnsold", actions.forceUnsold, `${currentPlayer.name} marked as unsold`),
+        withAction("forceUnsold", () => actions.forceUnsold(target), `${currentPlayer.name} deferred to the next unsold pass`),
+    });
+  };
+
+  const onPermanentUnsold = () => {
+    if (!currentPlayer || !target || currentRound?.type !== 'unsold') return;
+    openConfirm({
+      title: 'Permanently retire this player?', review,
+      description: `${currentPlayer.name} will be marked PERMANENTLY UNSOLD and excluded from every later unsold pass. Any winning reservation is released without spending the team's purse. Only organizer undo can reverse this recorded decision.`,
+      variant: 'danger', confirmLabel: 'Confirm Permanent Unsold',
+      action: () => withAction('permanentUnsold', () => actions.markPermanentUnsold(currentPlayer.id, target), `${currentPlayer.name} permanently retired from further passes`),
     });
   };
 
   /* ---------------- Derived UI state ---------------- */
-  const isUnsoldRound = currentRound?.type === "unsold";
- {/* console.log({
-    currentRound,
-    type: currentRound?.type,
-    isUnsoldRound,
-  });
-  console.log({
-    currentPlayerId,
-    currentPlayer: currentPlayer?.name,
-    canMarkPermanentUnsold: permissions.canMarkPermanentUnsold,
-    reason:
-      permissions.reasons?.MARK_PERMANENT_UNSOLD,
-    role: permissions.role,
-    ownsAuction: permissions.ownsAuction,
-    auctionStatus: permissions.auctionStatus,
-  }); */}
+  const isUnsoldRound = currentRound?.type === 'unsold';
   const statusColor =
     {
       draft: "bg-slate-500/15 text-slate-300",
@@ -383,7 +395,7 @@ export function AuctionControls() {
       </div>
 
       {/* Confirmation Modal */}
-      <ConfirmModal config={confirm} onClose={closeConfirm} />
+      <ConfirmModal config={confirm} onClose={closeConfirm} stale={confirmationStale} />
 
       {/* Main Control Surface */}
       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 shadow-xl backdrop-blur-sm">
@@ -413,7 +425,7 @@ export function AuctionControls() {
               Current: <span className="font-medium text-slate-300">{currentPlayer.name}</span>
               {isUnsoldRound && (
                 <span className="ml-2 rounded bg-slate-700/50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-400">
-                  Unsold Round
+                  {currentRound.unsoldPass ? `Pass ${currentRound.unsoldPass}` : 'Unsold pass'}
                 </span>
               )}
             </div>
@@ -479,9 +491,10 @@ export function AuctionControls() {
           <ControlButton
             icon={Hammer}
             label="Force Sold"
+            alwaysLabel
             loading={loading.forceSold}
             onClick={onForceSold}
-            disabled={!permissions.canMarkSold || !currentPlayerId || !currentBid.teamId || anyLoading}
+            disabled={!permissions.canMarkSold || !target || !currentBid.teamId || anyLoading || connection !== 'connected'}
             title={
               !permissions.canMarkSold
                 ? "You do not have permission"
@@ -491,10 +504,20 @@ export function AuctionControls() {
             }
           />
 
-          <ControlButton icon={XCircle} label="Force Unsold" loading={loading.forceUnsold}
-            onClick={onForceUnsold} disabled={!permissions.canMarkUnsold || !currentPlayerId || anyLoading}
-            title="Release the winning reservation and return the player to the unsold pool" />
+          <ControlButton icon={XCircle} label="Force Unsold" loading={loading.forceUnsold} alwaysLabel variant="warning"
+            onClick={onForceUnsold} disabled={!permissions.canMarkUnsold || !target || anyLoading || connection !== 'connected'}
+            title="Release the winning reservation and defer this player to the next unsold pass" />
+          {isUnsoldRound && <ControlButton icon={Ban} label="Permanent Unsold" loading={loading.permanentUnsold} alwaysLabel
+            onClick={onPermanentUnsold} variant="danger"
+            disabled={!permissions.canMarkPermanentUnsold || !target || anyLoading || connection !== 'connected'}
+            title="Release the winning reservation and exclude this player from all later passes" />}
         </div>
+
+        {/* Keep the decisions above the explanatory card in compact 3D drawers. */}
+        {runningRound?.type === 'unsold' && <div className="mt-4"><UnsoldPassNotice round={runningRound} players={players}
+          hasActiveLot={Boolean(currentPlayerId)} busy={anyLoading}
+          canContinue={permissions.canMarkPermanentUnsold && connection === 'connected'}
+          onContinue={() => void withAction('advancePass', () => actions.advanceUnsoldPass(runningRound.id), 'Unsold pass continued')} /></div>}
 
         {permissions.canExtendLotTime && currentPlayer && <LotTimeControls player={currentPlayer} timer={timer} status={auction.status}
           disabled={anyLoading || connection !== 'connected'} onExtend={async (playerId, seconds, requestId) => {
@@ -513,8 +536,7 @@ export function AuctionControls() {
           <div className="mt-3 flex items-center gap-2 rounded-xl bg-slate-800/40 px-3 py-2 text-xs text-slate-400 ring-1 ring-white/5">
             <Info className="h-3.5 w-3.5 text-sky-400" />
             <span>
-              Unsold Round: settle {currentPlayer.name} first. Unsold players may be re-listed,
-              or retired from the Rounds page to allow auction completion.
+              Offer {currentPlayer.name} once this pass: sell to the leading team, defer with Force Unsold, or stop relisting with Permanent Unsold.
             </span>
           </div>
         )}

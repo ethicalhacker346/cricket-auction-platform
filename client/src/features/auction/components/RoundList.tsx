@@ -24,14 +24,13 @@ function RoundCard({
     round.status === "active" ||
     round.status === "completed";
 
-  // The unsold round is engine-managed: AuctionRound.js rejects manual
-  // playerIds edits on it once it exists (enforceUnsoldRoundPlayerIds), since
-  // the auction engine repopulates it automatically from unsold lots.
-  // Round metadata (name/order) can still be edited, but player membership can't.
+  // Each unsold pass is engine-managed: its membership is fixed at creation.
+  // A deferred player belongs to a successor pass, never a second offer here.
+  // Pending name/category metadata can be edited, but order/membership cannot.
   const isAutoManaged = round.type === "unsold";
 
   const canEdit = canManage && !isLocked;
-  const canDelete = canManage && !isLocked;
+  const canDelete = canManage && !isLocked && !isAutoManaged;
   const canManagePlayers =
     canManage &&
     !isLocked &&
@@ -254,7 +253,9 @@ function RoundCard({
           onClick={() => onDelete(round.id)}
           disabled={!canDelete}
           title={
-            isLocked
+            isAutoManaged
+              ? "Unsold passes are managed by the auction engine"
+              : isLocked
               ? "Round is locked"
               : canManage
               ? "Delete round"

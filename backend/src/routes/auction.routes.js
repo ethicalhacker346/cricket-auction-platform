@@ -16,6 +16,9 @@ import {
   placeBidSchema,
   openLotSchema,
   extendLotTimeSchema,
+  lotDecisionSchema,
+  permanentUnsoldBodySchema,
+  advanceUnsoldPassSchema,
   undoAuctionActionSchema,
   auctionIdParamSchema,
   auctionRoundIdParamSchema, // NEW — add to validators/schemas.js, see note below
@@ -205,7 +208,7 @@ auctionRouter.post(
   authenticate,
   validate(auctionIdParamSchema, 'params'),
   requireAuctionPermission(AUCTION_PERMISSIONS.SETTLE_LOT),
-
+  validate(lotDecisionSchema),
   asyncHandler(auctionController.settleLotSold)
 );
 
@@ -214,7 +217,7 @@ auctionRouter.post(
   authenticate,
   validate(auctionIdParamSchema, 'params'),
   requireAuctionPermission(AUCTION_PERMISSIONS.SETTLE_LOT),
-
+  validate(lotDecisionSchema),
   asyncHandler(auctionController.settleLotUnsold)
 );
 
@@ -227,7 +230,17 @@ auctionRouter.post(
   authenticate,
   validate(permanentUnsoldParamsSchema, "params"),
   requireAuctionPermission(AUCTION_PERMISSIONS.MARK_PERMANENT_UNSOLD),
+  validate(permanentUnsoldBodySchema),
   asyncHandler(auctionController.markPermanentUnsold)
+);
+
+// Audited continuation for a pre-upgrade pass whose UNSOLD results already
+// exhausted its queue. New passes advance automatically on the final decision.
+auctionRouter.post(
+  '/:auctionId/rounds/:roundId/advance', authenticate,
+  validate(auctionRoundIdParamSchema, 'params'),
+  requireAuctionPermission(AUCTION_PERMISSIONS.MARK_PERMANENT_UNSOLD),
+  validate(advanceUnsoldPassSchema), asyncHandler(auctionController.advanceUnsoldPass)
 );
 
 auctionRouter.post(

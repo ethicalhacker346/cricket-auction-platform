@@ -13,7 +13,6 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
-  Gavel,
   PauseCircle,
   PlayCircle,
   CheckCircle2,
@@ -27,6 +26,7 @@ import {
   useResolvedUserTeam,
 } from "@/features/auction/hooks/index.hook";
 import { useAuctionContext } from "@/features/auction/hooks/useAuctionContext";
+import { AuctionControls } from "@/features/auction/components/AuctionControls";
 import { AuctionClock } from "@/features/auction/components/AuctionClock";
 import { CurrentHighestBid } from "@/features/auction/components/CurrentHighestBid";
 import { PlayerAuctionCard } from "@/features/auction/components/PlayerAuctionCard";
@@ -136,7 +136,6 @@ export default function FranchiseAuctionPage() {
     playersSoldCount,
     playersUnsoldCount,
     totalMoneySpent,
-    actions,
   } = liveAuction;
 
   // Resolve the team by this auction's server-authoritative ownership, not
@@ -409,70 +408,11 @@ export default function FranchiseAuctionPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Organizer Toolbar (permission-gated) ── */}
-      <AnimatePresence>
-        {(permissions.canOpenLot ||
-          permissions.canMarkSold ||
-          permissions.canMarkUnsold ||
-          permissions.canPause ||
-          permissions.canResume) && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            variants={itemVariants}
-            className="overflow-hidden"
-          >
-            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.04] p-3 backdrop-blur-sm">
-              <span className="px-2 text-[10px] font-bold uppercase tracking-widest text-indigo-300">
-                <Gavel className="mr-1 inline h-3 w-3" /> Auction Controls
-              </span>
-              <div className="ml-auto flex flex-wrap items-center gap-2">
-                {permissions.canOpenLot && (
-                  <button
-                    onClick={() => actions.openNextLot()}
-                    className="rounded-xl bg-indigo-500/15 px-4 py-2 text-xs font-bold text-indigo-300 ring-1 ring-indigo-500/30 transition hover:bg-indigo-500/25"
-                  >
-                    Open Next Lot
-                  </button>
-                )}
-                {permissions.canMarkSold && (
-                  <button
-                    onClick={() => actions.forceSold()}
-                    className="rounded-xl bg-emerald-500/15 px-4 py-2 text-xs font-bold text-emerald-300 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/25"
-                  >
-                    Mark Sold
-                  </button>
-                )}
-                {permissions.canMarkUnsold && (
-                  <button
-                    onClick={() => actions.forceUnsold()}
-                    className="rounded-xl bg-rose-500/15 px-4 py-2 text-xs font-bold text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/25"
-                  >
-                    Mark Unsold
-                  </button>
-                )}
-                {permissions.canPause && isLive && (
-                  <button
-                    onClick={() => actions.pause()}
-                    className="rounded-xl bg-amber-500/15 px-4 py-2 text-xs font-bold text-amber-300 ring-1 ring-amber-500/30 transition hover:bg-amber-500/25"
-                  >
-                    Pause
-                  </button>
-                )}
-                {permissions.canResume && isPaused && (
-                  <button
-                    onClick={() => actions.resume()}
-                    className="rounded-xl bg-emerald-500/15 px-4 py-2 text-xs font-bold text-emerald-300 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/25"
-                  >
-                    Resume
-                  </button>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Shared confirmed controls: no separate unfenced settlement shortcuts. */}
+      {(permissions.canOpenLot || permissions.canMarkSold || permissions.canMarkUnsold ||
+        permissions.canMarkPermanentUnsold || permissions.canPause || permissions.canResume) && (
+        <motion.div variants={itemVariants}><AuctionControls /></motion.div>
+      )}
 
       {/* ── Main Grid ── */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">

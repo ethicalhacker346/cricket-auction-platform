@@ -12,8 +12,8 @@ The journal covers new auction commands:
 - Sold/unsold decisions, restoring the player, roster, purse, and winning bid together.
 - Opening a lot; start, pause, resume, and explicit completion.
 - Rule changes and adding, editing, or deleting a round.
-- Permanent-unsold decisions in the unsold round.
-- Automatic consequences of these commands: round closure, unsold-round creation/player reset, and auction/tournament completion. Undoing a final sale therefore reopens the final lot, not just its visual card.
+- Permanent-unsold decisions in the running unsold pass, including an active lot with a winning bid.
+- Automatic consequences of these commands: round closure, numbered unsold-pass creation/player reset, and auction/tournament completion. Undoing a final sale therefore reopens the final lot, not just its visual card.
 
 A recovered bidding lot **pauses for organizer review**, with at least the configured bid-reset window remaining. Explicitly resume before bidding again. Undoing Pause/Resume restores that lifecycle transition instead. Cancelled bids remain in bid history and the live feed, labelled and excluded from bid analytics. Profile/presence changes are not auction commands and are never rolled back. Creation and actions predating this journal are not reconstructable.
 
@@ -23,7 +23,29 @@ Confirmations are latest-action-first. A newer bid/action disables an already-op
 
 Under **Next on the floor**, search and select any eligible member of the running round, then choose **Open Next Lot**. The first eligible player remains the default. The running round is the active round, otherwise the first nonempty pending round by order. Later rounds remain locked until it is resolved. Sold, permanently unsold, unavailable, and other-round players cannot be selected. An active lot must be settled first. The API rechecks membership, approval, eligibility, and round order transactionally; editing a client request cannot bypass it.
 
-The upcoming queue retains earlier pending players when a later player is chosen. Eligible unsold players remain available in the engine-managed unsold round.
+The upcoming queue retains earlier pending players when a later player is chosen. **A player is eligible only while NOT_LISTED (waiting) in the running pass.** An UNSOLD result is finished for that pass and cannot be offered again until the engine assigns the player to a successor pass and resets them to NOT_LISTED.
+
+### Defer or permanently retire an unsold player
+
+The standard room and **3D → Control → Organizer console** share the same controls and confirmations:
+
+| Choice | Effect on this attempt | Future passes | Winning reservation |
+|---|---|---|---|
+| **Force Sold** | Sells to the authoritative highest bidder | Excluded | Committed to spend/roster |
+| **Force Unsold** | Finishes this pass as UNSOLD | Deferred to the next numbered unsold pass | Released, not spent |
+| **Permanent Unsold** | Explicitly retires the player | Excluded from every later pass | Released, not spent |
+
+Force Unsold remains available during unsold passes. Permanent Unsold is offered only in the unsold phase. Normal sold/unsold settlement requires **LIVE**; permanent retirement supports **LIVE or PAUSED** and never resumes a paused room. Countdown expiry alone never decides a result. Both unsold choices are labelled, explained and confirmed separately; a changed player, round, bid revision or unavailable connection invalidates a reviewed confirmation. A delayed decision cannot accidentally settle that same player in a later pass. The server independently enforces the target and optional version fence.
+
+After all nonempty normal rounds are processed, approved UNSOLD players form **Unsold Round-1**. Each player is offered once per pass, in any organizer-selected order within the running round. When every member is SOLD, UNSOLD or PERMANENT_UNSOLD, the pass closes. Its approved deferred UNSOLD inventory forms **Unsold Round-2**, then **Unsold Round-3**, and so on, with no configured pass limit. Sold/permanently unsold players never re-enter that queue; empty passes are never created. Unused empty normal templates do not block advancement and cannot accept new players after the unsold phase begins.
+
+The last decision, round closure, all relists, successor creation (if any), and auction/tournament completion are **one audited transaction**. Repeated/concurrent decisions cannot create two successors. A winning reservation is released atomically on either unsold choice. Permanent retirement of a waiting player is also supported by the API; it does not stop or rewind another active player's clock. Undoing a pass-generating decision deletes its successor and restores **every** affected player's prior outcome/assignment, not just the last player's card. Undoing active retirement restores the exact reservation/winning bid and pauses recovered bidding for review.
+
+A generated pass remains unfinished inventory even though its players have reset from UNSOLD to NOT_LISTED. The global completion guard includes NOT_LISTED, IN_PROGRESS and UNSOLD: the auction ends only when **every approved player is SOLD or PERMANENT_UNSOLD**, not simply when the current UNSOLD count reaches zero. This is this platform's configured workflow, not a claim about universal cricket auction regulations.
+
+The progress card distinguishes **processed this pass**, **deferred**, and **waiting**. Completed rounds use frozen aggregate outcome summaries; a later reset/sale never rewrites their totals. Legacy completed rounds without a summary are shown as completed with outcome totals unavailable. Player cards show the player's **current** state, not a reconstructed per-player attempt history. Names/categories on a pending pass may be edited; pass number, order, membership and deletion are engine-managed.
+
+For a pre-upgrade unsold pass already idle with every player resolved, **Continue unsold passes** explicitly performs an audited advance. New passes advance automatically on the last decision. Merely viewing, polling or refreshing never mutates the auction. Run the [required migration](UNSOLD_PASSES_MIGRATION.md) before production rollout.
 
 ### Give the current player extra time
 
@@ -100,7 +122,11 @@ Scene labels are isolated below interactive HUD controls, and drawers/dock are s
 - `GET /api/v1/auctions/:auctionId/actions`: authorized organizer/admin; latest 30 audit headers, without internal pre/post-images.
 - `POST /api/v1/auctions/:auctionId/undo`: authorized organizer/admin; `{ "actionId": "<exact latest ID>", "reason": "optional, at most 500 characters" }`.
 - `POST /api/v1/auctions/:auctionId/lot/time`: owning organizer/admin with `EXTEND_LOT_TIME`, while LIVE/PAUSED; strict body `{ "tournamentPlayerId": "<active tournament-player ID>", "seconds": 30, "requestId": "<UUID>" }`. Returns the current authoritative `liveState` and elapsed-adjusted `timer`; an identical retry returns the current clock, not the original duration. Reused/undone IDs return `409 COMMAND_ALREADY_USED`.
-- Permission policy version 5 adds `EXTEND_LOT_TIME` / `canExtendLotTime`. Guests and unrelated organizers gain no mutation authority.
+- Permission policy version **6** retains `EXTEND_LOT_TIME` / `canExtendLotTime` and allows `MARK_PERMANENT_UNSOLD` in LIVE/PAUSED. Guests and unrelated organizers gain no mutation authority.
+- `POST /api/v1/auctions/:auctionId/lot/sold` and `/lot/unsold` now require strict bodies `{ "tournamentPlayerId": "<reviewed player ID>", "roundId": "<reviewed round ID>", "expectedVersion": 21 }`. `expectedVersion` is optional for external callers, but first-party controls always send it. No team/price supplied by a client decides the winner.
+- `POST /api/v1/auctions/:auctionId/players/:tournamentPlayerId/permanent-unsold` requires `{ "roundId": "<running unsold pass ID>", "expectedVersion": 21 }` (version optional). Targets an approved waiting/active/deferred member of that running pass.
+- `POST /api/v1/auctions/:auctionId/rounds/:roundId/advance` accepts `{ "expectedVersion": 21 }` (version optional), with permanent-unsold permission, only for an exhausted running unsold pass with no active lot. A stale reviewed target/version returns **409 `STALE_LOT_DECISION`**; refresh/review, never automatically replay a decision.
+- Rounds expose optional `unsoldPass` and closure `outcomeSummary: { sold, unsold, permanentUnsold }`. Generated names are `Unsold Round-${unsoldPass}`. `auction:round:added` includes `relistedPlayerIds` and authoritative `liveState`; active `auction:lot:permanent_unsold` includes the cleared live state. Waiting-player retirement deliberately omits that state so another clock is preserved.
 - Snapshots expose `undoAction` and `lastUndoVersion` alongside monotonic `version`. Optional `liveState.timerTotalSeconds` is per-lot; older lots fall back to configured duration.
 - Room events: `auction:action:recorded`, `auction:action:undone`, and `auction:lot:time:extended`; all command cascade events carry their command revision. The extension carries player ID, seconds, status and authoritative live state, and restarts/stops the publisher clock according to LIVE/PAUSED status.
 - Optional `cricHeroesUrl` on Player create/update and player-registration submission; public player projections include it.
@@ -108,7 +134,7 @@ Scene labels are isolated below interactive HUD controls, and drawers/dock are s
 
 ## Integrity and deployment
 
-**MongoDB replica-set/sharded transactions are required**, as they already are for bidding. A standalone MongoDB cannot support this implementation. No destructive data migration or journal backfill is performed. Deploy the new models/indexes through the repository's normal Mongoose index-management process, including the action-history index, the unique action-change index, and the new **unique partial `(auctionId, commandId)` index** on action headers. The latter is required for concurrent extension deduplication; legacy headers without a command ID do not need backfilling. Take the normal database backup before rollout. Back up/retain `AuctionAction` and `AuctionActionChange` together; deleting journal images while keeping an active head would invalidate undo.
+**MongoDB replica-set/sharded transactions are required**, as they already are for bidding. A standalone MongoDB cannot support this implementation. **This release requires a targeted unsold-pass metadata/index migration**, including for an empty production database. Follow [UNSOLD_PASSES_MIGRATION.md](UNSOLD_PASSES_MIGRATION.md): stop every auction writer, back up, dry-run, apply, verify, and deploy backend/frontend together. Production startup refuses missing/incompatible pass constraints or the recognized lifetime-unique legacy unsold index. Do not use `syncIndexes` or a broad `dropIndexes`. No financial data or journal history is rewritten. Retain the existing action-history index, unique action-change index, and **unique partial `(auctionId, commandId)` index** on action headers. The latter is required for concurrent extension deduplication; legacy headers without a command ID do not need backfilling. Take the normal database backup before rollout. Back up/retain `AuctionAction` and `AuctionActionChange` together; deleting journal images while keeping an active head would invalidate undo.
 
 Every command rebuilds authorization within a transaction and writes the Auction as a serialization fence. Pre/post-images are field-scoped and stored per resource in `AuctionActionChange`, not as a growing embedded undo stack. Audit headers are separate; profiles/user credentials and live presence are excluded. All post-images are validated before any compensation writes, wallet invariants remain enforced, and transport revisions never rewind.
 
@@ -122,6 +148,6 @@ During development, REST and Socket.IO default to same-origin URLs proxied by Vi
 
 Repeatable commands are in `client/TESTING.md`. The backend feature suite uses a real ephemeral MongoDB replica set, not mocked transactions; socket tests use an actual HTTP/Socket.IO server and anonymous client. Tests cover financial compensation, stale/repeated confirmation, simultaneous bids/undo, transaction abort/no leaked events, automatic completion/unsold-round reversal, running-round eligibility, profile validation/persistence/clearing, public reads/denied mutations, publisher/timer cleanup and client reconciliation.
 
-The final follow-up passes **125 frontend tests, 69 backend tests, five real-Redis integration checks**, hooks lint, the 23-event socket contract, syntax/diff checks and a production PWA build. Full-project typecheck still fails with the same **228 pre-existing diagnostics**; bundle-size warnings also remain.
+The repeat-pass validation and browser acceptance results are recorded in `client/TESTING.md`. Full-project typecheck has a **228-diagnostic pre-existing baseline**; a successful Vite build is not proof of typecheck cleanliness. Bundle-size warnings and the distributed-system limits above still apply.
 
 One-off Chromium checks additionally exercise real organizer/owner/anonymous browser sessions against that disposable API: arbitrary player selection, UI bidding, bid and sale undo across tabs, private-route redirects, public read pages, guest 3D viewing, and confirmation portal/focus continuity across native fullscreen exit. The follow-up targeted harness exits successfully with eight checks and no uncaught exceptions: real expired-lot rejection/extension/bidding, paused extensions, both organizer views, 320px/390px settings and camera controls, native WebGL context recovery without socket loss, actual HTTP 429 backoff with continuing socket updates, and no-WebGL fallback. This is not a production capacity/failover certification. Temporary databases, tokens, browsers, screenshots and demo data are not shipped.

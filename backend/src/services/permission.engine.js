@@ -2,7 +2,7 @@ import { AppError } from '../../src/utils/helpers.js';
 import { CAPABILITIES } from './identity.resolver.js';
 
 export const AUCTION_PERMISSIONS = CAPABILITIES;
-export const POLICY_VERSION = 5; // organizer-only, audited lot-time extensions
+export const POLICY_VERSION = 6; // numbered unsold passes and atomic active-lot retirement
 
 const STATES = Object.freeze({ DRAFT: 'DRAFT', SCHEDULED: 'SCHEDULED', LIVE: 'LIVE', PAUSED: 'PAUSED', COMPLETED: 'COMPLETED' });
 

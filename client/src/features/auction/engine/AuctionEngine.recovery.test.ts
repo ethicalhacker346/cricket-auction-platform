@@ -304,3 +304,60 @@ describe('bounded live traffic and authoritative lot-time commands', () => {
     expect(rest).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('numbered unsold passes over live transport', () => {
+  const first = { _id: 'pass-1', auctionId: auction.id, name: 'Unsold Round-1', type: 'unsold', category: 'UNSOLD', order: 2, status: 'ACTIVE', playerIds: ['player-a'], unsoldPass: 1 };
+  const next = { ...first, _id: 'pass-2', name: 'Unsold Round-2', order: 3, status: 'PENDING', unsoldPass: 2 };
+  const idle = (version: number) => ({ ...rawLive(version, null), currentRoundId: 'pass-2', remainingTimeSeconds: 0 });
+  const seed = async () => {
+    const fetch = vi.spyOn(auctionApi, 'getSnapshot').mockResolvedValue(makeSnapshot({ version: 4, currentRoundId: 'pass-1',
+      players: [makePlayer({ auctionRoundId: 'pass-1' })],
+      rounds: [{ ...first, id: first._id, status: 'active', type: 'unsold' }],
+    }));
+    await engine.connect(auction.id, auction.tournamentId);
+    return fetch;
+  };
+  it('exposes the reset next-pass queue and frozen historical totals immediately without another REST read', async () => {
+    const fetch = await seed();
+    send('auction:lot:unsold', { auctionId: auction.id, version: 5, tournamentPlayerId: 'player-a', roundId: 'pass-1', liveState: idle(5) });
+    const verdict = engine.getSnapshot().unsoldEvent;
+    send('auction:round:completed', { auctionId: auction.id, version: 5, round: { ...first, status: 'COMPLETED', outcomeSummary: { sold: 0, unsold: 1, permanentUnsold: 0 } } });
+    send('auction:round:added', { auctionId: auction.id, version: 5, round: next, relistedPlayerIds: ['player-a'], liveState: idle(5) });
+    const state = engine.getSnapshot();
+    expect(state.currentRoundId).toBe('pass-2');
+    expect(state.players[0]).toMatchObject({ status: 'pending', auctionRoundId: 'pass-2' });
+    expect(state.rounds[0].outcomeSummary).toEqual({ sold: 0, unsold: 1, permanentUnsold: 0 });
+    expect(state.rounds[1]).toMatchObject({ unsoldPass: 2, status: 'pending' });
+    expect(state.unsoldEvent).toEqual(verdict);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('handles a same-revision relist before its verdict, and duplicate verdicts, without losing the new queue', async () => {
+    await seed();
+    send('auction:round:added', { auctionId: auction.id, version: 5, round: next, relistedPlayerIds: ['player-a'], liveState: idle(5) });
+    const verdict = { auctionId: auction.id, version: 5, tournamentPlayerId: 'player-a', roundId: 'pass-1', liveState: idle(5) };
+    send('auction:lot:unsold', verdict);
+    const once = engine.getSnapshot().unsoldEvent;
+    send('auction:lot:unsold', verdict);
+    expect(engine.getSnapshot().players[0]).toMatchObject({ status: 'pending', auctionRoundId: 'pass-2' });
+    expect(engine.getSnapshot().unsoldEvent).toEqual(once);
+    expect(once).not.toBeNull();
+  });
+  it('sends reviewed pass/revision fences and rejects an old confirmation for the same player in a later pass', async () => {
+    await seed();
+    const mutate = vi.spyOn(liveAuctionApi, 'markUnsold').mockResolvedValue({});
+    const reviewed = { tournamentPlayerId: 'player-a', roundId: 'pass-1', expectedVersion: 4 };
+    expect((await engine.forceUnsold(reviewed)).success).toBe(true);
+    expect(mutate).toHaveBeenCalledWith(auction.id, reviewed);
+    send('auction:lot:opened', { auctionId: auction.id, version: 6, tournamentPlayerId: 'player-a', roundId: 'pass-2', liveState: { ...rawLive(6), currentRoundId: 'pass-2' } });
+    expect((await engine.forceUnsold(reviewed)).success).toBe(false);
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+  it('closes the active player and clock immediately on Permanent Unsold, but pending-player retirement does not rewind another clock', async () => {
+    await seed();
+    send('auction:lot:permanent_unsold', { auctionId: auction.id, version: 5, tournamentPlayerId: 'waiting', roundId: 'pass-1' });
+    expect(engine.getSnapshot()).toMatchObject({ currentPlayerId: 'player-a', timer: { remaining: 30, isRunning: true } });
+    send('auction:lot:permanent_unsold', { auctionId: auction.id, version: 6, tournamentPlayerId: 'player-a', roundId: 'pass-1', liveState: idle(6) });
+    expect(engine.getSnapshot()).toMatchObject({ currentPlayerId: null, currentBid: { amount: 0, teamId: null }, timer: { remaining: 0, isRunning: false } });
+    expect(engine.getSnapshot().players[0].status).toBe('permanent_unsold');
+  });
+});

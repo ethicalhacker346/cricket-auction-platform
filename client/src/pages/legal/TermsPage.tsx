@@ -47,7 +47,7 @@ const DEFINITIONS = [
   { term: "Bid", def: "A monetary offer placed by a Franchise Owner on an open Lot, subject to increment and timer rules." },
   { term: "Purse", def: "The virtual budget allocated to each team, defined by tournament.defaultPurse." },
   { term: "Hammer", def: "The Organizer's action of settling a Lot as SOLD or UNSOLD, finalizing the transaction." },
-  { term: "Unsold Round", def: "An automatically generated round containing players with lotOutcome UNSOLD from normal rounds." },
+  { term: "Unsold Round", def: "An engine-generated numbered pass of approved deferred players, offered once per pass. Force Unsold defers a player to a successor pass; Permanent Unsold excludes them from later passes." },
 ];
 
 export default function TermsPage() {
@@ -295,13 +295,13 @@ export default function TermsPage() {
               <div className="rounded-none bg-slate-950 p-6 ring-1 ring-white/5">
                 <h3 className="text-sm font-bold text-white">Round Types</h3>
                 <p className="mt-2 text-xs leading-relaxed text-slate-400">
-                  <strong className="text-white">Normal Rounds</strong> cover the initial player pool. When all normal rounds complete, the system auto-generates an <strong className="text-white">Unsold Round</strong> for players with lotOutcome UNSOLD. Players in unsold rounds reset to NOT_LISTED and can be re-bid.
+                  <strong className="text-white">Normal Rounds</strong> cover the initial player pool. After all nonempty normal rounds are processed, approved unsold players form <strong className="text-white">Unsold Round-1</strong>. A player is offered once per pass. Force Unsold defers them to Unsold Round-2, Unsold Round-3 and later passes as necessary; Permanent Unsold explicitly excludes them from later passes. Both decisions release any winning reservation. Players deferred to a successor reset to NOT_LISTED. Sold and permanently unsold players are not relisted. Organizer undo can reverse the latest recorded decision and its automatic consequences.
                 </p>
               </div>
               <div className="rounded-none bg-slate-950 p-6 ring-1 ring-white/5">
                 <h3 className="text-sm font-bold text-white">Completion Invariant</h3>
                 <p className="mt-2 text-xs leading-relaxed text-slate-400">
-                  An auction cannot be marked COMPLETED until every approved player has a terminal state: SOLD or PERMANENT_UNSOLD. The system enforces this at the database level.
+                  An auction cannot be marked COMPLETED until every approved player has a terminal state: SOLD or PERMANENT_UNSOLD. Transactional auction commands enforce this completion guard.
                 </p>
               </div>
             </div>

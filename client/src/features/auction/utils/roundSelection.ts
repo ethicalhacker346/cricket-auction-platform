@@ -13,7 +13,10 @@ export function eligibleRoundPlayers(round: AuctionRound, players: Player[]): Pl
   const byId = new Map(players.map((player) => [player.id, player]));
   return round.playerIds.flatMap((id) => {
     const player = byId.get(id);
-    const eligible = player && (player.status === 'pending' || (round.type === 'unsold' && player.status === 'unsold'));
+    // UNSOLD means this pass has already offered the player. Only the next
+    // generated pass resets that player to pending; never loop within a pass.
+    const eligible = player && player.status === 'pending'
+      && (round.type !== 'unsold' || !player.auctionRoundId || player.auctionRoundId === round.id);
     return eligible ? [player] : [];
   });
 }

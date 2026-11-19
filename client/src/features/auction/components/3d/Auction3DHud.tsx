@@ -1,3 +1,4 @@
+import { roundProgress } from "../../utils/roundProgress";
 import { CricHeroesLink } from "@/components/player/CricHeroesLink";
 import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -415,9 +416,7 @@ function QueueDrawer({
         <h3 className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Round map</h3>
         <div className="space-y-2">
           {[...rounds].sort((a, b) => a.order - b.order).map((round) => {
-            const roundPlayers = round.playerIds.map((id) => playerById.get(id)).filter((player): player is Player => Boolean(player));
-            const settled = roundPlayers.filter((player) => player.status === "sold" || player.status === "permanent_unsold").length;
-            const progress = roundPlayers.length > 0 ? (settled / roundPlayers.length) * 100 : 0;
+            const progress = roundProgress(round, playerById);
             return (
               <div key={round.id} className="rounded-2xl border border-white/7 bg-white/[0.025] p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -425,9 +424,9 @@ function QueueDrawer({
                   <span className="text-[8px] font-black uppercase text-slate-500">{round.status}</span>
                 </div>
                 <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/8">
-                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${progress}%` }} />
+                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${progress.percent}%` }} />
                 </div>
-                <p className="mt-1.5 text-[9px] text-slate-600">{settled}/{roundPlayers.length} settled</p>
+                <p className="mt-1.5 text-[9px] text-slate-600">{progress.processed}/{progress.total} processed this pass</p>
               </div>
             );
           })}

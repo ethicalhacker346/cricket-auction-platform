@@ -14,7 +14,7 @@ const AUCTION_FIELDS = [
 const SCOPES = Object.freeze({
   Auction: AUCTION_FIELDS,
   Tournament: ['status'],
-  AuctionRound: ['auctionId', 'name', 'order', 'type', 'category', 'playerIds', 'status', 'startedAt', 'completedAt', 'createdAt'],
+  AuctionRound: ['auctionId', 'name', 'order', 'type', 'category', 'playerIds', 'unsoldPass', 'outcomeSummary', 'status', 'startedAt', 'completedAt', 'createdAt'],
   TournamentPlayer: ['lotOutcome', 'auctionRoundId', 'isSold', 'soldToTeamId', 'soldPrice', 'soldAt', 'permanentUnsoldAt', 'permanentUnsoldBy'],
   TournamentTeam: ['wallet', 'roster'],
   Bid: ['auctionId', 'roundId', 'tournamentTeamId', 'tournamentPlayerId', 'amount', 'status', 'placedAt', 'createdAt'],

@@ -15,7 +15,7 @@ npm run typecheck
 - **`lint:hooks`** checks hook ordering in every `src/**/*.ts` and `.tsx` file,
   including hooks hidden below early returns. It uses a dedicated configuration
   because the legacy default ESLint configuration only includes JavaScript.
-- **`test`** runs **125 tests across 18 files**. `test:watch` runs them
+- **`test`** runs **145 tests across 20 files**. `test:watch` runs them
   interactively. No MongoDB, backend server, network access or login is required.
   API/socket boundaries and WebAudio devices are controlled; React, Framer
   Motion, the live store and engine reconciliation are real.
@@ -24,8 +24,8 @@ npm run typecheck
   `.env` NODE_ENV and large-chunk warnings remain.
 - **`typecheck`** invokes the installed TypeScript compiler directly. It still
   **fails**: the earlier feature baseline had 290 diagnostics, and both the
-  committed feature state and this resilience follow-up have **228**. The
-  follow-up adds no new semantic diagnostics (comparison ignores line/column
+  committed feature state and this repeat-pass release have **228**. This
+  release adds no new semantic diagnostics (comparison ignores line/column
   shifts and the ordering of equivalent union members in compiler messages).
   This is not a fully typecheck-clean repository.
   Do not mistake filtered compiler output or a successful Vite build for a
@@ -40,7 +40,14 @@ npm run typecheck
   portal lifecycle, sound cancellation/mute, unavailable audio/storage and
   StrictMode resource cleanup.
 - Running-round selection and invalidated selections, preserved pending queue,
-  unsold-round eligibility, stale-action confirmation and pending undo guards.
+  once-per-pass unsold eligibility, successor reset/assignment, generated-pass
+  deletion guards, stale-action confirmation and pending undo guards.
+- Distinct Force Unsold/Permanent Unsold confirmations in the shared controls,
+  reviewed player/pass/version request bodies, stale bid/round/connection
+  confirmations, paused permanent retirement and explicit legacy continuation.
+- Relist-before-verdict transport ordering, duplicate unsold verdicts, immediate
+  active retirement/clock clearing, unrelated queued-retirement clock preservation,
+  frozen historical aggregate progress and honest legacy-summary fallback.
 - Undo arriving before a delayed bid response, duplicate HTTP/socket undo,
   out-of-order revisions, cross-auction response fencing, reconnect room joins,
   completed-auction recovery, silent audio correction and genuine later round
@@ -77,7 +84,7 @@ node backend/scripts/verify-socket-contract.mjs
 git diff --check
 ```
 
-The backend has **69 tests across 5 suites**, including real multi-document
+The backend has **90 tests across 6 suites**, including real multi-document
 transactions and actual anonymous Socket.IO connections. `tests/helpers.js`
 starts a one-node **replica set**, initializes model indexes, and tears down the
 process after each suite. A standalone MongoDB is not a valid substitute for
@@ -122,6 +129,24 @@ forged identities/untrusted forwarding headers, development allowances, real
 bid-burst isolation, bounded outage fallback, half-open Redis circuit breaking,
 socket leases, and bounded native-Redis startup/publish-failure cleanup.
 
+`auction-unsold-passes.test.js` adds **19 replica-set regressions** for three
+numbered passes, no same-pass reoffer, sold/permanent exclusions, no empty passes,
+normal-phase ordering/locking, once-only concurrent successor creation,
+active/paused/waiting retirement, bid/retirement races, reservation restoration,
+multi-player cascade undo, audit rollback without publications, target/version
+conflicts, REST access/validation, unique partial constraints and explicit legacy
+advancement. Migration cases cover read-only dry-run, apply/idempotency, metadata-
+only changes, custom-index preservation and invalid-data/index-name preflight
+without partial backfills. Publisher regressions verify active vs unrelated
+clock behavior and relist/live-state payloads at the correct command revision.
+
+The actual `migrate-unsold-passes.mjs` **CLI** was additionally smoke-tested on a
+separate disposable replica set: default dry-run changed nothing; `--apply`
+backfilled metadata, replaced the precise old constraint and passed readiness; a
+second apply was a no-op. This does **not** migrate the real deployment. Follow
+[`UNSOLD_PASSES_MIGRATION.md`](../docs/UNSOLD_PASSES_MIGRATION.md) with all writers
+stopped and a backup before production rollout.
+
 The static socket-contract gate verifies all emitted domain events are handled,
 all **23** client room-event subscriptions have server publishers, and client
 join/leave/heartbeat commands have handlers. Syntax checks can also be run with:
@@ -149,12 +174,13 @@ publishing. These checks do not certify infrastructure failover, distributed
 socket admission, or production audience capacity.
 
 After building, inspect the generated `dist/sw.js`: it must not include an
-`AuctionArena3D-*.js` precache entry. The final build has **14 entries / 3602.20
+`AuctionArena3D-*.js` precache entry. The final build has **14 entries / 3612.99
 KiB**, excluding the lazy renderer; `.env` and large-chunk warnings still remain.
 
 ## Real-browser acceptance checks
 
-A one-off Chromium run against a **disposable replica-set API**, with separate
+At the earlier feature checkpoint, a one-off Chromium run against a
+**disposable replica-set API**, with separate
 organizer/owner/anonymous sessions, passed these nine checks:
 
 1. Guests have read-only controls; the owner console resolves canonical IDs.
@@ -173,7 +199,8 @@ organizer/owner/anonymous sessions, passed these nine checks:
 8. A typed undo reason and contained focus survive native 3D fullscreen exit.
 9. No uncaught browser exceptions occur in those flows.
 
-A further targeted Chromium run for this follow-up completed successfully with
+The eight-check traffic/extra-time/graphics Chromium regression run was rerun
+for this release and completed successfully with
 **eight checks and no uncaught browser exceptions**:
 
 1. A real five-second lot expires and an owner bid returns 409; the standard
@@ -192,13 +219,36 @@ A further targeted Chromium run for this follow-up completed successfully with
    accessible standard-room fallback.
 8. No uncaught browser exceptions occur across these flows.
 
-These were disposable-API acceptance runs, not production deployments, load
+A new repeat-pass Chromium acceptance run also **exited successfully with eight
+checks and no uncaught exceptions**, using real organizer/owner/anonymous tabs:
+
+1. Guests and owners have no settlement controls or mutation authority.
+2. An arbitrary normal-round player can be deferred, cannot reopen in the same
+   pass, and joins the automatically generated/broadcast Unsold Round-1.
+3. The standard organizer room shows both labelled unsold choices; a real
+   Force Unsold finishes this attempt without permanent retirement.
+4. A real owner UI bid disables an already-open stale decision; a new reviewed
+   sale uses that owner and the correct purse.
+5. Permanent Unsold excludes the player, the sold player also stays excluded,
+   and Unsold Round-2 contains only the deferred player. Pass-1 summary totals
+   stay frozen after relisting.
+6. Real WebGL 2 organizer drawers keep both labels within 320px/390px layouts;
+   3D Force Unsold creates Unsold Round-3 with the exact numbered name.
+7. UI undo removes a generated successor and restores the paused previous pass.
+   A final active permanent retirement with a bid completes the auction, releases
+   the reservation without spending it, and its undo reopens that same paused
+   lot with the exact winning reservation. No empty fourth pass is generated.
+8. All nine browser settlement requests contain reviewed round/version targets
+   (and player IDs for sold/unsold); all three tabs remain consistent, with no
+   uncaught browser exceptions.
+
+These are disposable-API acceptance runs, not production deployments, load
 benchmarks, or a committed browser CI harness. Native context restoration and
 simulated WebGL unavailability were exercised; real driver/OS/device failure
-matrices were not. Browser-level profile creation/submission, unsold undo and
-final-auction undo were not separately exercised; component/API/engine tests
-cover those behaviors. Temporary browsers, tokens, fixtures and screenshots are
-not shipped. Repeat both acceptance checklists against staging after deployment.
+matrices were not. Browser-level profile creation/submission remains covered by
+component/API tests rather than a separate browser acceptance case. Temporary
+browsers, tokens, fixtures and screenshots are not shipped. Repeat these
+acceptance checklists against staging after the required migration/deployment.
 
 See [`docs/AUCTION_SAFETY_AND_SPECTATORS.md`](../docs/AUCTION_SAFETY_AND_SPECTATORS.md)
 for workflow, API, rollout requirements and distributed-system limits.

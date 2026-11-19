@@ -1,11 +1,12 @@
 import { CricHeroesLink } from "@/components/player/CricHeroesLink";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ListOrdered, Users, Globe2, TrendingUp } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLiveAuction } from "@/features/auction/hooks/index.hook";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
 import { RoundStatusBadge, RoundTypeBadge, RoundCategoryBadge } from "./Badges";
 import { cn } from "@/utils/cn";
+import { roundProgress } from "../utils/roundProgress";
 
 /* ─── Helpers ─── */
 function seedHue(seed: string): number {
@@ -154,6 +155,7 @@ export function PlayerQueue() {
 /* ─── RoundProgress ─── */
 export function RoundProgress() {
   const { rounds, currentRoundId, players } = useLiveAuction();
+  const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
   const sorted = [...rounds].sort((a, b) => a.order - b.order);
   const completedCount = sorted.filter((r) => r.status === "completed").length;
   const totalCount = sorted.length;
@@ -189,16 +191,12 @@ export function RoundProgress() {
         )}
 
         {sorted.map((r) => {
-          const isCurrent = r.id === currentRoundId;
+          const isCurrent = r.id === currentRoundId && r.status !== 'completed';
           const isCompleted = r.status === "completed";
           const isActive = r.status === "active";
 
-          const roundPlayers = players.filter((p) => r.playerIds.includes(p.id));
-          const soldCount = roundPlayers.filter((p) => p.status === "sold").length;
-          const unsoldCount = roundPlayers.filter((p) => p.status === "unsold").length;
-          const permanentunsoldCount = roundPlayers.filter((p) => p.status === "permanent_unsold").length;
-          const pendingCount = roundPlayers.filter((p) => p.status === "pending").length;
-          const totalInRound = r.playerIds.length;
+          const progress = roundProgress(r, playerById);
+          const { sold: soldCount, unsold: unsoldCount, permanentUnsold: permanentunsoldCount, pending: pendingCount, total: totalInRound } = progress;
 
           const soldPct = totalInRound > 0 ? (soldCount / totalInRound) * 100 : 0;
           const unsoldPct = totalInRound > 0 ? (unsoldCount / totalInRound) * 100 : 0;
@@ -253,6 +251,7 @@ export function RoundProgress() {
 
               {totalInRound > 0 && (
                 <div className="mb-1.5 flex h-1.5 w-full gap-px overflow-hidden rounded-full">
+                  {progress.legacy && <div className="h-full w-full bg-emerald-400/40" />}
                   <div
                     className="h-full bg-emerald-500 transition-all duration-500"
                     style={{ width: `${soldPct}%` }}
@@ -277,7 +276,8 @@ export function RoundProgress() {
                   <Users className="h-2.5 w-2.5" />
                   {totalInRound} players
                 </span>
-                <span className="inline-flex items-center gap-2">
+                <span className="inline-flex flex-wrap items-center gap-2">
+                  {progress.legacy && <span>Completed · legacy totals unavailable</span>}
                   {soldCount > 0 && (
                     <span className="inline-flex items-center gap-0.5 text-emerald-400">
                       <TrendingUp className="h-2.5 w-2.5" /> {soldCount}

@@ -223,12 +223,14 @@ export function emitLotPermanentUnsold(auctionId, {
   roundId,
   markedBy,
   version,
+  liveState,
 } = {}) {
   return emitAuctionEvent(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, auctionId, {
     tournamentPlayerId,
     roundId,
     markedBy,
     version,
+    ...(liveState ? { liveState } : {}),
   });
 }
 

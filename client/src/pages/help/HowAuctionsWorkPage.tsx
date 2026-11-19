@@ -108,8 +108,7 @@ function AuctionSimulator() {
       setTimeLeft((t) => {
         if (t <= 1) {
           clearInterval(interval);
-          setStatus("unsold");
-          setLog((l) => [...l, "⏱️ Timer expired. Player unsold."]);
+          setLog((l) => [...l, "⏱️ Timer expired. Waiting for organizer decision or extra time."]);
           return 0;
         }
         return t - 1;
@@ -119,7 +118,7 @@ function AuctionSimulator() {
   }, [status]);
 
   const placeBid = (team: string, amount: number) => {
-    if (status !== "bidding") return;
+    if (status !== "bidding" || timeLeft <= 0) return;
     setHighBid(amount);
     setHighTeam(team);
     setTimeLeft((t) => Math.max(t, 5)); // bidResetSeconds extension
@@ -127,7 +126,7 @@ function AuctionSimulator() {
   };
 
   const settle = (sold: boolean) => {
-    if (status !== "bidding") return;
+    if (status !== "bidding" || (sold && !highTeam)) return;
     setStatus(sold ? "sold" : "unsold");
     setLog((l) => [
       ...l,
@@ -219,7 +218,8 @@ function AuctionSimulator() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => settle(true)}
-                className="rounded-sm bg-indigo-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-500"
+                disabled={!highTeam}
+                className="rounded-sm bg-indigo-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-40"
               >
                 Hammer (Sold)
               </button>
@@ -227,10 +227,12 @@ function AuctionSimulator() {
                 onClick={() => settle(false)}
                 className="rounded-sm bg-slate-800 py-2.5 text-sm font-semibold text-slate-300 transition-colors hover:bg-slate-700"
               >
-                Pass (Unsold)
+                Force Unsold
               </button>
             </div>
           )}
+
+          {status === "bidding" && timeLeft === 0 && <p className="text-xs leading-5 text-amber-300">Time expired. The lot stays open for the organizer&apos;s decision; expiry alone never marks a player sold or unsold.</p>}
 
           {(status === "sold" || status === "unsold") && (
             <div
@@ -257,7 +259,7 @@ function AuctionSimulator() {
             ].map((team) => (
               <button
                 key={team.name}
-                disabled={status !== "bidding"}
+                disabled={status !== "bidding" || timeLeft <= 0}
                 onClick={() => placeBid(team.name, highBid + 50000)}
                 className="flex w-full items-center justify-between rounded-sm bg-slate-900 px-4 py-3 text-left transition-all hover:bg-slate-800 disabled:opacity-30"
               >
@@ -325,12 +327,12 @@ export default function HowAuctionsWorkPage() {
           {
             icon: Users,
             title: "2. The Room",
-            body: "Rounds group players into lots. The organizer opens each lot, starting a live timer. Team owners place bids within the time window. Every new bid extends the timer by the bid-reset duration.",
+            body: "Rounds group players into lots. The organizer opens each lot, starting a live timer. Team owners place bids within the time window. A valid bid near expiry raises the timer to at least the configured bid-reset duration.",
           },
           {
             icon: CheckCircle2,
             title: "3. The Settlement",
-            body: "When the organizer hammers the lot, the highest bid commits from the team's reserved purse. The player joins the roster. Unsold players enter a dedicated unsold round for a second chance.",
+            body: "When the organizer hammers the lot, the highest bid commits from the team's reserved purse. The player joins the roster. Force Unsold defers the player to a later numbered unsold pass. Permanent Unsold explicitly retires them from later passes.",
           },
         ].map((card, i) => (
           <motion.div
@@ -358,7 +360,7 @@ export default function HowAuctionsWorkPage() {
         <h2 className="text-xl font-bold text-slate-900">Round Architecture</h2>
         <p className="mt-2 text-sm text-slate-500">
           Auctions consist of ordered rounds. Normal rounds cover the initial player pool.
-          When normal rounds complete, unsold players automatically generate an unsold round.
+          When all nonempty normal rounds complete, approved unsold players automatically form Unsold Round-1.
         </p>
 
         <div className="mt-8 grid gap-6 md:grid-cols-2">
@@ -370,11 +372,13 @@ export default function HowAuctionsWorkPage() {
             </p>
           </div>
           <div className="border-l-2 border-amber-500 bg-slate-50 p-6">
-            <h3 className="text-sm font-bold text-slate-900">Unsold Round</h3>
+            <h3 className="text-sm font-bold text-slate-900">Numbered Unsold Passes</h3>
             <p className="mt-2 text-xs leading-relaxed text-slate-500">
-              Auto-generated when normal rounds finish with remaining inventory. Players reset to
-              NOT_LISTED state. Teams get a final chance to fill squad gaps. Unsold players here
-              can be marked PERMANENT_UNSOLD by the organizer.
+              Unsold Round-1, Unsold Round-2, Unsold Round-3 and later passes are created only
+              when deferred players remain. Each player is offered once per pass. Force Unsold
+              defers them to the next pass; Permanent Unsold excludes them from all later passes.
+              Both release any winning reservation. The auction ends only when every approved
+              player is SOLD or PERMANENT_UNSOLD.
             </p>
           </div>
         </div>

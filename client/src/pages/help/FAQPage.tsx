@@ -81,11 +81,12 @@ const FAQS: FAQItem[] = [
     a: (
       <div className="space-y-3 text-sm text-slate-400">
         <p>
-          When all <strong className="text-slate-600">normal rounds</strong> complete, the system automatically evaluates unsold inventory. If any players remain with <code className="rounded-sm bg-slate-800 px-1 py-0.5 font-mono text-slate-300">lotOutcome: UNSOLD</code>, an unsold round is auto-generated.
+          After all nonempty <strong className="text-slate-600">normal rounds</strong> complete, approved unsold players form <strong className="text-amber-400">Unsold Round-1</strong>. Each player can be offered once in that pass. The organizer can select any waiting player in the running round.
         </p>
         <p>
-          These players reset to <code className="rounded-sm bg-slate-800 px-1 py-0.5 font-mono text-slate-300">NOT_LISTED</code> and can be re-opened for bidding. If they go unsold again, the organizer may mark them <code className="rounded-sm bg-slate-800 px-1 py-0.5 font-mono text-slate-300">PERMANENT_UNSOLD</code> to close the auction.
+          <strong className="text-amber-400">Force Unsold</strong> finishes the current attempt and defers the player. Once the pass is processed, deferred players reset to NOT_LISTED in <strong className="text-amber-400">Unsold Round-2</strong>, then Unsold Round-3 and later passes as needed. <strong className="text-rose-400">Permanent Unsold</strong> explicitly retires the player from all later passes. Both choices release any winning reservation without spending the team&apos;s purse.
         </p>
+        <p>The auction completes only when every approved player is SOLD or PERMANENT_UNSOLD. These controls and reviewed confirmations are shared by the standard and 3D organizer rooms. Organizer undo can reverse the latest recorded decision and its automatic pass changes.</p>
       </div>
     ),
   },

@@ -211,6 +211,7 @@ describe('Cricket Auction Platform API', () => {
     await request(app)
       .post(`/api/v1/auctions/${auctionId}/lot/sold`)
       .set(authHeader(organizerToken))
+      .send({ tournamentPlayerId: playerRegistrationId, roundId })
       .expect(200);
 
     const liveRes = await request(app)
