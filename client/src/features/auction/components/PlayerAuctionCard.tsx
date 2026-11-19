@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { Globe2, Gavel, XCircle, Clock, TrendingUp, Shield } from "lucide-react";
+import { Globe2, Gavel, XCircle, TrendingUp, Shield } from "lucide-react";
 import type { Player } from "@/features/auction/types/index.types";
 import { ROLE_ICONS } from "@/features/auction/constants/index.constants";
 import { formatLakhs, initials } from "@/features/auction/utils/index.utils";
@@ -10,9 +10,10 @@ import { cn } from "@/utils/cn";
    IMAGE FALLBACK HOOK
    ============================================================================= */
 function useImageFallback(src?: string) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  return { showImage: Boolean(src) && !failed, onError: () => setFailed(true) };
+  // Associate a failure with its URL, not the next player's image. This
+  // also avoids an effect/state reset on every player or empty-lot change.
+  const [failedSrc, setFailedSrc] = useState<string>();
+  return { showImage: Boolean(src) && failedSrc !== src, onError: () => setFailedSrc(src) };
 }
 
 /* =============================================================================
@@ -219,6 +220,10 @@ export function PlayerAuctionCard({
   compact?: boolean;
   nextBidAmount?: number;
 }) {
+  // Always call hooks, including when the lot is empty. Returning before
+  // this hook changes React's hook/static-effect flags as lots open/close.
+  const { showImage, onError } = useImageFallback(player?.profileImage);
+
   /* ── Empty state ──
      Deliberately NOT `h-full`: this card sits in a CSS grid column that
      uses the default `stretch` alignment, so `h-full` here used to make
@@ -250,7 +255,6 @@ export function PlayerAuctionCard({
 
   /* ── Derived state ── */
   const hue = seedHue(player.avatarSeed || player.id || player.name);
-  const { showImage, onError } = useImageFallback(player.profileImage);
   const isLive = player.status === "current";
   const isSold = player.status === "sold";
   const isUnsold = player.status === "unsold";

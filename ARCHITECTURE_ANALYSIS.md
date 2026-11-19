@@ -755,3 +755,115 @@ a crisp 1-second linear beat so depletion is legible rather than drifty.
 **Verification:** scoped `tsc --noEmit` clean on all touched files (0 new
 errors; repo-wide count unchanged), `vite build` green (1m15s),
 `verify-socket-contract.mjs` 20/20 green.
+
+---
+
+# Part 5 — Runtime UI lifecycle repair and regression gates (2026-11-18)
+
+## R5.1 — Root causes, not React internals
+
+The `Expected static flag was missing` warning was caused by
+`PlayerAuctionCard` returning its empty state **before** calling
+`useImageFallback`. Empty → populated → empty lots therefore changed the
+component's hook/static-effect layout. The hook now runs unconditionally;
+image failures are associated with their URL rather than reset in an effect.
+The same audit found and fixed a callback hook below the authorization guard
+in `FranchiseForm`. `AuctionRoundsPage` now uses the canonical `AuctionRoutes`
+helper instead of a misleadingly hook-named, conditionally invoked local
+route builder.
+
+The verdict rewrite had also broken its public contract: all three auction
+pages still mounted `<SoldUnsoldAnimation />`, but that export had become a
+presentational component requiring player data and an optional close callback.
+It consequently had neither a live event lifecycle nor a functioning dismiss
+operation. Separately, `controls.start()` was invoked from a ref callback
+before Framer Motion's controls were mounted. Real DOM tests reproduced that
+exception; the entrance is now declarative.
+
+## R5.2 — One new event, one bounded reveal
+
+`useAuctionVerdict` subscribes to the existing store without bootstrapping
+another connection. It seeds its sequence baseline at mount, chooses the
+newest sold/unsold event using the engine's shared sequence, captures immutable
+presentation data, and ignores repeated/cloned snapshots. Missing player data
+can arrive after the event without producing a blank overlay. Opening another
+lot (including re-listing the same player), changing context, or resetting the
+engine dismisses the old reveal. Event-qualified dismiss callbacks cannot
+close a newer event.
+
+The restored no-props `SoldUnsoldAnimation` host is memoized to isolate the
+animation tree from the page's 250ms clock updates. Its strict view requires
+`onClose`; cross, Escape, backdrop, and the 4200ms SOLD / 3000ms UNSOLD deadline
+share an idempotent close path. Callback identity changes do not extend that
+deadline. Presence/exit is owned by the connected host, not an always-mounted
+inner `AnimatePresence`.
+
+REST reconciliation now compares only known players from the same auction.
+Historical SOLD/UNSOLD entries in a first snapshot are baselines, not live
+verdicts. Subsequent genuine transitions still emit exactly once.
+
+## R5.3 — Modal, fullscreen and mobile behavior
+
+A stable portal escapes page transforms/stacking contexts. Its container moves
+into the native fullscreen element without remounting the reveal, replaying
+audio, or restarting the deadline. Dismiss gets initial focus; Tab/focus remain
+inside the dialog; close/exit/unmount restore prior focus and the exact prior
+body overflow. Exiting content is inert and no longer intercepts pointers.
+
+Controls have 44px touch targets and visible focus rings. Long team names wrap,
+prices remain together, broken logos fall back to initials, and the countdown
+is visible. Motion preferences suppress decorative particles/ticker effects.
+Team tints use `color-mix`: `mapFranchise` generates `hsl()` colors, so appending
+hex alpha suffixes (such as `hsl(...)44`) was invalid CSS. Amounts now use the
+existing shared currency formatter rather than a less precise duplicate.
+
+## R5.4 — Audio is owned and released
+
+The previous `4029b89` correction targets gain automation at `.gain` AudioParams.
+This patch adds score/announcement cleanup on close, mute, exit and unmount,
+including graph disconnection and utterance-specific speech cancellation.
+Unavailable WebAudio still degrades to a usable, dismissible visual reveal;
+unsupported reverb falls back to a dry score.
+
+Mute is synchronized between the reveal and the mounted manager, both in the
+same document and across tabs. Corrupt or unavailable storage cannot crash the
+manager or prevent an in-session mute. `useAuctionSounds` creates its manager
+inside an effect: StrictMode's setup → cleanup → setup now leaves exactly one
+live manager instead of a leaked render-time instance and a destroyed ref.
+Destroy is idempotent and removes gesture, event-bus, preference and store
+subscriptions; a later click cannot resurrect a destroyed context.
+
+## R5.5 — Verification and correction to earlier claims
+
+The earlier scoped-typecheck claim missed errors in **callers**: three missing
+verdict-prop diagnostics came from the earlier rewrite, not an unrelated
+baseline. Those three errors and an unused import are fixed here. The real
+TypeScript **5.9.3** compiler reports **294 → 290 diagnostics, zero newly added**.
+The remaining repo-wide diagnostics are unchanged; `npm run typecheck` still
+correctly exits nonzero. The repository is **not** being described as fully
+typecheck-clean.
+
+Verified in this patch:
+
+- `npm run lint:hooks`: passes across **all** client TypeScript components.
+- `npm test`: **37/37 tests across 6 files**, using real React 19 and Framer
+  Motion, StrictMode, deterministic clocks, strict WebAudio stand-ins, store
+  integration and the engine's public connect/reconcile flow. A separate
+  real-timer animation test waits for the entered overlay to be physically
+  removed after exit. Unexpected React console errors fail the suite, so an
+  error boundary silently returning null cannot make a test pass.
+- `npm run build`: production/PWA build succeeds (51.64s); existing large-chunk
+  warnings remain.
+- `node backend/scripts/verify-socket-contract.mjs`: all 20 server event
+  subscriptions and both client room commands pass.
+- One-off real Chromium UI smoke checks: repeated empty/player transitions,
+  actual cross clicks and touch taps, original auto-dismiss deadlines while a
+  parent re-renders with cloned 250ms snapshots, Escape/backdrop, focus/scroll
+  restoration, real WebAudio unmute, native fullscreen transitions, 390px mobile
+  layouts with long team names/HSL tints, and reduced-motion mode. No uncaught
+  browser exceptions or React console errors. These use the real components
+  with fixture state, **not** an authenticated production-backend session.
+
+Test dependencies are dev-only. Temporary browser binaries, screenshots and
+fixture pages are not shipped or committed. See `client/TESTING.md` for the
+repeatable checks.

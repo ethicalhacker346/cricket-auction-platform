@@ -1,5 +1,6 @@
 import { auctionEventBus } from "./EventBus";
 import type { AuctionSoundEvent } from "./types";
+import { getAuctionAudioMuted, setAuctionAudioMuted, subscribeAuctionAudioMuted } from "./audioPreference";
 
 /**
  * AuctionAudioManager — fully synthesized, world-class auction sound engine.
@@ -24,8 +25,6 @@ interface Options {
   muted?: boolean;
 }
 
-const MUTE_KEY = "auction_audio_muted";
-
 export class AuctionAudioManager {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -36,6 +35,8 @@ export class AuctionAudioManager {
   private master: number;
   private _muted: boolean;
   private unlocked = false;
+  private destroyed = false;
+  private unsubscribeMute: (() => void) | null = null;
   private recent = new Map<string, number>();
   private unsub: (() => void) | null = null;
   private timerLastSecond = -1;
@@ -43,32 +44,45 @@ export class AuctionAudioManager {
 
   constructor(options: Options = {}) {
     this.master = options.masterVolume ?? 0.85;
-    this._muted =
-      options.muted ??
-      (typeof localStorage !== "undefined" &&
-        JSON.parse(localStorage.getItem(MUTE_KEY) ?? "false"));
+    this._muted = options.muted ?? getAuctionAudioMuted();
+    this.unsubscribeMute = subscribeAuctionAudioMuted(() => this.applyMuted(getAuctionAudioMuted()));
 
-    const unlock = () => {
-      if (this.unlocked) return;
-      this.unlocked = true;
-      this.ensureContext();
-      if (this.ctx?.state === "suspended") void this.ctx.resume();
-      document.removeEventListener("click", unlock);
-      document.removeEventListener("touchstart", unlock);
-      document.removeEventListener("keydown", unlock);
-    };
     if (typeof document !== "undefined") {
-      document.addEventListener("click", unlock);
-      document.addEventListener("touchstart", unlock);
-      document.addEventListener("keydown", unlock);
+      document.addEventListener("click", this.unlock);
+      document.addEventListener("touchstart", this.unlock);
+      document.addEventListener("keydown", this.unlock);
     }
-
     this.unsub = auctionEventBus.on("*", (e) => this.onEvent(e));
+  }
+
+  private unlock = () => {
+    if (this.destroyed || this.unlocked) return;
+    try {
+      const ctx = this.ensureContext();
+      if (!ctx) return;
+      const finishUnlock = () => {
+        if (this.destroyed || ctx.state !== "running") return;
+        this.unlocked = true;
+        this.removeUnlockListeners();
+      };
+      if (ctx.state === "suspended") void ctx.resume().then(finishUnlock).catch(() => {});
+      else finishUnlock();
+    } catch (error) {
+      console.warn("[AuctionAudioManager] audio unlock unavailable:", error);
+    }
+  };
+
+  private removeUnlockListeners() {
+    if (typeof document === "undefined") return;
+    document.removeEventListener("click", this.unlock);
+    document.removeEventListener("touchstart", this.unlock);
+    document.removeEventListener("keydown", this.unlock);
   }
 
   /* ───────────────────────────── graph ───────────────────────────── */
 
   private ensureContext(): AudioContext | null {
+    if (this.destroyed) return null;
     if (this.ctx) return this.ctx;
     if (typeof window === "undefined") return null;
     const Ctor = window.AudioContext || (window as any).webkitAudioContext;
@@ -350,7 +364,7 @@ export class AuctionAudioManager {
   /* ───────────────────────── event handling ──────────────────────── */
 
   private onEvent(event: AuctionSoundEvent) {
-    if (this._muted) return;
+    if (this.destroyed || this._muted) return;
 
     // Dedupe events that fire twice within 50ms (socket + snapshot paths
     // can deliver the same domain moment twice).
@@ -405,6 +419,7 @@ export class AuctionAudioManager {
    * seconds and plays a closing buzzer when the clock runs out.
    */
   onTimerUpdate(remaining: number) {
+    if (this.destroyed || !Number.isFinite(remaining)) return;
     // Runs inside a store subscription — must never throw back into it.
     try {
       const sec = Math.ceil(remaining);
@@ -436,13 +451,14 @@ export class AuctionAudioManager {
   /* ─────────────────────────── controls ──────────────────────────── */
 
   setMuted(v: boolean) {
+    if (this.destroyed) return;
+    this.applyMuted(v);
+    setAuctionAudioMuted(v);
+  }
+
+  private applyMuted(v: boolean) {
     this._muted = v;
-    try {
-      localStorage.setItem(MUTE_KEY, JSON.stringify(v));
-    } catch {
-      /* private mode — preference just won't persist */
-    }
-    if (this.masterGain && this.ctx) {
+    if (this.masterGain && this.ctx && this.ctx.state !== "closed") {
       this.masterGain.gain.setTargetAtTime(v ? 0 : this.master, this.ctx.currentTime, 0.03);
     }
   }
@@ -458,7 +474,14 @@ export class AuctionAudioManager {
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.removeUnlockListeners();
+    this.unsubscribeMute?.();
+    this.unsubscribeMute = null;
     this.unsub?.();
+    this.unsub = null;
+    this.recent.clear();
     this.ctx?.close().catch(() => {});
     this.ctx = null;
     this.masterGain = null;

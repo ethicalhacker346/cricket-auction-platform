@@ -796,7 +796,9 @@ export class AuctionEngine {
       const unchanged = snapshot.version === this.lastVersion && this.auction !== null;
       this.lastVersion = snapshot.version;
 
-      const previousPlayers = this.players;
+      // A first snapshot (or a different auction) establishes a baseline;
+      // its historical outcomes are not new live verdicts.
+      const previousPlayers = this.auction?.id === snapshot.auction.id ? this.players : [];
 
       this.auction = snapshot.auction;
       this.rounds = snapshot.rounds;
@@ -882,7 +884,7 @@ export class AuctionEngine {
     const prevById = new Map(previousPlayers.map((p) => [p.id, p]));
     for (const player of this.players) {
       const prev = prevById.get(player.id);
-      if (prev?.status === player.status) continue;
+      if (!prev || prev.status === player.status) continue;
 
       if (player.status === "sold" && player.teamId) {
         this.eventSeq++;
