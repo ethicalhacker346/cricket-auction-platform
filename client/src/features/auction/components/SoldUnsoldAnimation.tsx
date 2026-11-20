@@ -5,6 +5,7 @@ import { Trophy, ArrowRight, Ban, Volume2, VolumeX, X } from "lucide-react";
 import { useAuctionVerdict } from "../hooks/useAuctionVerdict";
 import { setAuctionAudioMuted, useAuctionAudioMuted } from "../audio/audioPreference";
 import { formatLakhs } from "../utils/index.utils";
+import { isTopAuctionModal, lockAuctionScroll, restoreAuctionFocus } from "../utils/modalFocus";
 
 /* ═══════════════════════════════════════════════════════════════════════
    SoldUnsoldAnimation — the auction's moment of truth.
@@ -159,10 +160,10 @@ export const SoldUnsoldAnimationView: React.FC<SoldUnsoldAnimationProps> = ({
   useEffect(() => {
     if (!isPresent) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeButtonRef.current?.focus({ preventScroll: true });
+    const unlockScroll = lockAuctionScroll();
+    if (isTopAuctionModal(dialogRef.current)) closeButtonRef.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
+      if (!isTopAuctionModal(dialogRef.current)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -181,7 +182,7 @@ export const SoldUnsoldAnimationView: React.FC<SoldUnsoldAnimationProps> = ({
       }
     };
     const containFocus = (event: FocusEvent) => {
-      if (event.target instanceof Node && !dialogRef.current?.contains(event.target)) {
+      if (isTopAuctionModal(dialogRef.current) && event.target instanceof Node && !dialogRef.current?.contains(event.target)) {
         closeButtonRef.current?.focus({ preventScroll: true });
       }
     };
@@ -190,8 +191,8 @@ export const SoldUnsoldAnimationView: React.FC<SoldUnsoldAnimationProps> = ({
     return () => {
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("focusin", containFocus);
-      document.body.style.overflow = previousOverflow;
-      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+      unlockScroll();
+      restoreAuctionFocus(previousFocus);
     };
   }, [dismiss, isPresent]);
 
@@ -203,6 +204,8 @@ export const SoldUnsoldAnimationView: React.FC<SoldUnsoldAnimationProps> = ({
   return (
     <motion.div
       ref={dialogRef}
+      tabIndex={-1}
+      data-auction-modal="90"
       className="fixed inset-0 z-[90] flex items-center justify-center overflow-x-hidden overflow-y-auto px-4 py-20"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
