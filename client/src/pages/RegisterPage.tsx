@@ -1,6 +1,6 @@
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Mail, Phone, User } from "lucide-react";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Input } from "@/components/ui/Input";
@@ -16,6 +16,14 @@ import { useRegister } from "@/hooks/useAuth";
 
 export default function RegisterPage() {
   const registerUser = useRegister();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const requestedRole = searchParams.get("role");
+  // URL hints only select the three self-registration roles, never ADMIN.
+  const initialRole =
+    requestedRole === "ORGANIZER" || requestedRole === "FRANCHISE_OWNER"
+      ? requestedRole
+      : "PLAYER";
   const {
     register,
     control,
@@ -30,7 +38,7 @@ export default function RegisterPage() {
       phone: "",
       password: "",
       confirmPassword: "",
-      role: "PLAYER",
+      role: initialRole,
       terms: false,
     },
   });
@@ -50,6 +58,7 @@ export default function RegisterPage() {
           Already have an account?{" "}
           <Link
             to="/login"
+            state={location.state}
             className="font-semibold text-emerald-600 transition-colors hover:text-emerald-700"
           >
             Sign in
@@ -105,6 +114,7 @@ export default function RegisterPage() {
             label="Password"
             placeholder="Create a strong password"
             autoComplete="new-password"
+            maxLength={128}
             error={errors.password?.message}
             {...register("password")}
           />
@@ -115,6 +125,7 @@ export default function RegisterPage() {
           label="Confirm password"
           placeholder="Re-enter your password"
           autoComplete="new-password"
+          maxLength={128}
           error={errors.confirmPassword?.message}
           {...register("confirmPassword")}
         />
@@ -123,17 +134,41 @@ export default function RegisterPage() {
           <label className="flex items-start gap-2.5 text-sm text-slate-600">
             <input
               type="checkbox"
+              aria-invalid={errors.terms ? true : undefined}
+              aria-describedby={errors.terms ? "terms-error" : undefined}
               className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
               {...register("terms")}
             />
             <span>
               I agree to GullyBid's{" "}
-              <span className="font-medium text-emerald-600">Terms of Service</span> and{" "}
-              <span className="font-medium text-emerald-600">Privacy Policy</span>.
+              <Link
+                to="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-emerald-800 underline underline-offset-4"
+              >
+                Terms of Service
+                <span className="sr-only"> (opens in a new tab)</span>
+              </Link>{" "}
+              and{" "}
+              <Link
+                to="/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-emerald-800 underline underline-offset-4"
+              >
+                Privacy Policy
+                <span className="sr-only"> (opens in a new tab)</span>
+              </Link>
+              .
             </span>
           </label>
           {errors.terms?.message && (
-            <p className="mt-1.5 text-xs font-medium text-red-500">
+            <p
+              id="terms-error"
+              role="alert"
+              className="mt-1.5 text-xs font-medium text-red-600"
+            >
               {errors.terms.message}
             </p>
           )}

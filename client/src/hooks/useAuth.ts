@@ -1,5 +1,7 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { authReturnTo } from "@/lib/utils/authRedirect";
 import toast from "react-hot-toast";
 import { authApi } from "@/api/authApi";
 import { useAuthStore } from "@/store/authStore";
@@ -11,14 +13,20 @@ import { ROLE_LABELS } from "@/lib/constants/roles";
 export function useLogin() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
+  const location = useLocation();
 
   return useMutation({
     mutationFn: (payload: LoginPayload) => authApi.login(payload),
     onSuccess: (data) => {
       setAuth(data);
       toast.success(`Welcome back, ${data.user.name.split(" ")[0]}!`);
-      navigate("/dashboard", { replace: true });
-      navigate(data.user.role === "ADMIN" ? "/admin/dashboard" : "/dashboard", { replace: true });
+      navigate(
+        authReturnTo(
+          location.state,
+          data.user.role === "ADMIN" ? "/admin/dashboard" : "/dashboard",
+        ),
+        { replace: true },
+      );
     },
     onError: (error) => {
       toast.error(getErrorMessage(error));
@@ -29,15 +37,16 @@ export function useLogin() {
 export function useRegister() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
+  const location = useLocation();
 
   return useMutation({
     mutationFn: (payload: RegisterPayload) => authApi.register(payload),
     onSuccess: (data) => {
       setAuth(data);
       toast.success(
-        `Account created! You're in as a ${ROLE_LABELS[data.user.role]}.`
+        `Account created! You're in as a ${ROLE_LABELS[data.user.role]}.`,
       );
-      navigate("/dashboard", { replace: true });
+      navigate(authReturnTo(location.state), { replace: true });
     },
     onError: (error) => {
       toast.error(getErrorMessage(error));
@@ -107,16 +116,20 @@ export function useForgotPassword() {
   });
 }
 
+export function isResetToken(token: string | null): token is string {
+  return typeof token === "string" && /^[a-f0-9]{128}$/i.test(token);
+}
+
 export function useVerifyResetToken(token: string | null) {
   return useQuery({
     queryKey: ["auth", "verify-reset-token", token],
     queryFn: () => {
-      if (!token || token.length !== 128) {
+      if (!isResetToken(token)) {
         throw new Error("Invalid reset token format");
       }
       return authApi.verifyResetToken(token);
     },
-    enabled: !!token && token.length === 128,
+    enabled: isResetToken(token),
     retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
@@ -125,13 +138,29 @@ export function useVerifyResetToken(token: string | null) {
 
 export function useResetPassword() {
   const navigate = useNavigate();
+  const redirect = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const active = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      if (redirect.current) clearTimeout(redirect.current);
+    };
+  }, []);
 
   return useMutation({
-    mutationFn: (payload: { token: string; password: string; confirmPassword: string }) =>
-      authApi.resetPassword(payload),
+    mutationFn: (payload: {
+      token: string;
+      password: string;
+      confirmPassword: string;
+    }) => authApi.resetPassword(payload),
     onSuccess: (data) => {
       toast.success(data.message);
-      setTimeout(() => navigate("/login", { replace: true }), 2000);
+      if (redirect.current) clearTimeout(redirect.current);
+      if (active.current)
+        redirect.current = setTimeout(() => {
+          if (active.current) navigate("/login", { replace: true });
+        }, 2000);
     },
     onError: (error) => {
       toast.error(getErrorMessage(error));

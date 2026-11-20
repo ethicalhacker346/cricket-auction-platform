@@ -8,10 +8,11 @@
 
 ## Current implementation checkpoint — 2026-11-18
 
-The review below is chronological. **Parts 1–7 preserve findings and verification
+The review below is chronological. **Parts 1–8 preserve findings and verification
 at their original checkpoints**; historical single-pass diagrams, blocked tests
-and compiler counts are not the current contract. [Part 8](#part-8--numbered-unsold-passes-and-explicit-retirement)
-records the latest implementation and remaining limits.
+and compiler counts are not the current contract. [Part 9](#part-9--public-experience-resilience-and-account-recovery)
+records the latest public-experience work and validation; [Part 8](#part-8--numbered-unsold-passes-and-explicit-retirement)
+remains the auction business contract.
 
 | Requested capability | Current implementation |
 |---|---|
@@ -23,20 +24,30 @@ records the latest implementation and remaining limits.
 | Extra time for one lot | Audited, idempotent LIVE/PAUSED extension of the active player, including after expiry; global rules/next-lot duration unchanged |
 | Immersive room | Device/FPS-adaptive rendering, accessible persistent camera/display controls, bounded stage/queue, renderer-only graphics recovery and standard-room fallback |
 | Repeat unsold passes | Force Unsold defers once per pass; Permanent Unsold retires; numbered successors and frozen pass summaries are created transactionally, with full cascade undo |
+| Public experience | Responsive gold/ink homepage, inline branding, persistent slow/failed-image fallbacks, optimized responsive WebPs, consistent accessible account/help/legal navigation and real 404 |
+| Lean entry and recovery | Lazy workspaces/account pages, shell-only precache, automatic build budgets, explicit bounded/coalesced update recovery; no timed deep-link splash or automatic live-room reload |
+| Account and modal safety | Preserved internal auth returns, best-effort storage, verified/reset password flow, Express 5 parsed-query compatibility and shared top-modal focus/scroll ownership |
 
-**Current verification:** 145 client tests / 20 files; 90 backend tests / 6 suites;
-hooks lint, 23-event socket contract, syntax checks, diff checks and production
-PWA build pass. The backend exits cleanly with open-handle detection and without
-forced termination. Five real-Redis integration checks pass. The targeted
-traffic/graphics browser regression and new repeat-pass acceptance run each
-complete with eight checks and no uncaught exceptions. The actual migration CLI
-passes disposable dry-run/apply/idempotency smoke checks; the real deployment
-has **not** been migrated. A targeted index/metadata migration is required.
-Typecheck still fails with **228 diagnostics**, unchanged by this release
-(and down from 290 before the earlier features); only equivalent union-order
-wording differs. Large-bundle warnings remain, but the lazy 3D renderer is no
-longer PWA-precached for 2D viewers. See [the repeatable checks](client/TESTING.md)
-and the [operator/deployment guide](docs/AUCTION_SAFETY_AND_SPECTATORS.md).
+**Current verification:** 227 client tests / 31 files; 97 backend tests / 8 suites;
+hooks lint, two precache tests, 23-event socket contract, backend syntax, diff
+checks and production PWA build/entry budgets pass. The backend exits cleanly
+with open-handle detection and without forced termination. Refreshed traffic/
+graphics and three-pass auction browser runs each pass eight checks with no
+uncaught exceptions, including financial/cascade undo. Public responsive,
+15-route/automated accessibility, 11-check production resilience, expanded help,
+real disposable-server auth (six checks) and explicit-worker-update checks pass.
+SMTP remains stubbed. Five real-Redis checks and the migration CLI dry-run/
+apply/idempotency smoke checks passed at the prior checkpoint; those unchanged
+subsystems are not presented as newly deployed or capacity-certified.
+The real deployment has **not** been migrated or deployed by this work; the
+numbered-pass rollout still requires its targeted index/metadata migration.
+Typecheck still fails with **209 pre-existing diagnostics**: zero new and 19
+removed versus the accepted 228-diagnostic baseline (earlier: 290). Large-chunk
+warnings remain on lazy features. The PWA now precaches only the public shell:
+15 entries / about 789 KiB, excluding unopened account/auction/admin/3D/export
+routes. See [the repeatable checks](client/TESTING.md),
+[public-experience guide](docs/PUBLIC_EXPERIENCE.md) and
+[auction operator/deployment guide](docs/AUCTION_SAFETY_AND_SPECTATORS.md).
 
 # Part 1 — Initial architecture and findings (historical baseline)
 
@@ -1301,3 +1312,106 @@ not a durable distributed outbox; clocks/high-watermarks remain worker-local
 and presence approximate. Shared MongoDB/Redis and reconciliation remain
 necessary for horizontal deployments. Temporary binaries, credentials, demo
 fixtures, browsers and screenshots are not shipped.
+
+---
+
+# Part 9 — Public experience, resilience and account recovery
+
+## Entry without a timed gate
+
+The former opening animation was a gate in front of every route, not a usable
+homepage. It could finish before its large crest arrived, then redirect guests
+to login. The root is now a real responsive homepage; signed-in visitors retain
+the dashboard destination. Direct account, public-help and shared-auction URLs
+are not delayed by a splash. Unknown public paths get a not-found page instead
+of another sign-in form. Preview bids/players/franchises are explicitly examples,
+not fabricated platform activity or a working auction.
+
+Inline SVG/text keeps the identity independent of image requests. A shared
+`ResilientImage` surface reserves geometry and retains a local fallback until
+an actual successful load, handles cached/failed images and resets on source
+changes. Ten responsive WebPs replace large public-page requests: the original
+1,037,814-byte crest becomes 19,202/51,436-byte alternatives. Auth artwork no
+longer refers to an absent file. Help, legal and creator pages share public
+navigation, skip/focus treatment, reduced-motion behavior and readable mobile
+styles. Existing legal/operator commitments still need owner/legal review;
+this is not certification of mailbox ownership, retention or regulatory claims.
+The technical browser-storage section now accurately describes the existing
+persisted tokens/preferences/caches and no longer describes a removed splash.
+
+## Deferred work and explicit recovery
+
+Account/workspace/admin/auction routes are lazy, not statically imported into
+the homepage. The precache transform follows Vite's static import graph only;
+installing the shell must not eagerly fetch unopened login, auction, chart,
+PDF, motion/socket or Three.js features. Requested hashed assets and public
+WebPs have bounded runtime caches; API/Socket.IO paths are not cached or
+served the navigation shell. This is not an offline auction or command queue.
+
+`npm run build` now enforces public entry/precache leakage and size budgets.
+The entry is about 352 KiB raw / 113 KiB gzip JS (the earlier entry was
+2,073,168 bytes); the shell precache is about 789 KiB across 15 entries, not the
+previous 3612.99 KiB. Deferred 3D/export chunks can still trigger size warnings.
+These figures describe the build graph, not field Web Vitals or device SLOs.
+
+Slow/offline routes and failed lazy imports provide explicit recovery instead
+of an endless blank screen. The initial HTML itself has branded connection
+advice when entry JavaScript fails. Updates never trigger a background reload
+of a live room. An explicit recovery action checks/activates a waiting worker,
+waits for controller change, then reloads once, with a 2.5-second fallback and
+late-event cleanup. Concurrent clicks share that operation. A real-worker
+browser check verifies waiting-without-reload and successful explicit recovery.
+
+## Account and support correctness
+
+Label/error/hint associations, native role radios, accessible password toggles
+and unambiguous busy-button names replace presentation-only controls. Role URL
+hints never select Administrator. Protected pathname/query/hash survives
+sign-in/registration while external redirects and auth-page loops are rejected.
+Blocked/quota-limited storage permits an in-memory session; corrupt persisted
+JSON cannot leave public visitors waiting forever for hydration. The ignored
+Remember me checkbox is replaced by shared-device sign-out guidance, without
+changing the existing token persistence policy.
+
+The reset form waits for positive token verification, rejects malformed links
+locally, bounds passwords to the server's 8–128-character range and cancels a
+pending success redirect on unmount. Real endpoint checks exposed three older
+failures: Express 5's getter-only `req.query` rejected parsed-schema assignment;
+reset cleanup referenced Mongoose without importing it; and the client expected
+a nested reset-success response instead of the actual top-level message.
+All three are fixed and covered by HTTP/Mongo/client regressions. Sensitive
+auth/token payload console dumps were removed. Actual disposable-server reset,
+consumed-link rejection and new-password sign-in pass; SMTP delivery is not
+verified because local acceptance intentionally stubs email transport.
+
+Contact prepares a reviewable, encoded email draft, not a fictitious sent
+ticket or attachment upload. Clipboard denial has a manual fallback. Help
+filters keep expansion attached to the real FAQ question, and educational
+wallet/squad tools have labelled inputs and bounded/nonnegative arithmetic.
+
+## Shared-modal safety without changing auction commands
+
+The full three-pass browser refresh uncovered an existing synchronous focus
+loop when two independent document-level traps overlapped (confirmation over
+verdict, or two confirmations). It could freeze the page despite healthy API
+state. Confirmation/verdict modals now share priority/portal-order ownership:
+only the top modal contains focus or handles Escape. Reference-counted body
+scroll locks and modal-aware restoration survive either close order. The
+reviewed player/pass/version checks, payloads and financial engine are unchanged.
+
+Three deliberate overlap regressions, the real exit-animation tests, the full
+client suite and clean real-browser completion/financial undo runs verify the
+fix. The refreshed traffic/graphics run still covers same-lot extra time after
+expiry, real owner rebidding, native graphics loss/restoration, HTTP backoff and
+read-only fallback. The three-pass run verifies stale reviewed decisions, frozen
+summaries, only-eligible-player successors, mobile 3D controls, final retirement,
+reservation release and exact paused-winning-lot restoration on undo.
+
+See [client/TESTING.md](client/TESTING.md) for the complete current counts,
+commands and acceptance limits, and [docs/PUBLIC_EXPERIENCE.md](docs/PUBLIC_EXPERIENCE.md)
+for staging/deploy checks. No production migration or deployment occurred.
+Numbered passes still require the prior coordinated migration with backup and
+all writers stopped. Publish new hashed assets before HTML/worker updates and
+retain previous assets during rollout for already-open tabs. Full-project
+TypeScript is not clean; production capacity, SMTP, CDN and real-driver/device
+matrices remain separate validation responsibilities.

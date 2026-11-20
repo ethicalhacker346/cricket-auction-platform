@@ -1,292 +1,185 @@
-import { useState, useEffect } from "react";
-import { useSearchParams, useNavigate, Link } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  Lock,
-  ArrowLeft,
-  CheckCircle2,
-  Loader2,
-  AlertTriangle,
-  Eye,
-  EyeOff,
-  Shield,
-  AlertCircle,
-} from "lucide-react";
+import { useState, type FormEvent } from "react";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft, Check, ShieldCheck } from "lucide-react";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/Button";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { PasswordStrengthMeter } from "@/components/auth/PasswordStrengthMeter";
-import { useVerifyResetToken, useResetPassword } from "@/hooks/useAuth";
+import {
+  isResetToken,
+  useVerifyResetToken,
+  useResetPassword,
+} from "@/hooks/useAuth";
+import { getErrorMessage } from "@/lib/utils/errorMessage";
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   const token = searchParams.get("token");
-
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-
-  const { data: tokenData, isLoading: verifying, isError: tokenInvalid, error: tokenError } =
-    useVerifyResetToken(token);
-
+  const verification = useVerifyResetToken(token);
   const resetPassword = useResetPassword();
-  const isSuccess = resetPassword.isSuccess;
-
-  // Redirect if no token
-  useEffect(() => {
-    if (!token) {
-      navigate("/forgot-password", { replace: true });
-    }
-  }, [token, navigate]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!token || password !== confirmPassword || password.length < 8) return;
-    resetPassword.mutate({ token, password, confirmPassword });
+  const requirements = [
+    {
+      met: password.length >= 8 && password.length <= 128,
+      label: "8–128 characters",
+    },
+    { met: /[A-Z]/.test(password), label: "One uppercase letter" },
+    { met: /[a-z]/.test(password), label: "One lowercase letter" },
+    { met: /[0-9]/.test(password), label: "One number" },
+    { met: /[^A-Za-z0-9]/.test(password), label: "One special character" },
+  ];
+  const passwordsMatch =
+    password === confirmPassword && confirmPassword.length > 0;
+  const verified = isResetToken(token) && verification.data?.valid === true;
+  const canSubmit =
+    verified &&
+    requirements.every((r) => r.met) &&
+    passwordsMatch &&
+    !resetPassword.isPending;
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (canSubmit && token)
+      resetPassword.mutate({ token, password, confirmPassword });
   };
 
-  const passwordsMatch = password === confirmPassword && confirmPassword.length > 0;
-  const hasUpper = /[A-Z]/.test(password);
-  const hasLower = /[a-z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecial = /[^A-Za-z0-9]/.test(password);
-  const isPasswordValid = password.length >= 8 && hasUpper && hasLower && hasNumber && hasSpecial;
-
-  const canSubmit = isPasswordValid && passwordsMatch && !resetPassword.isPending && !verifying && !tokenInvalid;
-
-  // ─── Invalid Token State ────────────────────────────────────────────────
-  if (tokenInvalid) {
+  // Never briefly expose an enabled reset form for a missing/malformed token.
+  if (!token) return <Navigate to="/forgot-password" replace />;
+  if (
+    !isResetToken(token) ||
+    verification.isError ||
+    (verification.isSuccess && !verification.data?.valid)
+  ) {
     return (
       <AuthLayout
-        title="Link expired"
-        subtitle="This password reset link is no longer valid."
-        footer={
-          <Link
-            to="/forgot-password"
-            className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-600 hover:text-emerald-700"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Request a new link
-          </Link>
-        }
+        title="This link is unavailable"
+        subtitle="The password reset link is invalid, expired, or has already been used."
       >
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col items-center gap-4 py-6 text-center"
-        >
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-red-50 text-red-500">
-            <AlertTriangle className="h-8 w-8" />
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-900">Invalid or expired link</h3>
-            <p className="max-w-sm text-sm leading-relaxed text-slate-500">
-              {getErrorMessage(tokenError) ||
-                "This reset link has expired or already been used. For security, reset links can only be used once and expire after 15 minutes."}
-            </p>
-          </div>
-          <Link to="/forgot-password">
-            <Button variant="outline">Request new reset link</Button>
+        <div className="space-y-5">
+          <p className="text-sm leading-7 text-slate-600">
+            Request a fresh link to securely reset your password. Reset links
+            can only be used once.
+          </p>
+          <Link
+            className="gb-button gb-button--ink w-full"
+            to="/forgot-password"
+          >
+            <ArrowLeft size={16} aria-hidden="true" />
+            Request a new reset link
           </Link>
-        </motion.div>
+        </div>
       </AuthLayout>
     );
   }
-
   return (
     <AuthLayout
       title="Create new password"
       subtitle={
-        verifying
-          ? "Verifying your reset link..."
-          : tokenData
-          ? `Resetting password for ${tokenData.email}`
-          : "Enter a strong new password for your account."
+        verification.isLoading
+          ? "Verifying your reset link…"
+          : "Choose a strong, unique password for your account."
       }
       footer={
         <Link
           to="/login"
-          className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-600 hover:text-emerald-700"
+          className="inline-flex items-center gap-2 text-sm font-semibold"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft size={14} aria-hidden="true" />
           Back to sign in
         </Link>
       }
     >
-      <AnimatePresence mode="wait">
-        {isSuccess ? (
-          <motion.div
-            key="success"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex flex-col items-center gap-4 py-6 text-center"
-          >
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-4 ring-emerald-50/50">
-              <CheckCircle2 className="h-8 w-8" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-lg font-semibold text-slate-900">Password updated!</h3>
-              <p className="max-w-xs text-sm leading-relaxed text-slate-500">
-                Your password has been successfully reset. You'll be redirected to the
-                sign-in page in a moment.
-              </p>
-            </div>
-          </motion.div>
-        ) : verifying ? (
-          <motion.div
-            key="verifying"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex flex-col items-center gap-4 py-12"
-          >
-            <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
-            <p className="text-sm text-slate-500">Verifying your secure link...</p>
-          </motion.div>
-        ) : (
-          <motion.form
-            key="form"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="space-y-5"
-            onSubmit={handleSubmit}
-            noValidate
-          >
-            {/* Error Banner */}
-            <AnimatePresence>
-              {resetPassword.isError && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
+      {resetPassword.isSuccess ? (
+        <div role="status" className="space-y-4 py-5">
+          <ShieldCheck
+            className="h-9 w-9 text-emerald-800"
+            aria-hidden="true"
+          />
+          <h2 className="text-xl font-semibold text-slate-900">
+            Password updated.
+          </h2>
+          <p className="text-sm leading-7 text-slate-600">
+            You can now sign in with your new password. Taking you back to sign
+            in…
+          </p>
+        </div>
+      ) : verification.isLoading ? (
+        <p role="status" className="py-8 text-sm text-slate-600">
+          Checking your secure reset link…
+        </p>
+      ) : (
+        <form className="space-y-5" onSubmit={submit} noValidate>
+          {resetPassword.isError && (
+            <p
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800"
+            >
+              {getErrorMessage(resetPassword.error)}
+            </p>
+          )}
+          <div>
+            <PasswordInput
+              id="new-password"
+              name="newPassword"
+              label="New password"
+              placeholder="Create a strong password"
+              autoComplete="new-password"
+              maxLength={128}
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              aria-describedby="password-requirements"
+            />
+            <PasswordStrengthMeter password={password} />
+            <ul id="password-requirements" className="mt-3 space-y-1.5">
+              {requirements.map((item) => (
+                <li
+                  key={item.label}
+                  className={`flex items-center gap-2 text-xs ${item.met ? "text-emerald-800" : "text-slate-600"}`}
                 >
-                  <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50/60 px-4 py-3">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-                    <p className="text-xs leading-relaxed text-red-700">
-                      {resetPassword.error?.message ||
-                        "Failed to reset password. The link may have expired."}
-                    </p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Password Input */}
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                New password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a strong password"
-                  autoComplete="new-password"
-                  autoFocus
-                  className="w-full rounded-xl border border-slate-200 bg-white/70 py-2.5 pl-10 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              <PasswordStrengthMeter password={password} />
-              
-              {/* Password Requirements Checklist */}
-              {password.length > 0 && (
-                <ul className="mt-2 space-y-1">
-                  <Requirement met={password.length >= 8}>At least 8 characters</Requirement>
-                  <Requirement met={hasUpper}>One uppercase letter</Requirement>
-                  <Requirement met={hasLower}>One lowercase letter</Requirement>
-                  <Requirement met={hasNumber}>One number</Requirement>
-                  <Requirement met={hasSpecial}>One special character</Requirement>
-                </ul>
-              )}
-            </div>
-
-            {/* Confirm Password */}
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                Confirm password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type={showConfirm ? "text" : "password"}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Re-enter your password"
-                  autoComplete="new-password"
-                  className={`w-full rounded-xl border py-2.5 pl-10 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 transition-all ${
-                    confirmPassword && !passwordsMatch
-                      ? "border-red-300 bg-red-50/30 focus:border-red-500 focus:ring-red-500/20"
-                      : passwordsMatch
-                      ? "border-emerald-300 bg-emerald-50/30 focus:border-emerald-500 focus:ring-emerald-500/20"
-                      : "border-slate-200 bg-white/70 focus:border-emerald-500 focus:ring-emerald-500/20"
-                  }`}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirm(!showConfirm)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              {confirmPassword && !passwordsMatch && (
-                <p className="mt-1.5 text-xs font-medium text-red-500">Passwords do not match</p>
-              )}
-            </div>
-
-            <Button type="submit" isLoading={resetPassword.isPending} disabled={!canSubmit}>
-              {resetPassword.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Updating password...
-                </>
-              ) : (
-                "Reset password"
-              )}
-            </Button>
-
-            <div className="flex items-start gap-2.5 rounded-xl border border-slate-200/60 bg-slate-50/60 px-4 py-3">
-              <Shield className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-              <p className="text-xs leading-relaxed text-slate-500">
-                For security, this link expires in 15 minutes and can only be used once.
-                All your active sessions will be signed out after resetting.
-              </p>
-            </div>
-          </motion.form>
-        )}
-      </AnimatePresence>
+                  <Check
+                    size={13}
+                    className={item.met ? "opacity-100" : "opacity-25"}
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {item.label}
+                    {item.met && <span className="sr-only"> — met</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <PasswordInput
+            id="confirm-password"
+            name="confirmPassword"
+            label="Confirm password"
+            placeholder="Re-enter your password"
+            autoComplete="new-password"
+            maxLength={128}
+            required
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            error={
+              confirmPassword && !passwordsMatch
+                ? "Passwords do not match"
+                : undefined
+            }
+          />
+          <Button
+            type="submit"
+            isLoading={resetPassword.isPending}
+            loadingText="Updating password…"
+            disabled={!canSubmit}
+          >
+            Reset password
+          </Button>
+          <p className="text-xs leading-6 text-slate-600">
+            This link expires after 15 minutes and can only be used once. Sign
+            in again with your new password after resetting.
+          </p>
+        </form>
+      )}
     </AuthLayout>
   );
-}
-
-// ─── Helper Components ──────────────────────────────────────────────────────
-
-function Requirement({ met, children }: { met: boolean; children: React.ReactNode }) {
-  return (
-    <li className={`flex items-center gap-1.5 text-xs ${met ? "text-emerald-600" : "text-slate-400"}`}>
-      <span className={`flex h-3.5 w-3.5 items-center justify-center rounded-full ${met ? "bg-emerald-100" : "bg-slate-100"}`}>
-        {met ? (
-          <CheckCircle2 className="h-2.5 w-2.5" />
-        ) : (
-          <span className="h-1 w-1 rounded-full bg-slate-300" />
-        )}
-      </span>
-      {children}
-    </li>
-  );
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return "An unexpected error occurred";
 }

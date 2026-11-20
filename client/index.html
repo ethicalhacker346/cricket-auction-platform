@@ -4,10 +4,123 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GullyBid — Cricket Auction Platform</title>
+    <meta name="theme-color" content="#0c1412" />
+    <meta name="application-name" content="GullyBid" />
+    <meta
+      name="description"
+      content="Big-stage energy. Grassroots heart. Bring your cricket tournament, franchises, players, and real-time auction together with GullyBid."
+    />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="GullyBid — Cricket auctions, reimagined"
+    />
+    <meta
+      property="og:description"
+      content="Great squads start with a bold bid. Plan your tournament, run the auction, and build your next great squad."
+    />
+    <title>GullyBid — Cricket auctions, reimagined</title>
+    <style>
+      /* Rendered before JavaScript, never a timed overlay over the real app. */
+      .gb-boot {
+        box-sizing: border-box;
+        display: flex;
+        min-height: 100svh;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        padding: 30px;
+        background: #0c1412;
+        color: #f0f1e8;
+        font-family: system-ui, sans-serif;
+        text-align: center;
+      }
+      .gb-boot strong {
+        font-size: 26px;
+        letter-spacing: -1px;
+      }
+      .gb-boot p {
+        margin: 0;
+        max-width: 350px;
+        color: #b5c1ae;
+        font-size: 13px;
+        line-height: 1.8;
+      }
+      .gb-boot details {
+        margin-top: 16px;
+        max-width: 350px;
+        color: #b5c1ae;
+        font-size: 12px;
+        line-height: 1.9;
+      }
+      .gb-boot summary {
+        cursor: pointer;
+        color: #e4c587;
+      }
+      .gb-boot a {
+        color: #e4c587;
+        text-underline-offset: 3px;
+      }
+      .gb-boot summary:focus-visible,
+      .gb-boot a:focus-visible {
+        outline: 2px solid #e4c587;
+        outline-offset: 5px;
+      }
+      body {
+        margin: 0;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="gb-boot">
+        <svg
+          width="50"
+          height="50"
+          viewBox="0 0 44 44"
+          fill="none"
+          aria-hidden="true"
+        >
+          <rect
+            x=".5"
+            y=".5"
+            width="43"
+            height="43"
+            rx="13"
+            fill="#161e1b"
+            stroke="#d7b773"
+            stroke-opacity=".4"
+          />
+          <g
+            stroke="#e6c889"
+            stroke-width="2.1"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="m24 21-10.5 10.5a2.12 2.12 0 0 1-3-3L21 18M23 11l10 10M20 14l10 10M20 14l3-3M30 24l3-3M12 35h16"
+            />
+            <circle cx="33" cy="11" r="3.4" stroke-width="1.4" />
+          </g>
+        </svg>
+        <strong>GullyBid.</strong>
+        <p role="status">Getting your cricket experience ready…</p>
+        <details>
+          <summary>Taking longer than expected?</summary>
+          <p>
+            Check your connection, then <a href="">reload this page</a>. If the
+            problem continues, try again after reconnecting.
+          </p>
+        </details>
+        <noscript
+          ><p>
+            GullyBid needs JavaScript for live auctions and account features.
+            Enable JavaScript in your browser, then reload this page.
+          </p></noscript
+        >
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

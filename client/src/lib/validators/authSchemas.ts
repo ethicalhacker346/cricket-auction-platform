@@ -34,6 +34,7 @@ export const registerSchema = z
     password: z
       .string({ error: "Password is required" })
       .min(8, { error: "Use at least 8 characters" })
+      .max(128, { error: "Use no more than 128 characters" })
       .regex(/[A-Z]/, { error: "Add an uppercase letter" })
       .regex(/[a-z]/, { error: "Add a lowercase letter" })
       .regex(/[0-9]/, { error: "Add a number" }),

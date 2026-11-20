@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
-    "build": "vite build",
+    "build": "vite build && npm run check:entry",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:hooks": "eslint --config eslint.hooks.config.js \"src/**/*.{ts,tsx}\" --max-warnings=0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:precache": "node --test scripts/public-precache.test.mjs",
+    "check:entry": "node scripts/verify-public-entry.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

@@ -13,7 +13,6 @@ import {
   MessageSquare,
   Radio,
   AlertTriangle,
-  CheckCircle2,
 } from "lucide-react";
 
 const ROLE_CARDS = [
@@ -60,17 +59,54 @@ const ROLE_CARDS = [
 
 const QUICK_TOPICS = [
   { icon: Zap, label: "Auction won't start", to: "/faq", tag: "Common" },
-  { icon: Clock, label: "Timer not extending", to: "/help/bidding", tag: "Bidding" },
-  { icon: AlertTriangle, label: "Wallet shows wrong balance", to: "/help/bidding", tag: "Purse" },
-  { icon: Users, label: "Team approval pending", to: "/faq", tag: "Registration" },
-  { icon: BookOpen, label: "Unsold round explained", to: "/help/auctions", tag: "Rounds" },
-  { icon: MessageSquare, label: "Change franchise logo", to: "/faq", tag: "Account" },
+  {
+    icon: Clock,
+    label: "Timer not extending",
+    to: "/help/bidding",
+    tag: "Bidding",
+  },
+  {
+    icon: AlertTriangle,
+    label: "Wallet shows wrong balance",
+    to: "/help/bidding",
+    tag: "Purse",
+  },
+  {
+    icon: Users,
+    label: "Team approval pending",
+    to: "/faq",
+    tag: "Registration",
+  },
+  {
+    icon: BookOpen,
+    label: "Unsold round explained",
+    to: "/help/auctions",
+    tag: "Rounds",
+  },
+  {
+    icon: MessageSquare,
+    label: "Change franchise logo",
+    to: "/faq",
+    tag: "Account",
+  },
 ];
 
 const UPDATES = [
-  { date: "Aug 2026", title: "Auto-generated unsold rounds", desc: "System now creates unsold rounds automatically when normal rounds complete." },
-  { date: "Jul 2026", title: "Bid reset extensions", desc: "New bids in final seconds now extend the lot timer by the configured reset duration." },
-  { date: "Jun 2026", title: "Permanent unsold marking", desc: "Organizers can now permanently remove players from the auction pool." },
+  {
+    date: "Aug 2026",
+    title: "Auto-generated unsold rounds",
+    desc: "System now creates unsold rounds automatically when normal rounds complete.",
+  },
+  {
+    date: "Jul 2026",
+    title: "Bid reset extensions",
+    desc: "New bids in final seconds now extend the lot timer by the configured reset duration.",
+  },
+  {
+    date: "Jun 2026",
+    title: "Permanent unsold marking",
+    desc: "Organizers can now permanently remove players from the auction pool.",
+  },
 ];
 
 export default function HelpCenterPage() {
@@ -79,7 +115,7 @@ export default function HelpCenterPage() {
   const filteredTopics = useMemo(() => {
     if (!query.trim()) return QUICK_TOPICS;
     return QUICK_TOPICS.filter((t) =>
-      t.label.toLowerCase().includes(query.toLowerCase())
+      t.label.toLowerCase().includes(query.toLowerCase()),
     );
   }, [query]);
 
@@ -93,20 +129,25 @@ export default function HelpCenterPage() {
       >
         <div className="flex items-center gap-2 text-indigo-600">
           <Radio className="h-5 w-5" />
-          <span className="text-xs font-bold uppercase tracking-widest">Command Center</span>
+          <span className="text-xs font-bold uppercase tracking-widest">
+            Command Center
+          </span>
         </div>
         <h1 className="mt-3 text-4xl font-extrabold tracking-tight text-slate-900 lg:text-5xl">
           Help Center
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-slate-500">
-          Instant answers. Deep documentation. Direct support. Everything you need to run or compete in a world-class cricket auction.
+          Instant answers. Deep documentation. Direct support. Everything you
+          need to run or compete in a world-class cricket auction.
         </p>
 
         {/* Search */}
         <div className="relative mt-8 max-w-2xl">
           <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
           <input
-            type="text"
+            type="search"
+            aria-label="Search help topics"
+            aria-controls="help-topics"
             placeholder="Search topics, errors, or workflows..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -126,10 +167,14 @@ export default function HelpCenterPage() {
             transition={{ delay: i * 0.1 }}
             className={`rounded-none bg-white p-8 ring-1 ring-slate-200 ${card.border}`}
           >
-            <div className={`inline-flex h-10 w-10 items-center justify-center ${card.bg}`}>
+            <div
+              className={`inline-flex h-10 w-10 items-center justify-center ${card.bg}`}
+            >
               <card.icon className={`h-5 w-5 ${card.color}`} />
             </div>
-            <h3 className="mt-4 text-lg font-bold text-slate-900">{card.role}</h3>
+            <h3 className="mt-4 text-lg font-bold text-slate-900">
+              {card.role}
+            </h3>
             <ul className="mt-4 space-y-2.5">
               {card.links.map((link) => (
                 <li key={link.label}>
@@ -151,7 +196,10 @@ export default function HelpCenterPage() {
       <section>
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold text-slate-900">Quick Rescue</h2>
-          <Link to="/faq" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
+          <Link
+            to="/faq"
+            className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
+          >
             Browse all FAQs
           </Link>
         </div>
@@ -159,6 +207,7 @@ export default function HelpCenterPage() {
         <AnimatePresence mode="popLayout">
           <motion.div
             layout
+            id="help-topics"
             className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
           >
             {filteredTopics.map((topic) => (
@@ -177,7 +226,9 @@ export default function HelpCenterPage() {
                     <topic.icon className="h-5 w-5 text-slate-600" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900">{topic.label}</p>
+                    <p className="text-sm font-semibold text-slate-900">
+                      {topic.label}
+                    </p>
                     <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wider text-slate-400">
                       {topic.tag}
                     </p>
@@ -195,7 +246,9 @@ export default function HelpCenterPage() {
             animate={{ opacity: 1 }}
             className="mt-8 rounded-none bg-slate-50 p-8 text-center ring-1 ring-slate-200"
           >
-            <p className="text-sm font-medium text-slate-600">No topics match "{query}"</p>
+            <p className="text-sm font-medium text-slate-600">
+              No topics match "{query}"
+            </p>
             <Link
               to="/contact"
               className="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700"
@@ -214,13 +267,20 @@ export default function HelpCenterPage() {
         </div>
         <div className="mt-6 space-y-4">
           {UPDATES.map((update, i) => (
-            <div key={i} className="flex gap-4 border-l-2 border-slate-800 pl-4">
+            <div
+              key={i}
+              className="flex gap-4 border-l-2 border-slate-800 pl-4"
+            >
               <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 {update.date}
               </span>
               <div>
-                <p className="text-sm font-semibold text-slate-200">{update.title}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{update.desc}</p>
+                <p className="text-sm font-semibold text-slate-200">
+                  {update.title}
+                </p>
+                <p className="mt-0.5 text-xs leading-relaxed text-slate-500">
+                  {update.desc}
+                </p>
               </div>
             </div>
           ))}
@@ -230,9 +290,12 @@ export default function HelpCenterPage() {
       {/* Emergency CTA */}
       <section className="flex flex-col items-center justify-between gap-6 rounded-none bg-indigo-600 p-8 sm:flex-row">
         <div>
-          <h3 className="text-lg font-bold text-white">Live auction emergency?</h3>
+          <h3 className="text-lg font-bold text-white">
+            Live auction emergency?
+          </h3>
           <p className="mt-1 text-sm text-indigo-100">
-            If your auction is stuck, timer frozen, or bids not registering — reach us directly.
+            If your auction is stuck, timer frozen, or bids not registering —
+            reach us directly.
           </p>
         </div>
         <Link

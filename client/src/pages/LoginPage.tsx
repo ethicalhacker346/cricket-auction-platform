@@ -1,23 +1,27 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Mail } from "lucide-react";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Input } from "@/components/ui/Input";
 import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
-import { loginSchema, type LoginFormValues } from "@/lib/validators/authSchemas";
+import {
+  loginSchema,
+  type LoginFormValues,
+} from "@/lib/validators/authSchemas";
 import { useLogin } from "@/hooks/useAuth";
 
 export default function LoginPage() {
   const login = useLogin();
+  const location = useLocation();
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "", password: "", remember: true },
+    defaultValues: { email: "", password: "" },
   });
 
   const onSubmit = (values: LoginFormValues) => {
@@ -33,6 +37,7 @@ export default function LoginPage() {
           New to GullyBid?{" "}
           <Link
             to="/register"
+            state={location.state}
             className="font-semibold text-emerald-600 transition-colors hover:text-emerald-700"
           >
             Create an account
@@ -59,15 +64,10 @@ export default function LoginPage() {
             error={errors.password?.message}
             {...register("password")}
           />
-          <div className="mt-3 flex items-center justify-between">
-            <label className="flex select-none items-center gap-2 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                {...register("remember")}
-              />
-              Remember me
-            </label>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-slate-600">
+              Sign out on shared devices.
+            </p>
             <Link
               to="/forgot-password"
               className="text-sm font-medium text-emerald-600 hover:text-emerald-700"
@@ -77,7 +77,11 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <Button type="submit" isLoading={login.isPending} loadingText="Signing in…">
+        <Button
+          type="submit"
+          isLoading={login.isPending}
+          loadingText="Signing in…"
+        >
           Sign in
         </Button>
 
@@ -90,8 +94,20 @@ export default function LoginPage() {
 
         <p className="text-center text-xs leading-relaxed text-slate-400">
           By continuing you agree to GullyBid's{" "}
-          <span className="font-medium text-slate-500">Terms of Service</span> and{" "}
-          <span className="font-medium text-slate-500">Privacy Policy</span>.
+          <Link
+            to="/terms"
+            className="font-medium text-slate-600 underline underline-offset-4"
+          >
+            Terms of Service
+          </Link>{" "}
+          and{" "}
+          <Link
+            to="/privacy"
+            className="font-medium text-slate-600 underline underline-offset-4"
+          >
+            Privacy Policy
+          </Link>
+          .
         </p>
       </form>
     </AuthLayout>

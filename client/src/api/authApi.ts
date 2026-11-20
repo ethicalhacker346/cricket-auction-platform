@@ -25,19 +25,26 @@ export interface ResetPasswordPayload {
 
 export const authApi = {
   register: async (payload: RegisterPayload) => {
-    const { confirmPassword: _confirmPassword, terms: _terms, ...body } = payload;
+    const {
+      confirmPassword: _confirmPassword,
+      terms: _terms,
+      ...body
+    } = payload;
     const { data } = await axiosClient.post<ApiEnvelope<AuthPayload>>(
       "/auth/register",
-      body
+      body,
     );
     return data.data;
   },
 
   login: async (payload: LoginPayload) => {
-    const { data } = await axiosClient.post<ApiEnvelope<AuthPayload>>("/auth/login", {
-      email: payload.email,
-      password: payload.password,
-    });
+    const { data } = await axiosClient.post<ApiEnvelope<AuthPayload>>(
+      "/auth/login",
+      {
+        email: payload.email,
+        password: payload.password,
+      },
+    );
     return data.data;
   },
 
@@ -56,15 +63,16 @@ export const authApi = {
   // ════════════════════════════════════════════════════════════════════════
 
   forgotPassword: async (email: string): Promise<ForgotPasswordResponse> => {
-    const { data } = await axiosClient.post<ApiEnvelope<ForgotPasswordResponse>>(
-      "/auth/forgot-password",
-      { email }
-    );
+    const { data } = await axiosClient.post<
+      ApiEnvelope<ForgotPasswordResponse>
+    >("/auth/forgot-password", { email });
     // data = { success: true, data: { message: "..." } }
     return data.data;
   },
 
-  verifyResetToken: async (token: string): Promise<VerifyResetTokenResponse> => {
+  verifyResetToken: async (
+    token: string,
+  ): Promise<VerifyResetTokenResponse> => {
     const { data } = await axiosClient.get<
       ApiEnvelope<VerifyResetTokenResponse>
     >("/auth/verify-reset-token", {
@@ -74,11 +82,14 @@ export const authApi = {
   },
 
   resetPassword: async (
-    payload: ResetPasswordPayload
+    payload: ResetPasswordPayload,
   ): Promise<ForgotPasswordResponse> => {
-    const { data } = await axiosClient.post<
-      ApiEnvelope<ForgotPasswordResponse>
-    >("/auth/reset-password", payload);
-    return data.data;
+    // Unlike forgot-password and token verification, this endpoint returns
+    // its success message at the top level, not inside `data`.
+    const { data } = await axiosClient.post<{
+      success: boolean;
+      message: string;
+    }>("/auth/reset-password", payload);
+    return { message: data.message };
   },
 };
