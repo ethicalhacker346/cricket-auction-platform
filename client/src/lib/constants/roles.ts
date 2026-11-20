@@ -11,8 +11,10 @@ export const USER_ROLES = {
   PLAYER: "PLAYER",
 } as const;
 
+export type RegisterableRole = "PLAYER" | "FRANCHISE_OWNER" | "ORGANIZER";
+
 export const REGISTERABLE_ROLES: {
-  value: UserRole;
+  value: RegisterableRole;
   label: string;
   description: string;
   icon: typeof ShieldCheck;

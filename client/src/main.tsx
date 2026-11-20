@@ -8,6 +8,7 @@ import './real-dashboard.css';
 import './admin-sections.css';
 import './resource-table.css';
 import './interaction-polish.css';
+import './features/landing/public.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

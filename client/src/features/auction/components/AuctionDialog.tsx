@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { isTopAuctionModal, lockAuctionScroll, restoreAuctionFocus } from '../utils/modalFocus';
 
 /** Keyboard-contained, with one stable portal across native fullscreen changes. */
 export function AuctionDialog({ title, children, onClose, busy = false }: {
@@ -17,13 +18,13 @@ export function AuctionDialog({ title, children, onClose, busy = false }: {
   useLayoutEffect(() => {
     if (!portal) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const overflow = document.body.style.overflow;
+    const unlockScroll = lockAuctionScroll();
     const movePortal = () => (document.fullscreenElement ?? document.body).appendChild(portal);
     movePortal();
     document.addEventListener('fullscreenchange', movePortal);
-    document.body.style.overflow = 'hidden';
-    dialog.current?.focus();
+    if (isTopAuctionModal(dialog.current)) dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
+      if (!isTopAuctionModal(dialog.current)) return;
       if (event.key === 'Escape' && !busyRef.current) {
         event.preventDefault(); event.stopPropagation(); closeRef.current();
       }
@@ -39,7 +40,7 @@ export function AuctionDialog({ title, children, onClose, busy = false }: {
       }
     };
     const containFocus = (event: FocusEvent) => {
-      if (event.target instanceof Node && !dialog.current?.contains(event.target)) dialog.current?.focus();
+      if (isTopAuctionModal(dialog.current) && event.target instanceof Node && !dialog.current?.contains(event.target)) dialog.current?.focus();
     };
     document.addEventListener('keydown', onKey, true);
     document.addEventListener('focusin', containFocus);
@@ -47,11 +48,11 @@ export function AuctionDialog({ title, children, onClose, busy = false }: {
       document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('focusin', containFocus);
       document.removeEventListener('fullscreenchange', movePortal);
-      document.body.style.overflow = overflow;
+      unlockScroll();
       portal.remove();
       // The trigger can still be disabled until its parent's busy=false DOM
       // update commits. Restore focus after that commit, not during teardown.
-      queueMicrotask(() => { if (previous?.isConnected) previous.focus(); });
+      queueMicrotask(() => restoreAuctionFocus(previous));
     };
   }, [portal]);
 
@@ -59,7 +60,7 @@ export function AuctionDialog({ title, children, onClose, busy = false }: {
   return createPortal(
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm sm:p-6"
       onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <div ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={busy}
+      <div ref={dialog} data-auction-modal="10000" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={busy}
         className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl border border-white/15 bg-slate-950 p-5 text-slate-100 shadow-2xl outline-none sm:p-6">
         <div className="mb-5 flex items-start justify-between gap-4">
           <h2 id={titleId} className="text-lg font-bold">{title}</h2>

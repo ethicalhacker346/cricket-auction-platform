@@ -6,31 +6,53 @@ import {
   Gavel,
   Clock,
   CheckCircle2,
-  ArrowRight,
   Play,
-  Pause,
   RotateCcw,
   ChevronRight,
 } from "lucide-react";
 
 /* ── Domain constants from services ── */
 const TOURNAMENT_STATES = [
-  { id: "DRAFT", label: "Draft", desc: "Tournament created, settings configured" },
-  { id: "PLAYER_REGISTRATION_OPEN", label: "Player Reg", desc: "Players apply to enter the pool" },
-  { id: "TEAM_REGISTRATION_OPEN", label: "Team Reg", desc: "Franchises register their teams" },
-  { id: "TEAMS_APPROVED", label: "Teams Approved", desc: "Organizer locks the participant list" },
-  { id: "AUCTION_SCHEDULED", label: "Auction Scheduled", desc: "Rules set, rounds configured" },
-  { id: "AUCTION_RUNNING", label: "Auction Live", desc: "Real-time bidding in progress" },
-  { id: "AUCTION_COMPLETED", label: "Auction Done", desc: "All lots settled, squads finalized" },
-  { id: "TOURNAMENT_COMPLETED", label: "Tournament Done", desc: "Season concluded" },
-];
-
-const AUCTION_STATES = [
-  { id: "DRAFT", label: "Draft", color: "bg-slate-500" },
-  { id: "SCHEDULED", label: "Scheduled", color: "bg-amber-500" },
-  { id: "LIVE", label: "Live", color: "bg-emerald-500" },
-  { id: "PAUSED", label: "Paused", color: "bg-rose-500" },
-  { id: "COMPLETED", label: "Completed", color: "bg-indigo-500" },
+  {
+    id: "DRAFT",
+    label: "Draft",
+    desc: "Tournament created, settings configured",
+  },
+  {
+    id: "PLAYER_REGISTRATION_OPEN",
+    label: "Player Reg",
+    desc: "Players apply to enter the pool",
+  },
+  {
+    id: "TEAM_REGISTRATION_OPEN",
+    label: "Team Reg",
+    desc: "Franchises register their teams",
+  },
+  {
+    id: "TEAMS_APPROVED",
+    label: "Teams Approved",
+    desc: "Organizer locks the participant list",
+  },
+  {
+    id: "AUCTION_SCHEDULED",
+    label: "Auction Scheduled",
+    desc: "Rules set, rounds configured",
+  },
+  {
+    id: "AUCTION_RUNNING",
+    label: "Auction Live",
+    desc: "Real-time bidding in progress",
+  },
+  {
+    id: "AUCTION_COMPLETED",
+    label: "Auction Done",
+    desc: "All lots settled, squads finalized",
+  },
+  {
+    id: "TOURNAMENT_COMPLETED",
+    label: "Tournament Done",
+    desc: "Season concluded",
+  },
 ];
 
 /* ── Interactive State Machine ── */
@@ -46,16 +68,19 @@ function TournamentFlow() {
         {TOURNAMENT_STATES.map((s, i) => (
           <button
             key={s.id}
+            aria-pressed={i === activeIdx}
             onClick={() => setActiveIdx(i)}
             className={`relative flex items-center gap-2 rounded-sm px-3 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all ${
               i === activeIdx
                 ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
                 : i < activeIdx
-                ? "bg-slate-800 text-slate-400"
-                : "bg-slate-900 text-slate-600 ring-1 ring-slate-800"
+                  ? "bg-slate-800 text-slate-400"
+                  : "bg-slate-900 text-slate-600 ring-1 ring-slate-800"
             }`}
           >
-            {i < activeIdx && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+            {i < activeIdx && (
+              <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+            )}
             {s.label}
             {i < TOURNAMENT_STATES.length - 1 && (
               <ChevronRight className="ml-1 h-3 w-3 opacity-50" />
@@ -96,7 +121,9 @@ function TournamentFlow() {
 
 /* ── Live Auction Simulator ── */
 function AuctionSimulator() {
-  const [status, setStatus] = useState<"idle" | "bidding" | "sold" | "unsold">("idle");
+  const [status, setStatus] = useState<"idle" | "bidding" | "sold" | "unsold">(
+    "idle",
+  );
   const [timeLeft, setTimeLeft] = useState(15);
   const [highBid, setHighBid] = useState(100000);
   const [highTeam, setHighTeam] = useState<string | null>(null);
@@ -108,7 +135,10 @@ function AuctionSimulator() {
       setTimeLeft((t) => {
         if (t <= 1) {
           clearInterval(interval);
-          setLog((l) => [...l, "⏱️ Timer expired. Waiting for organizer decision or extra time."]);
+          setLog((l) => [
+            ...l,
+            "⏱️ Timer expired. Waiting for organizer decision or extra time.",
+          ]);
           return 0;
         }
         return t - 1;
@@ -146,10 +176,14 @@ function AuctionSimulator() {
 
   return (
     <div className="rounded-none bg-slate-950 p-8 ring-1 ring-white/5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h3 className="text-sm font-semibold text-white">Auction Room Simulator</h3>
-          <p className="mt-1 text-xs text-slate-400">Experience a live lot from organizer & bidder perspectives</p>
+          <h3 className="text-sm font-semibold text-white">
+            Auction Room Simulator
+          </h3>
+          <p className="mt-1 text-xs text-slate-400">
+            Experience a live lot from organizer & bidder perspectives
+          </p>
         </div>
         <button
           onClick={reset}
@@ -164,19 +198,25 @@ function AuctionSimulator() {
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-4">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Current Lot</p>
-              <p className="mt-0.5 text-sm font-bold text-white">Rohit Sharma • Batsman</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Current Lot
+              </p>
+              <p className="mt-0.5 text-sm font-bold text-white">
+                Rohit Sharma • Batsman
+              </p>
               <p className="text-xs text-slate-400">Base price: ₹1,00,000</p>
             </div>
             <div className="text-right">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Status</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Status
+              </p>
               <span
                 className={`mt-1 inline-block rounded-sm px-2 py-0.5 text-[11px] font-bold uppercase ${
                   status === "bidding"
                     ? "bg-emerald-500/10 text-emerald-400"
                     : status === "sold"
-                    ? "bg-indigo-500/10 text-indigo-400"
-                    : "bg-slate-800 text-slate-400"
+                      ? "bg-indigo-500/10 text-indigo-400"
+                      : "bg-slate-800 text-slate-400"
                 }`}
               >
                 {status === "idle" ? "Pending" : status}
@@ -186,12 +226,20 @@ function AuctionSimulator() {
 
           <div className="flex items-end justify-between">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Highest Bid</p>
-              <p className="mt-1 text-2xl font-bold text-white">₹{highBid.toLocaleString("en-IN")}</p>
-              <p className="text-xs text-slate-400">{highTeam ?? "No bids yet"}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Highest Bid
+              </p>
+              <p className="mt-1 text-2xl font-bold text-white">
+                ₹{highBid.toLocaleString("en-IN")}
+              </p>
+              <p className="text-xs text-slate-400">
+                {highTeam ?? "No bids yet"}
+              </p>
             </div>
             <div className="text-right">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Timer</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Timer
+              </p>
               <p
                 className={`mt-1 font-mono text-2xl font-bold ${
                   timeLeft <= 5 ? "text-rose-400" : "text-white"
@@ -208,7 +256,7 @@ function AuctionSimulator() {
                 setStatus("bidding");
                 setLog((l) => [...l, "🟢 Lot opened by organizer"]);
               }}
-              className="flex w-full items-center justify-center gap-2 rounded-sm bg-emerald-600 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-500"
+              className="flex w-full items-center justify-center gap-2 rounded-sm bg-emerald-800 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
             >
               <Play className="h-4 w-4" /> Open Lot
             </button>
@@ -232,12 +280,19 @@ function AuctionSimulator() {
             </div>
           )}
 
-          {status === "bidding" && timeLeft === 0 && <p className="text-xs leading-5 text-amber-300">Time expired. The lot stays open for the organizer&apos;s decision; expiry alone never marks a player sold or unsold.</p>}
+          {status === "bidding" && timeLeft === 0 && (
+            <p className="text-xs leading-5 text-amber-300">
+              Time expired. The lot stays open for the organizer&apos;s
+              decision; expiry alone never marks a player sold or unsold.
+            </p>
+          )}
 
           {(status === "sold" || status === "unsold") && (
             <div
               className={`rounded-sm py-3 text-center text-sm font-semibold ${
-                status === "sold" ? "bg-indigo-500/10 text-indigo-400" : "bg-slate-800 text-slate-400"
+                status === "sold"
+                  ? "bg-indigo-500/10 text-indigo-400"
+                  : "bg-slate-800 text-slate-400"
               }`}
             >
               {status === "sold"
@@ -249,7 +304,9 @@ function AuctionSimulator() {
 
         {/* Bidder Panel */}
         <div className="space-y-3 border-l border-slate-800 md:pl-6">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Team Owner Actions</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Team Owner Actions
+          </p>
 
           <div className="space-y-2">
             {[
@@ -263,16 +320,24 @@ function AuctionSimulator() {
                 onClick={() => placeBid(team.name, highBid + 50000)}
                 className="flex w-full items-center justify-between rounded-sm bg-slate-900 px-4 py-3 text-left transition-all hover:bg-slate-800 disabled:opacity-30"
               >
-                <span className={`text-sm font-semibold ${team.color}`}>{team.name}</span>
+                <span className={`text-sm font-semibold ${team.color}`}>
+                  {team.name}
+                </span>
                 <span className="text-xs text-slate-500">+₹50,000</span>
               </button>
             ))}
           </div>
 
           <div className="mt-4 rounded-sm bg-slate-900 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Event Log</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Event Log
+            </p>
             <div className="mt-2 space-y-1">
-              {log.length === 0 && <p className="text-xs text-slate-600 italic">Waiting for organizer...</p>}
+              {log.length === 0 && (
+                <p className="text-xs text-slate-600 italic">
+                  Waiting for organizer...
+                </p>
+              )}
               {log.map((entry, i) => (
                 <p key={i} className="font-mono text-[11px] text-slate-400">
                   {entry}
@@ -299,14 +364,17 @@ export default function HowAuctionsWorkPage() {
         >
           <div className="flex items-center gap-2 text-indigo-600">
             <Gavel className="h-5 w-5" />
-            <span className="text-xs font-bold uppercase tracking-widest">The Ecosystem</span>
+            <span className="text-xs font-bold uppercase tracking-widest">
+              The Ecosystem
+            </span>
           </div>
           <h1 className="mt-3 text-4xl font-extrabold tracking-tight text-slate-900 lg:text-5xl">
             How Auctions Work
           </h1>
           <p className="mt-4 max-w-2xl text-lg leading-relaxed text-slate-500">
-            From tournament creation to the final hammer drop. Understand the full lifecycle
-            of a GullyBid cricket auction — built for organizers, franchise owners, and players.
+            From tournament creation to the final hammer drop. Understand the
+            full lifecycle of a GullyBid cricket auction — built for organizers,
+            franchise owners, and players.
           </p>
         </motion.div>
       </section>
@@ -344,8 +412,12 @@ export default function HowAuctionsWorkPage() {
             className="rounded-none bg-white p-8 ring-1 ring-slate-200"
           >
             <card.icon className="h-6 w-6 text-indigo-600" />
-            <h3 className="mt-4 text-lg font-bold text-slate-900">{card.title}</h3>
-            <p className="mt-2 text-sm leading-relaxed text-slate-500">{card.body}</p>
+            <h3 className="mt-4 text-lg font-bold text-slate-900">
+              {card.title}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-500">
+              {card.body}
+            </p>
           </motion.div>
         ))}
       </section>
@@ -359,25 +431,30 @@ export default function HowAuctionsWorkPage() {
       <section className="rounded-none bg-white p-8 ring-1 ring-slate-200">
         <h2 className="text-xl font-bold text-slate-900">Round Architecture</h2>
         <p className="mt-2 text-sm text-slate-500">
-          Auctions consist of ordered rounds. Normal rounds cover the initial player pool.
-          When all nonempty normal rounds complete, approved unsold players automatically form Unsold Round-1.
+          Auctions consist of ordered rounds. Normal rounds cover the initial
+          player pool. When all nonempty normal rounds complete, approved unsold
+          players automatically form Unsold Round-1.
         </p>
 
         <div className="mt-8 grid gap-6 md:grid-cols-2">
           <div className="border-l-2 border-indigo-500 bg-slate-50 p-6">
             <h3 className="text-sm font-bold text-slate-900">Normal Round</h3>
             <p className="mt-2 text-xs leading-relaxed text-slate-500">
-              The primary auction phase. Players are assigned by the organizer. Each lot resolves
-              to SOLD or UNSOLD. Once all normal rounds complete, the system evaluates unsold inventory.
+              The primary auction phase. Players are assigned by the organizer.
+              Each lot resolves to SOLD or UNSOLD. Once all normal rounds
+              complete, the system evaluates unsold inventory.
             </p>
           </div>
           <div className="border-l-2 border-amber-500 bg-slate-50 p-6">
-            <h3 className="text-sm font-bold text-slate-900">Numbered Unsold Passes</h3>
+            <h3 className="text-sm font-bold text-slate-900">
+              Numbered Unsold Passes
+            </h3>
             <p className="mt-2 text-xs leading-relaxed text-slate-500">
-              Unsold Round-1, Unsold Round-2, Unsold Round-3 and later passes are created only
-              when deferred players remain. Each player is offered once per pass. Force Unsold
-              defers them to the next pass; Permanent Unsold excludes them from all later passes.
-              Both release any winning reservation. The auction ends only when every approved
+              Unsold Round-1, Unsold Round-2, Unsold Round-3 and later passes
+              are created only when deferred players remain. Each player is
+              offered once per pass. Force Unsold defers them to the next pass;
+              Permanent Unsold excludes them from all later passes. Both release
+              any winning reservation. The auction ends only when every approved
               player is SOLD or PERMANENT_UNSOLD.
             </p>
           </div>

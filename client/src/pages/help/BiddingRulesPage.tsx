@@ -27,11 +27,17 @@ function PurseVisualizer() {
     <div className="rounded-none bg-slate-950 p-8 ring-1 ring-white/5">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-white">Team Wallet Anatomy</h3>
-          <p className="mt-1 text-xs text-slate-400">Drag to simulate spend and reserve states</p>
+          <h3 className="text-sm font-semibold text-white">
+            Team Wallet Anatomy
+          </h3>
+          <p className="mt-1 text-xs text-slate-400">
+            Drag to simulate spend and reserve states
+          </p>
         </div>
         <button
-          onClick={() => setPurse({ initial: 5000000, spent: 1200000, reserved: 800000 })}
+          onClick={() =>
+            setPurse({ initial: 5000000, spent: 1200000, reserved: 800000 })
+          }
           className="flex items-center gap-1.5 rounded-sm bg-slate-800 px-3 py-1.5 text-[11px] font-medium text-slate-300 hover:bg-slate-700"
         >
           <RefreshCcw className="h-3 w-3" /> Reset
@@ -48,13 +54,13 @@ function PurseVisualizer() {
             {spentPct > 8 && "SPENT"}
           </div>
           <div
-            className="flex items-center justify-center bg-amber-500 text-[10px] font-bold text-white transition-all"
+            className="flex items-center justify-center bg-amber-500 text-[10px] font-bold text-slate-950 transition-all"
             style={{ width: `${reservedPct}%` }}
           >
             {reservedPct > 8 && "RESERVED"}
           </div>
           <div
-            className="flex items-center justify-center bg-emerald-500 text-[10px] font-bold text-white transition-all"
+            className="flex items-center justify-center bg-emerald-500 text-[10px] font-bold text-slate-950 transition-all"
             style={{ width: `${remainingPct}%` }}
           >
             {remainingPct > 8 && "FREE"}
@@ -64,18 +70,32 @@ function PurseVisualizer() {
         {/* Legend */}
         <div className="mt-4 grid grid-cols-3 gap-4">
           <div className="text-center">
-            <p className="text-lg font-bold text-indigo-400">₹{purse.spent.toLocaleString("en-IN")}</p>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Spent</p>
-            <p className="mt-1 text-[10px] text-slate-600">Committed to roster</p>
+            <p className="text-lg font-bold text-indigo-400">
+              ₹{purse.spent.toLocaleString("en-IN")}
+            </p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Spent
+            </p>
+            <p className="mt-1 text-[10px] text-slate-600">
+              Committed to roster
+            </p>
           </div>
           <div className="text-center">
-            <p className="text-lg font-bold text-amber-400">₹{purse.reserved.toLocaleString("en-IN")}</p>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reserved</p>
+            <p className="text-lg font-bold text-amber-400">
+              ₹{purse.reserved.toLocaleString("en-IN")}
+            </p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Reserved
+            </p>
             <p className="mt-1 text-[10px] text-slate-600">Active bid hold</p>
           </div>
           <div className="text-center">
-            <p className="text-lg font-bold text-emerald-400">₹{remaining.toLocaleString("en-IN")}</p>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Available</p>
+            <p className="text-lg font-bold text-emerald-400">
+              ₹{remaining.toLocaleString("en-IN")}
+            </p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Available
+            </p>
             <p className="mt-1 text-[10px] text-slate-600">Can be bid</p>
           </div>
         </div>
@@ -83,30 +103,49 @@ function PurseVisualizer() {
         {/* Sliders */}
         <div className="mt-8 space-y-4">
           <div>
-            <label className="flex justify-between text-[11px] font-semibold text-slate-400">
+            <label
+              htmlFor="example-spent"
+              className="flex justify-between text-[11px] font-semibold text-slate-400"
+            >
               <span>Spent Budget</span>
               <span>{Math.round(spentPct)}%</span>
             </label>
             <input
+              id="example-spent"
               type="range"
               min={0}
               max={purse.initial}
               value={purse.spent}
-              onChange={(e) => setPurse((p) => ({ ...p, spent: Number(e.target.value) }))}
+              onChange={(e) =>
+                setPurse((p) => {
+                  const spent = Number(e.target.value);
+                  return {
+                    ...p,
+                    spent,
+                    reserved: Math.min(p.reserved, p.initial - spent),
+                  };
+                })
+              }
               className="mt-2 w-full accent-indigo-500"
             />
           </div>
           <div>
-            <label className="flex justify-between text-[11px] font-semibold text-slate-400">
+            <label
+              htmlFor="example-reserved"
+              className="flex justify-between text-[11px] font-semibold text-slate-400"
+            >
               <span>Reserved Budget</span>
               <span>{Math.round(reservedPct)}%</span>
             </label>
             <input
+              id="example-reserved"
               type="range"
               min={0}
               max={purse.initial - purse.spent}
               value={purse.reserved}
-              onChange={(e) => setPurse((p) => ({ ...p, reserved: Number(e.target.value) }))}
+              onChange={(e) =>
+                setPurse((p) => ({ ...p, reserved: Number(e.target.value) }))
+              }
               className="mt-2 w-full accent-amber-500"
             />
           </div>
@@ -126,45 +165,98 @@ function BidCalculator() {
   return (
     <div className="rounded-none bg-white p-8 ring-1 ring-slate-200">
       <h3 className="text-sm font-semibold text-slate-900">Bid Calculator</h3>
-      <p className="mt-1 text-xs text-slate-500">Compute minimum valid bids based on live state</p>
+      <p className="mt-1 text-xs text-slate-500">
+        Illustrative calculator. Your tournament’s configured rules apply.
+      </p>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
         <div>
-          <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Base Price</label>
+          <label
+            htmlFor="example-basePrice"
+            className="text-[11px] font-semibold uppercase tracking-wider text-slate-500"
+          >
+            Base Price
+          </label>
           <input
+            id="example-basePrice"
             type="number"
+            min={0}
+            max={1000000000000}
             value={basePrice}
-            onChange={(e) => setBasePrice(Number(e.target.value))}
+            onChange={(e) =>
+              setBasePrice(
+                Math.min(
+                  1000000000000,
+                  Math.max(0, Number(e.target.value) || 0),
+                ),
+              )
+            }
             className="mt-2 block w-full rounded-sm border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none"
           />
         </div>
         <div>
-          <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Current Bid</label>
+          <label
+            htmlFor="example-currentBid"
+            className="text-[11px] font-semibold uppercase tracking-wider text-slate-500"
+          >
+            Current Bid
+          </label>
           <input
+            id="example-currentBid"
             type="number"
+            min={0}
+            max={1000000000000}
             value={currentBid}
-            onChange={(e) => setCurrentBid(Number(e.target.value))}
+            onChange={(e) =>
+              setCurrentBid(
+                Math.min(
+                  1000000000000,
+                  Math.max(0, Number(e.target.value) || 0),
+                ),
+              )
+            }
             className="mt-2 block w-full rounded-sm border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none"
           />
         </div>
         <div>
-          <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Increment</label>
+          <label
+            htmlFor="example-increment"
+            className="text-[11px] font-semibold uppercase tracking-wider text-slate-500"
+          >
+            Increment
+          </label>
           <input
+            id="example-increment"
             type="number"
+            min={0}
+            max={1000000000000}
             value={increment}
-            onChange={(e) => setIncrement(Number(e.target.value))}
+            onChange={(e) =>
+              setIncrement(
+                Math.min(
+                  1000000000000,
+                  Math.max(0, Number(e.target.value) || 0),
+                ),
+              )
+            }
             className="mt-2 block w-full rounded-sm border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none"
           />
         </div>
       </div>
 
-      <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-6">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-6">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Minimum Valid Bid</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">₹{minBid.toLocaleString("en-IN")}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Minimum Valid Bid
+          </p>
+          <p className="mt-1 text-2xl font-bold text-slate-900">
+            ₹{minBid.toLocaleString("en-IN")}
+          </p>
         </div>
         <div className="text-right">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Formula</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Formula
+          </p>
           <p className="mt-1 font-mono text-xs text-slate-600">
             {currentBid === 0 ? "basePrice" : "currentBid + increment"}
           </p>
@@ -177,17 +269,22 @@ function BidCalculator() {
 export default function BiddingRulesPage() {
   return (
     <div className="space-y-16">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
         <div className="flex items-center gap-2 text-indigo-600">
           <Wallet className="h-5 w-5" />
-          <span className="text-xs font-bold uppercase tracking-widest">Master the Bid</span>
+          <span className="text-xs font-bold uppercase tracking-widest">
+            Master the Bid
+          </span>
         </div>
         <h1 className="mt-3 text-4xl font-extrabold tracking-tight text-slate-900 lg:text-5xl">
           Bidding Rules
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-slate-500">
-          Your purse is your weapon. Understand reservations, increments, and the timer
-          to outmaneuver rival franchises.
+          Your purse is your weapon. Understand reservations, increments, and
+          the timer to outmaneuver rival franchises.
         </p>
       </motion.div>
 
@@ -199,7 +296,9 @@ export default function BiddingRulesPage() {
       {/* The Flow */}
       <section className="grid gap-8 lg:grid-cols-2">
         <div className="space-y-6">
-          <h2 className="text-xl font-bold text-slate-900">The Bid Lifecycle</h2>
+          <h2 className="text-xl font-bold text-slate-900">
+            The Bid Lifecycle
+          </h2>
 
           {[
             {
@@ -215,7 +314,7 @@ export default function BiddingRulesPage() {
             {
               icon: Unlock,
               title: "Commitment",
-              body: "When the organizer hammers the lot in your favor, the reservation converts to a spend. Your roster updates and the money is permanently gone.",
+              body: "When the organizer hammers the lot in your favor, the reservation converts to a spend. Your roster updates and the budget is committed. An authorized organizer undo can reverse the recorded sale.",
             },
             {
               icon: AlertCircle,
@@ -235,8 +334,12 @@ export default function BiddingRulesPage() {
                 <step.icon className="h-5 w-5 text-slate-700" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-slate-900">{step.title}</h3>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500">{step.body}</p>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {step.title}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  {step.body}
+                </p>
               </div>
             </motion.div>
           ))}
@@ -247,12 +350,15 @@ export default function BiddingRulesPage() {
           <div className="rounded-none bg-slate-950 p-6 ring-1 ring-white/5">
             <div className="flex items-center gap-3">
               <Timer className="h-5 w-5 text-rose-400" />
-              <h3 className="text-sm font-semibold text-white">Lot Timer + Bid Reset</h3>
+              <h3 className="text-sm font-semibold text-white">
+                Lot Timer + Bid Reset
+              </h3>
             </div>
             <p className="mt-3 text-xs leading-relaxed text-slate-400">
-              Each lot has a total duration (e.g., 30 seconds). When a bid arrives in the final
-              seconds, the timer extends by the bid-reset duration (e.g., 12 seconds). This
-              prevents sniping and ensures fair competition.
+              Each lot has a total duration (e.g., 30 seconds). When a bid
+              arrives in the final seconds, the timer extends by the bid-reset
+              duration (e.g., 12 seconds). This prevents sniping and ensures
+              fair competition.
             </p>
             <div className="mt-4 space-y-2">
               <div className="flex justify-between text-xs">
@@ -265,16 +371,23 @@ export default function BiddingRulesPage() {
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-slate-500">Max Extension</span>
-                <span className="font-mono text-slate-400">Until organizer intervenes</span>
+                <span className="font-mono text-slate-400">
+                  Until organizer intervenes
+                </span>
               </div>
             </div>
           </div>
 
           <div className="rounded-none bg-amber-50 p-6 ring-1 ring-amber-200">
-            <h3 className="text-sm font-semibold text-amber-900">Squad Full Lockout</h3>
+            <h3 className="text-sm font-semibold text-amber-900">
+              Squad Full Lockout
+            </h3>
             <p className="mt-2 text-xs leading-relaxed text-amber-700">
-              You cannot place bids if your roster has reached the tournament's squad size limit.
-              The system checks <code className="font-mono text-amber-800">team.roster.length ≥ tournament.squadSize</code>{" "}
+              You cannot place bids if your roster has reached the tournament's
+              squad size limit. The system checks{" "}
+              <code className="font-mono text-amber-800">
+                team.roster.length ≥ tournament.squadSize
+              </code>{" "}
               before accepting any bid.
             </p>
           </div>

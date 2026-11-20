@@ -115,7 +115,7 @@ const buttonVariants = cva(
       variant: "default",
       size: "default",
     },
-  }
+  },
 );
 
 // ═══════════════════════════════════════════════════════════════════
@@ -159,7 +159,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       type = "button",
       ...props
     },
-    ref
+    ref,
   ) => {
     const isDisabled = disabled || isLoading;
     const spinner = loader ?? (
@@ -186,10 +186,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         <span className="grid grid-cols-1 place-items-center">
           {/* ── Loading layer ── */}
           <span
+            aria-hidden={!isLoading || !loadingText}
             className={cn(
               "col-start-1 row-start-1 flex items-center justify-center gap-1.5",
               "transition-opacity duration-200 ease-out",
-              isLoading ? "opacity-100" : "opacity-0"
+              isLoading ? "opacity-100" : "opacity-0",
             )}
           >
             {spinner}
@@ -200,10 +201,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
           {/* ── Content layer ── */}
           <span
+            aria-hidden={isLoading && Boolean(loadingText)}
             className={cn(
               "col-start-1 row-start-1 flex items-center justify-center gap-1.5",
               "transition-opacity duration-200 ease-out",
-              isLoading ? "opacity-0" : "opacity-100"
+              isLoading ? "opacity-0" : "opacity-100",
             )}
           >
             {leftIcon ? (
@@ -217,7 +219,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         </span>
       </ButtonPrimitive>
     );
-  }
+  },
 );
 
 Button.displayName = "Button";

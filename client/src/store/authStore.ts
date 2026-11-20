@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import {
+  createJSONStorage,
+  persist,
+  type StateStorage,
+} from "zustand/middleware";
 import type { AuthPayload, User } from "@/types/auth";
 
 interface AuthState {
@@ -14,6 +18,33 @@ interface AuthState {
   clearAuth: () => void;
   setHasHydrated: (state: boolean) => void;
 }
+
+// Restricted storage (private mode, blocked cookies, quota) must not prevent
+// hydration or in-memory sign-in. Persistence is best-effort, never a gate to
+// seeing a public page. No second copy of credentials is written elsewhere.
+const authStorage: StateStorage = {
+  getItem: (key) => {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key, value) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* in-memory session still works */
+    }
+  },
+  removeItem: (key) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* unavailable storage */
+    }
+  },
+};
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -39,7 +70,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "gullybid-auth",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => authStorage),
       partialize: (state) => ({
         user: state.user,
         accessToken: state.accessToken,
@@ -47,8 +78,11 @@ export const useAuthStore = create<AuthState>()(
         isAuthenticated: state.isAuthenticated,
       }),
       onRehydrateStorage: () => (state) => {
-        state?.setHasHydrated(true);
+        if (state) state.setHasHydrated(true);
+        // Invalid persisted JSON may fail before Zustand provides `state`.
+        // Defer until the store has finished initialization (no TDZ access).
+        else queueMicrotask(() => useAuthStore.getState().setHasHydrated(true));
       },
-    }
-  )
+    },
+  ),
 );

@@ -1,4 +1,9 @@
-import { type InputHTMLAttributes, forwardRef, type ReactNode } from "react";
+import {
+  type InputHTMLAttributes,
+  forwardRef,
+  type ReactNode,
+  useId,
+} from "react";
 import { cn } from "@/utils/cn";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -10,8 +15,28 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, icon, hint, trailing, className, id, ...props }, ref) => {
-    const inputId = id ?? props.name;
+  (
+    {
+      label,
+      error,
+      icon,
+      hint,
+      trailing,
+      className,
+      id,
+      "aria-describedby": describedBy,
+      "aria-invalid": invalid,
+      ...props
+    },
+    ref,
+  ) => {
+    const generatedId = useId();
+    const inputId = id ?? props.name ?? generatedId;
+    const messageId = `${inputId}-message`;
+    const description =
+      [describedBy, error || hint ? messageId : null]
+        .filter(Boolean)
+        .join(" ") || undefined;
 
     return (
       <div className="w-full">
@@ -30,6 +55,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={inputId}
+            aria-invalid={error ? true : invalid}
+            aria-describedby={description}
             className={cn(
               "block w-full rounded-xl border bg-white/70 px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm outline-none transition-all duration-150",
               "focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15",
@@ -38,22 +65,32 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
               error
                 ? "border-red-400 focus:border-red-500 focus:ring-red-500/15"
                 : "border-slate-200 hover:border-slate-300",
-              className
+              className,
             )}
             {...props}
           />
           {trailing && (
-            <span className="absolute right-3 top-1/2 -translate-y-1/2">{trailing}</span>
+            <span className="absolute right-3 top-1/2 -translate-y-1/2">
+              {trailing}
+            </span>
           )}
         </div>
         {error ? (
-          <p className="mt-1.5 text-xs font-medium text-red-500">{error}</p>
+          <p
+            id={messageId}
+            role="alert"
+            className="mt-1.5 text-xs font-medium text-red-600"
+          >
+            {error}
+          </p>
         ) : hint ? (
-          <p className="mt-1.5 text-xs text-slate-400">{hint}</p>
+          <p id={messageId} className="mt-1.5 text-xs text-slate-500">
+            {hint}
+          </p>
         ) : null}
       </div>
     );
-  }
+  },
 );
 
 Input.displayName = "Input";

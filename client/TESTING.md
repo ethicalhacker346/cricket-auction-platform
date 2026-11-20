@@ -1,4 +1,4 @@
-# Auction regression and integration checks
+# Public experience, auction regression and integration checks
 
 ## Client
 
@@ -7,32 +7,55 @@ From `client/`, install locked dependencies and run:
 ```sh
 npm ci
 npm run lint:hooks
+npm run test:precache
 npm test
 npm run build
+npm run check:entry # also runs automatically at the end of build
 npm run typecheck
 ```
 
 - **`lint:hooks`** checks hook ordering in every `src/**/*.ts` and `.tsx` file,
   including hooks hidden below early returns. It uses a dedicated configuration
   because the legacy default ESLint configuration only includes JavaScript.
-- **`test`** runs **145 tests across 20 files**. `test:watch` runs them
+- **`test`** runs **227 tests across 31 files**. `test:watch` runs them
   interactively. No MongoDB, backend server, network access or login is required.
   API/socket boundaries and WebAudio devices are controlled; React, Framer
   Motion, the live store and engine reconciliation are real.
-- **`build`** creates the production client and service worker. Like the
-  existing build, it does **not** run TypeScript typechecking. The existing
-  `.env` NODE_ENV and large-chunk warnings remain.
+- **`test:precache`** runs two Node tests for static entry-graph traversal,
+  lazy-page exclusion, shared-import deduplication and broken-manifest failure.
+- **`build`** creates the production client/service worker, then automatically
+  runs **`check:entry`**. That gate enforces JS/CSS/crest size budgets and rejects
+  heavy/lazy-route leaks into the public entry or service-worker precache.
+  Like the existing Vite build, it does **not** run TypeScript typechecking.
+  The existing `.env` NODE_ENV and large-chunk warnings remain.
 - **`typecheck`** invokes the installed TypeScript compiler directly. It still
-  **fails**: the earlier feature baseline had 290 diagnostics, and both the
-  committed feature state and this repeat-pass release have **228**. This
-  release adds no new semantic diagnostics (comparison ignores line/column
-  shifts and the ordering of equivalent union members in compiler messages).
+  **fails with 209 diagnostics**: zero newly introduced and 19 removed against
+  the accepted numbered-pass baseline of 228 (earlier feature baseline: 290).
+  Comparisons ignore source line/column shifts, not diagnostic content.
   This is not a fully typecheck-clean repository.
   Do not mistake filtered compiler output or a successful Vite build for a
   successful full-project typecheck.
 
 ### Coverage
 
+- Real guest homepage, authenticated root, public help/404, direct guest auction
+  links without a timed splash, protected return pathname/query/hash, admin
+  destination and self-registration role hints that cannot select Administrator.
+- Image geometry/fallbacks, arbitrarily delayed requests, cached successes and
+  failures, source/srcset changes, decorative accessibility and one visible
+  fallback/image lifecycle. Branding does not depend on an image request.
+- Input/error/hint associations, password visibility, native registration radios,
+  busy button names, bounded passwords, positive reset-link verification,
+  malformed/used-link guards and the real reset API response envelope.
+- Blocked/quota-limited storage and corrupt persisted JSON; actionable slow and
+  offline page loading, rejected lazy imports, explicit worker-update recovery,
+  concurrent-click coalescing, bounded update stalls and ignored late events.
+- Honest, encoded email drafts with explicit review/copy/manual fallback; FAQ
+  question-associated expansion, labelled/bounded educational wallet tools,
+  nonnegative affordable squad math and accurate browser-storage descriptions.
+- Overlapping confirmation/verdict modals and simultaneous confirmations: only
+  the top layer traps focus/Escape; counted scroll locks survive either close
+  order, including restoration into the remaining modal.
 - Hook order across lot transitions, image fallbacks, fresh vs historical
   verdicts, event deduplication and auction-context changes.
 - Cross/Escape/backdrop/automatic dismissal, parent clock updates, consecutive
@@ -84,7 +107,7 @@ node backend/scripts/verify-socket-contract.mjs
 git diff --check
 ```
 
-The backend has **90 tests across 6 suites**, including real multi-document
+The backend has **97 tests across 8 suites**, including real multi-document
 transactions and actual anonymous Socket.IO connections. `tests/helpers.js`
 starts a one-node **replica set**, initializes model indexes, and tears down the
 process after each suite. A standalone MongoDB is not a valid substitute for
@@ -147,6 +170,15 @@ second apply was a no-op. This does **not** migrate the real deployment. Follow
 [`UNSOLD_PASSES_MIGRATION.md`](../docs/UNSOLD_PASSES_MIGRATION.md) with all writers
 stopped and a backup before production rollout.
 
+`auth-recovery.test.js` adds four real HTTP/Mongo regressions for invalid,
+expired and consumed links, password validation without token consumption,
+password change/sign-in, sibling-token cleanup, refresh-token revocation, the
+actual endpoint envelopes and non-enumerating recovery messages. SMTP methods
+are stubbed. `request-validation.test.js` adds three Express 5 HTTP regressions:
+parsed queries retain coercion/defaults/unknown-key removal, bad queries return
+400 rather than a getter-assignment exception, and multi-source schemas work.
+No real token/user payloads should be dumped by successful auth endpoints.
+
 The static socket-contract gate verifies all emitted domain events are handled,
 all **23** client room-event subscriptions have server publishers, and client
 join/leave/heartbeat commands have handlers. Syntax checks can also be run with:
@@ -173,11 +205,55 @@ The script uses a random key prefix and targeted cleanup, never `FLUSHDB` or
 publishing. These checks do not certify infrastructure failover, distributed
 socket admission, or production audience capacity.
 
-After building, inspect the generated `dist/sw.js`: it must not include an
-`AuctionArena3D-*.js` precache entry. The final build has **14 entries / 3612.99
-KiB**, excluding the lazy renderer; `.env` and large-chunk warnings still remain.
+The production service worker precaches only the static entry graph, HTML,
+registration script, fonts, favicon and manifest: **15 entries / about 789 KiB**,
+not unopened account/auction/admin/chart/PDF/3D routes. Runtime asset/image
+caches are bounded; API and Socket.IO responses are not cached. `check:entry`
+enforces **450 KiB raw / 150 KiB gzip JS, 85 KiB gzip CSS and 60 KiB per crest**
+and fails on heavy entry/precache leakage. The public entry is about **352 KiB
+raw / 113 KiB gzip JS**, rather than the earlier 2,073,168-byte entry bundle.
+These are build-graph budgets, not field Web Vitals. `.env`/large-chunk warnings
+remain for deferred features. See [the implementation and staging guide](../docs/PUBLIC_EXPERIENCE.md).
 
 ## Real-browser acceptance checks
+
+### Public pages, resilience and real account recovery
+
+The public-page Chromium checks exercise **320, 390, 768, 1024 and 1440px**,
+mobile disclosure/Escape/focus, 15 public routes, labelled forms and automated
+WCAG A/AA axe scans. An additional help audit opens ten FAQ answers and exercises
+the calculator, wallet sliders, filters and squad example instead of checking
+only collapsed/default content. No uncaught exceptions or automated violations
+were observed in those audited states; this is not full accessibility certification.
+
+The **11-check production-build resilience run** covers images held for more
+than 7.5 seconds, all images/fonts failing at 320px, a cold 64 KiB/s connection
+with 400ms latency and 4× CPU slowdown, rejected lazy chunks, unavailable entry
+JS, disabled JavaScript, blocked/corrupt storage, reduced motion/keyboard role
+tabs, honest contact drafts, the verified reset form, actual shell-only cache
+contents, offline cached home and explicit recovery for an unvisited offline
+route. Network emulation applies to both the page and real service-worker
+network target; changing only the page does not make worker fetches offline.
+The synthetic heading-ready timing was about four seconds on this runner, not
+a field performance promise or an auction latency measurement.
+
+A separate real-worker update check installs an updated worker while the page
+remains open: **no automatic activation or reload**. The explicit recovery
+button activates it, observes controller change, reloads exactly once, and
+successfully fetches a previously failed route. Unit tests additionally check
+rapid repeat clicks, stalled updates, missing workers, access failures and
+ignored late events. No auction command is replayed.
+
+Six additional browser checks use actual disposable-server endpoints, not
+mocked reset-success envelopes: expired-link rejection; successful password
+reset and consumed-link rejection; new-password sign-in with protected
+query/hash return and persistence; throwing-storage in-memory sign-in;
+registration with a chosen public role and preserved destination; and the
+non-enumerating forgot-password response. SMTP is intentionally stubbed, so
+these checks **do not verify email delivery**. Staging must verify real SMTP
+and deployment/CDN update behavior separately.
+
+### Auction regression acceptance
 
 At the earlier feature checkpoint, a one-off Chromium run against a
 **disposable replica-set API**, with separate
