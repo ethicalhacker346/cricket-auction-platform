@@ -18,7 +18,7 @@ jobs:
   publish:
     if: >-
       github.repository == 'ethicalhacker346/cricket-auction-platform' &&
-      github.event.head_commit.message == 'chore: publish approved GullyBid media downloads'
+      startsWith(github.event.head_commit.message, 'chore: publish approved GullyBid media downloads')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
