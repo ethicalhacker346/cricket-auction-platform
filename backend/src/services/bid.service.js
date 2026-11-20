@@ -6,6 +6,7 @@ import { AppError, assertFound } from '../utils/helpers.js';
 import { AUCTION_LOG_ACTIONS, BID_STATUS, LOT_STATUS, LOT_OUTCOME, REGISTRATION_STATUS, NOTIFICATION_TYPES } from '../config/constants.js';
 import { AuctionService } from './auction.service.js';
 import { AuctionCommandService } from './auction-command.service.js';
+import { settleActiveLot } from './lot-settlement.service.js';
 import { NotificationService } from './notification.service.js';
 import { AUCTION_PERMISSIONS } from './permission.engine.js';
 import { emitBidPlaced, emitLotSold, emitLotUnsold } from '../events/auction.events.js';
@@ -83,71 +84,15 @@ export class BidService {
     return command.result;
   }
 
-  static async settleLot(auctionId, user, sold = true) {
+  static async settleLot(auctionId, user, sold = true, expected = {}) {
     const command = await AuctionCommandService.run({
       auctionId, user, permission: AUCTION_PERMISSIONS.SETTLE_LOT,
       kind: sold ? 'LOT_SOLD' : 'LOT_UNSOLD', label: sold ? 'Mark player sold' : 'Mark player unsold',
     }, async (scope) => {
-      const { auction, tournament, journal, session, outbox, afterCommit } = scope;
-      const live = auction.liveState;
-      if (!live?.currentTournamentPlayerId || live.lotStatus !== LOT_STATUS.BIDDING) throw new AppError('No active lot to settle', 409);
-      if (sold && !live.highestBidderTeamId) throw new AppError('A winning bid is required to mark sold', 400);
-      const player = assertFound(await TournamentPlayer.findOne({
-        _id: live.currentTournamentPlayerId, tournamentId: auction.tournamentId,
-        lotOutcome: LOT_OUTCOME.IN_PROGRESS,
-      }).session(session).populate({ path: 'playerId', select: 'fullName', options: { session } }), 'Active player not found');
-      journal.track(player);
-      const roundId = live.currentRoundId;
-      let winningTeam;
-      if (live.highestBidderTeamId) {
-        winningTeam = assertFound(await TournamentTeam.findById(live.highestBidderTeamId).session(session), 'Leading team not found');
-        journal.track(winningTeam);
-        if (sold) {
-          if (winningTeam.status !== REGISTRATION_STATUS.APPROVED || String(winningTeam.tournamentId) !== String(auction.tournamentId)) {
-            throw new AppError('Leading team is no longer approved for this tournament', 409);
-          }
-          if (winningTeam.roster.length >= (auction.auctionConfiguration?.squadSize ?? tournament.squadSize)) {
-            throw new AppError('Leading team squad is now full; review this lot before settling', 409);
-          }
-          if (winningTeam.roster.some((entry) => String(entry.tournamentPlayerId) === String(player._id))) {
-            throw new AppError('Player is already in the leading team roster', 409);
-          }
-          winningTeam.commitSpend(live.currentHighestBid);
-          winningTeam.roster.push({ tournamentPlayerId: player._id, boughtPrice: live.currentHighestBid, role: player.primaryRole, boughtAt: new Date() });
-        } else {
-          winningTeam.releaseReservation(live.currentHighestBid);
-          const bids = await Bid.find({ auctionId, tournamentPlayerId: player._id, status: BID_STATUS.WINNING }).session(session);
-          for (const bid of bids) {
-            journal.track(bid, ['status']);
-            bid.status = BID_STATUS.OUTBID;
-            await bid.save({ session });
-          }
-        }
-        await winningTeam.save({ session });
-      }
-      if (sold) {
-        player.isSold = true;
-        player.soldToTeamId = winningTeam._id;
-        player.soldPrice = live.currentHighestBid;
-        player.soldAt = new Date();
-        player.lotOutcome = LOT_OUTCOME.SOLD;
-        scope.label = `Sell ${player.playerId?.fullName || 'player'} to ${winningTeam.name} for ${live.currentHighestBid}`;
-      } else {
-        player.lotOutcome = LOT_OUTCOME.UNSOLD;
-        scope.label = `Mark ${player.playerId?.fullName || 'player'} unsold`;
-      }
-      await player.save({ session });
-      auction.logs.push({ action: sold ? AUCTION_LOG_ACTIONS.LOT_SOLD : AUCTION_LOG_ACTIONS.LOT_UNSOLD,
-        userId: user._id, message: scope.label,
-        metadata: { tournamentPlayerId: player._id, teamId: winningTeam?._id, soldPrice: sold ? live.currentHighestBid : undefined } });
-      auction.liveState = {
-        currentTournamentPlayerId: null, currentRoundId: roundId, currentHighestBid: 0,
-        highestBidderTeamId: null, remainingTimeSeconds: 0, lotStatus: LOT_STATUS.PENDING,
-        version: live.version, updatedAt: new Date(),
-      };
-      await auction.save({ session });
+      const { session, outbox, journal, afterCommit } = scope;
+      const { player, roundId, winningTeam } = await settleActiveLot(scope, sold ? LOT_OUTCOME.SOLD : LOT_OUTCOME.UNSOLD, expected);
       let finalAuction;
-      // Verdict precedes completion so every connected spectator sees the result.
+      // Verdict precedes round closure/relisting, all at the same command revision.
       outbox.push(() => sold ? emitLotSold(auctionId, {
         tournamentPlayerId: player._id, roundId, soldPrice: player.soldPrice,
         soldToTeamId: winningTeam._id, soldToTeamName: winningTeam.name,

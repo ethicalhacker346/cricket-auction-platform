@@ -52,6 +52,7 @@ import {
   emitViewerCountUpdated,
 } from "../events/auction.events.js";
 import { AuctionCommandService } from "./auction-command.service.js";
+import { assertLotTarget, settleActiveLot } from './lot-settlement.service.js';
 
 export class AuctionService {
   static buildDefaultTiers(tournament) {
@@ -200,6 +201,9 @@ export class AuctionService {
       auctionId, user, permission: AUCTION_PERMISSIONS.MANAGE_ROUNDS,
       kind: 'ROUND_ADDED', label: `Add round “${payload.name}”`,
     }, async ({ auction, journal, session, outbox }) => {
+      if (await AuctionRound.exists({ auctionId, type: ROUND_TYPE.UNSOLD }).session(session)) {
+        throw new AppError('Normal rounds cannot be added after the unsold phase begins. Remaining inventory advances through numbered unsold passes automatically.', 409);
+      }
       await AuctionService.validateRoundPlayers(auction, payload.playerIds ?? [], null, session);
       await AuctionService.validateRoundOrder(auctionId, payload.order, null, session);
       const [round] = await AuctionRound.create([{
@@ -279,6 +283,10 @@ export class AuctionService {
       const round = assertFound(await AuctionRound.findOne({ _id: roundId, auctionId }).session(session), 'Auction round not found');
       journal.track(round);
       if (patch.type !== undefined && patch.type !== round.type) throw new AppError('Round type is managed by the auction engine', 400);
+      if (round.type === ROUND_TYPE.NORMAL && (patch.playerIds !== undefined || (patch.order !== undefined && patch.order !== round.order))
+        && await AuctionRound.exists({ auctionId, type: ROUND_TYPE.UNSOLD }).session(session)) {
+        throw new AppError('Normal-round membership and order are locked after the unsold phase begins.', 409);
+      }
       if (patch.playerIds !== undefined) {
         if (round.status !== ROUND_STATUS.PENDING || round.type === ROUND_TYPE.UNSOLD) throw new AppError('Only an unstarted normal round can change players', 400);
         await AuctionService.validateRoundPlayers(auction, patch.playerIds, roundId, session);
@@ -410,10 +418,14 @@ export class AuctionService {
       const round = assertFound(await AuctionService.runningRound(auctionId, session), 'No running round with players is available');
       if (String(round._id) !== String(roundId)) throw new AppError('Select a player from the running round; later rounds cannot be opened yet', 409);
       if (!round.playerIds.some((id) => String(id) === String(tournamentPlayerId))) throw new AppError('Player is not assigned to the running round', 400);
-      const tournamentPlayer = assertFound(await TournamentPlayer.findOne({
+      const tournamentPlayer = await TournamentPlayer.findOne({
         _id: tournamentPlayerId, tournamentId: auction.tournamentId, status: REGISTRATION_STATUS.APPROVED,
-        lotOutcome: { $in: round.type === ROUND_TYPE.UNSOLD ? [LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.UNSOLD] : [LOT_OUTCOME.NOT_LISTED] },
-      }).session(session), 'Player is no longer eligible for this lot');
+        // Every generated pass resets its own inventory to NOT_LISTED. An
+        // UNSOLD result is finished for THIS pass, not immediately eligible again.
+        lotOutcome: LOT_OUTCOME.NOT_LISTED,
+        ...(round.type === ROUND_TYPE.UNSOLD ? { auctionRoundId: round._id } : {}),
+      }).session(session);
+      if (!tournamentPlayer) throw new AppError('Player is already resolved for this pass or is no longer eligible. Select a waiting player.', 409);
       journal.track(round);
       journal.track(tournamentPlayer);
       if (round.status === ROUND_STATUS.PENDING) {
@@ -589,162 +601,106 @@ export class AuctionService {
     };
   }
 
-  static async checkRoundCompletion(roundId, session = null, outbox = null, journal = null) {
-    const round = await AuctionRound.findById(roundId).session(session ?? null);
+  /** Resolve one pass, then create at most ONE successor in the same journal. */
+  static async checkRoundCompletion(roundId, session, outbox, journal) {
+    if (!session || !outbox || !journal) throw new Error('Round progression requires an audited command transaction');
+    const round = await AuctionRound.findById(roundId).session(session);
     if (!round || round.status === ROUND_STATUS.COMPLETED) return round;
-
-  // Strategy: terminal outcomes depend on round type.
-  // Normal round  → SOLD or UNSOLD is fine.
-  // Unsold round  → only SOLD or PERMANENT_UNSOLD resolves the auction.
-    const terminalOutcomes =
-      round.type === ROUND_TYPE.UNSOLD
-        ? [LOT_OUTCOME.SOLD, LOT_OUTCOME.PERMANENT_UNSOLD]
-        : [LOT_OUTCOME.SOLD, LOT_OUTCOME.UNSOLD];
-
-    const unresolvedCount = await TournamentPlayer.countDocuments({
-      _id: { $in: round.playerIds },
-      lotOutcome: { $nin: terminalOutcomes },
-    }).session(session ?? null);
-
-    if (unresolvedCount === 0) {
-      journal?.track(round);
-      round.status = ROUND_STATUS.COMPLETED;
-      round.completedAt = new Date();
-      await round.save({ session });
-
-    // Domain events must only fire AFTER the owning transaction commits.
-    // When this runs inside someone else's transaction (settleLot), the
-    // caller passes an outbox array that it drains post-commit; when this
-    // runs standalone (markPermanentUnsold path), we're already outside
-    // any transaction, so emitting immediately is safe.
-      const emitNowOrDefer = (fn) => (outbox ? outbox.push(fn) : fn());
-      emitNowOrDefer(() => emitRoundCompleted(round._id, round.auctionId, { round }));
-
-    // Dispatch post-completion workflow
-      if (round.type === ROUND_TYPE.NORMAL) {
-        await AuctionService.handleNormalRoundClosed(round, session, outbox, journal);
-      } else {
-        await AuctionService.handleUnsoldRoundClosed(round, session, outbox, journal);
-      }
+    // UNSOLD is terminal for a pass, but NEVER terminal for the auction.
+    const terminal = [LOT_OUTCOME.SOLD, LOT_OUTCOME.UNSOLD, LOT_OUTCOME.PERMANENT_UNSOLD];
+    const unresolved = await TournamentPlayer.countDocuments({
+      _id: { $in: round.playerIds }, lotOutcome: { $nin: terminal },
+    }).session(session);
+    if (unresolved > 0) return round;
+    const auction = assertFound(await Auction.findById(round.auctionId).session(session), 'Auction not found');
+    const groups = await TournamentPlayer.aggregate([
+      { $match: { _id: { $in: round.playerIds }, tournamentId: auction.tournamentId, status: REGISTRATION_STATUS.APPROVED } },
+      { $group: { _id: '$lotOutcome', count: { $sum: 1 } } },
+    ]).session(session);
+    if (!round.playerIds.length || groups.reduce((total, group) => total + group.count, 0) !== round.playerIds.length) {
+      throw new AppError('Round membership changed outside the auction. Review unavailable players before closing this pass.', 409);
     }
+    const count = (outcome) => groups.find((group) => group._id === outcome)?.count ?? 0;
+    journal.track(round);
+    round.outcomeSummary = { sold: count(LOT_OUTCOME.SOLD), unsold: count(LOT_OUTCOME.UNSOLD), permanentUnsold: count(LOT_OUTCOME.PERMANENT_UNSOLD) };
+    round.status = ROUND_STATUS.COMPLETED;
+    round.completedAt = new Date();
+    await round.save({ session });
+    outbox.push(() => emitRoundCompleted(round._id, round.auctionId, { round }));
+
+    // Unused empty draft rounds do not block the unsold phase. Later nonempty
+    // normal rounds still have to run before the first unsold pass is generated.
+    const unfinished = await AuctionRound.exists({
+      auctionId: round.auctionId, status: { $ne: ROUND_STATUS.COMPLETED }, 'playerIds.0': { $exists: true },
+    }).session(session);
+    if (unfinished) return round;
+    const unsold = await TournamentPlayer.find({
+      tournamentId: auction.tournamentId, status: REGISTRATION_STATUS.APPROVED, lotOutcome: LOT_OUTCOME.UNSOLD,
+    }).select('_id').sort({ _id: 1 }).session(session).lean();
+    if (unsold.length) await AuctionService.createUnsoldRound(auction, unsold.map((player) => player._id), session, outbox, journal);
+    else await AuctionService.maybeCompleteAuction(auction, session, outbox, journal);
     return round;
   }
 
-  static async handleNormalRoundClosed(closedRound, session = null, outbox = null, journal = null) {
-  // Idempotency: if any normal round is still open, do nothing.
-    const pendingNormal = await AuctionRound.countDocuments({
-      auctionId: closedRound.auctionId,
-      type: ROUND_TYPE.NORMAL,
-      status: { $ne: ROUND_STATUS.COMPLETED },
-    }).session(session ?? null);
-
-    if (pendingNormal > 0) return;
-
-    const auction = await Auction.findById(closedRound.auctionId).session(session ?? null);
-
-  // Find every player who went unsold across all normal rounds.
-    const unsoldPlayers = await TournamentPlayer.find({
-      tournamentId: auction.tournamentId,
-      lotOutcome: LOT_OUTCOME.UNSOLD,
-    })
-      .session(session ?? null)
-      .select('_id')
-      .lean();
-
-    if (unsoldPlayers.length === 0) {
-    // No residual inventory → auction can close immediately.
-      await AuctionService.maybeCompleteAuction(auction, session, outbox, journal);
-    } else {
-      await AuctionService.createUnsoldRound(auction, unsoldPlayers.map((p) => p._id), session, outbox, journal);
-    }
+  static async createUnsoldRound(auction, unsoldPlayerIds, session, outbox, journal) {
+    if (!session || !outbox || !journal) throw new Error('Unsold passes require an audited command transaction');
+    const existing = await AuctionRound.findOne({
+      auctionId: auction._id, type: ROUND_TYPE.UNSOLD, status: { $in: [ROUND_STATUS.PENDING, ROUND_STATUS.ACTIVE] },
+    }).session(session);
+    if (existing) return existing;
+    if (!unsoldPlayerIds.length || auction.liveState.lotStatus === LOT_STATUS.BIDDING) throw new AppError('Finish the active pass before relisting players', 409);
+    const lastRound = await AuctionRound.findOne({ auctionId: auction._id }).sort({ order: -1 }).select('order').session(session);
+    const lastPass = await AuctionRound.findOne({ auctionId: auction._id, type: ROUND_TYPE.UNSOLD }).sort({ unsoldPass: -1 }).select('unsoldPass').session(session);
+    const legacyCount = await AuctionRound.countDocuments({ auctionId: auction._id, type: ROUND_TYPE.UNSOLD }).session(session);
+    const unsoldPass = Math.max(lastPass?.unsoldPass ?? 0, legacyCount) + 1;
+    const [round] = await AuctionRound.create([{
+      auctionId: auction._id, name: `Unsold Round-${unsoldPass}`, unsoldPass,
+      order: (lastRound?.order ?? 0) + 1, type: ROUND_TYPE.UNSOLD, category: 'UNSOLD',
+      playerIds: unsoldPlayerIds, status: ROUND_STATUS.PENDING,
+    }], { session });
+    journal.created(round);
+    const resetting = await TournamentPlayer.find({
+      _id: { $in: unsoldPlayerIds }, tournamentId: auction.tournamentId,
+      status: REGISTRATION_STATUS.APPROVED, lotOutcome: LOT_OUTCOME.UNSOLD,
+    }).session(session);
+    if (resetting.length !== unsoldPlayerIds.length) throw new AppError('Unsold inventory changed. Refresh before advancing the pass.', 409);
+    for (const player of resetting) journal.track(player);
+    await TournamentPlayer.updateMany({ _id: { $in: unsoldPlayerIds } }, {
+      $set: { lotOutcome: LOT_OUTCOME.NOT_LISTED, auctionRoundId: round._id },
+    }, { session });
+    auction.liveState.currentRoundId = round._id;
+    auction.liveState.updatedAt = new Date();
+    auction.logs.push({
+      action: AUCTION_LOG_ACTIONS.UNSOLD_ROUND_CREATED,
+      message: `${round.name} created with ${unsoldPlayerIds.length} players`,
+      metadata: { roundId: round._id, unsoldPass, playerCount: unsoldPlayerIds.length },
+    });
+    await auction.save({ session });
+    // Relisted IDs let connected clients expose the new queue immediately,
+    // without waiting for (or bypassing) a throttled reconciliation snapshot.
+    outbox.push(() => emitRoundAdded(auction._id, {
+      round, addedBy: 'SYSTEM', relistedPlayerIds: unsoldPlayerIds, liveState: auction.liveState,
+    }));
+    return round;
   }
 
-  static async createUnsoldRound(auction, unsoldPlayerIds, session = null, outbox = null, journal = null) {
-    const ownsSession = !session;
-    const sess = session ?? (await mongoose.startSession());
-
-    if (ownsSession) sess.startTransaction();
-
-    try {
-    // Race-guard: another worker may have already created it.
-      const existing = await AuctionRound.findOne({
-        auctionId: auction._id,
-        type: ROUND_TYPE.UNSOLD,
-      }).session(sess);
-
-      if (existing) {
-        if (ownsSession) await sess.commitTransaction();
-        return existing;
-      }
-
-      const lastRound = await AuctionRound.findOne({ auctionId: auction._id })
-        .sort({ order: -1 })
-        .session(sess)
-        .select('order');
-
-      const [unsoldRound] = await AuctionRound.create(
-        [
-          {
-            auctionId: auction._id,
-            name: 'Unsold Players Round',
-            order: (lastRound?.order ?? 0) + 1,
-            type: ROUND_TYPE.UNSOLD,
-            category: "UNSOLD",
-            playerIds: unsoldPlayerIds,
-            status: ROUND_STATUS.PENDING,
-          },
-        ],
-        { session: sess }
-      );
-  
-      journal?.created(unsoldRound);
-      if (journal) {
-        const resetting = await TournamentPlayer.find({ _id: { $in: unsoldPlayerIds } }).session(sess);
-        for (const player of resetting) journal.track(player);
-      }
-
-    // Reset players so the existing `openLot` machinery can re-use them
-    // without any special-casing.
-      await TournamentPlayer.updateMany(
-        { _id: { $in: unsoldPlayerIds } },
-        {
-          $set: {
-            lotOutcome: LOT_OUTCOME.NOT_LISTED,
-            auctionRoundId: unsoldRound._id,
-          },
-        },
-        { session: sess }
-      );
-
-      auction.logs.push({
-        action: AUCTION_LOG_ACTIONS.UNSOLD_ROUND_CREATED,
-        message: `Unsold round created with ${unsoldPlayerIds.length} players`,
-        metadata: { roundId: unsoldRound._id, playerCount: unsoldPlayerIds.length },
-      });
-      await auction.save({ session: sess });
-
-      if (ownsSession) await sess.commitTransaction();
-
-      // Only publish once the round actually exists in the committed
-      // transaction — if we joined a caller's transaction, hand the
-      // emission to their post-commit outbox.
-      const publish = () =>
-        emitRoundAdded(auction._id, { round: unsoldRound, addedBy: 'SYSTEM' });
-      if (ownsSession) publish();
-      else if (outbox) outbox.push(publish);
-
-      return unsoldRound;
-    } catch (error) {
-      if (ownsSession) await sess.abortTransaction();
-      throw error;
-    } finally {
-      if (ownsSession) sess.endSession();
-    }
-  }
-
-  static async handleUnsoldRoundClosed(closedRound, session = null, outbox = null, journal = null) {
-    const auction = await Auction.findById(closedRound.auctionId).session(session ?? null);
-    await AuctionService.maybeCompleteAuction(auction, session, outbox, journal);
+  /** Explicit, audited repair for a legacy pass already stalled with UNSOLD results. */
+  static async advanceUnsoldPass(auctionId, roundId, user, expected = {}) {
+    const command = await AuctionCommandService.run({
+      auctionId, user, permission: AUCTION_PERMISSIONS.MARK_PERMANENT_UNSOLD,
+      kind: 'UNSOLD_PASS_ADVANCED', label: 'Continue completed unsold pass',
+    }, async ({ auction, session, outbox, journal }) => {
+      if (auction.liveState.lotStatus === LOT_STATUS.BIDDING) throw new AppError('Settle the active lot before continuing the pass', 409);
+      const round = await AuctionService.runningRound(auctionId, session);
+      if (!round || round.type !== ROUND_TYPE.UNSOLD || String(round._id) !== String(roundId)) throw new AppError('The running unsold pass changed. Refresh before continuing.', 409);
+      assertLotTarget(auction, { ...expected, roundId }, null, round._id);
+      // Persist this command's revision before a helper loads another Auction
+      // instance; otherwise relist frames could carry the previous revision.
+      await auction.save({ session });
+      const closed = await AuctionService.checkRoundCompletion(round._id, session, outbox, journal);
+      if (closed.status !== ROUND_STATUS.COMPLETED) throw new AppError('Offer or permanently retire the remaining players before continuing this pass', 409);
+    });
+    return command.auction;
   }
 
   static async maybeCompleteAuction(auction, session = null, outbox = null, journal = null) {
@@ -804,26 +760,46 @@ export class AuctionService {
     }
   }
 
-  static async markPermanentUnsold(auctionId, tournamentPlayerId, user) {
+  static async markPermanentUnsold(auctionId, tournamentPlayerId, user, expected = {}) {
     const command = await AuctionCommandService.run({
       auctionId, user, permission: AUCTION_PERMISSIONS.MARK_PERMANENT_UNSOLD,
-      kind: 'PERMANENT_UNSOLD_MARKED', label: 'Retire player from unsold pool',
-    }, async ({ auction, journal, session, outbox }) => {
-      const player = assertFound(await TournamentPlayer.findOne({ _id: tournamentPlayerId, tournamentId: auction.tournamentId, status: REGISTRATION_STATUS.APPROVED }).session(session), 'Tournament player not found');
-      const round = await AuctionRound.findOne({ _id: player.auctionRoundId, auctionId, type: ROUND_TYPE.UNSOLD }).session(session);
-      if (!round || !round.playerIds.some((id) => String(id) === String(player._id))) throw new AppError('Player is not in the unsold round', 400);
-      if (![LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.UNSOLD].includes(player.lotOutcome)) throw new AppError('Settle the active lot before retiring the player', 400);
-      journal.track(player);
-      player.lotOutcome = LOT_OUTCOME.PERMANENT_UNSOLD;
-      player.permanentUnsoldAt = new Date();
-      player.permanentUnsoldBy = user._id;
-      await player.save({ session });
-      auction.logs.push({ action: AUCTION_LOG_ACTIONS.PERMANENT_UNSOLD_MARKED, userId: user._id,
-        message: `Player ${player._id} retired from the unsold pool`, metadata: { tournamentPlayerId, roundId: round._id } });
-      await auction.save({ session });
+      kind: 'PERMANENT_UNSOLD_MARKED', label: 'Retire player from further unsold passes',
+    }, async (scope) => {
+      const { auction, journal, session, outbox } = scope;
+      const player = assertFound(await TournamentPlayer.findOne({
+        _id: tournamentPlayerId, tournamentId: auction.tournamentId, status: REGISTRATION_STATUS.APPROVED,
+      }).session(session), 'Tournament player not found');
+      const round = await AuctionService.runningRound(auctionId, session);
+      if (!round || round.type !== ROUND_TYPE.UNSOLD || String(player.auctionRoundId) !== String(round._id)
+        || !round.playerIds.some((id) => String(id) === String(player._id))) {
+        throw new AppError('Only players in the running unsold pass may be permanently retired', 409);
+      }
+      assertLotTarget(auction, { ...expected, tournamentPlayerId }, player._id, round._id);
+      let result = player;
+      const settlesActiveLot = player.lotOutcome === LOT_OUTCOME.IN_PROGRESS;
+      if (settlesActiveLot) {
+        if (String(auction.liveState.currentTournamentPlayerId) !== String(player._id)) throw new AppError('This player is not the active lot', 409);
+        ({ player: result } = await settleActiveLot(scope, LOT_OUTCOME.PERMANENT_UNSOLD, { ...expected, tournamentPlayerId }));
+      } else {
+        if (![LOT_OUTCOME.NOT_LISTED, LOT_OUTCOME.UNSOLD].includes(player.lotOutcome)) throw new AppError('Player is already resolved', 409);
+        journal.track(player);
+        player.lotOutcome = LOT_OUTCOME.PERMANENT_UNSOLD;
+        player.permanentUnsoldAt = new Date();
+        player.permanentUnsoldBy = user._id;
+        await player.save({ session });
+        auction.logs.push({ action: AUCTION_LOG_ACTIONS.PERMANENT_UNSOLD_MARKED, userId: user._id,
+          message: `Player ${player._id} permanently retired from ${round.name}`, metadata: { tournamentPlayerId, roundId: round._id } });
+        await auction.save({ session });
+      }
+      let finalAuction;
+      // Pending-player retirement must NOT stop or rewind another player's clock.
+      outbox.push(() => emitLotPermanentUnsold(auctionId, {
+        tournamentPlayerId, roundId: round._id, markedBy: user._id,
+        ...(settlesActiveLot ? { liveState: finalAuction.liveState } : {}),
+      }));
       await AuctionService.checkRoundCompletion(round._id, session, outbox, journal);
-      outbox.push(() => emitLotPermanentUnsold(auctionId, { tournamentPlayerId, roundId: round._id, markedBy: user._id }));
-      return player;
+      finalAuction = await Auction.findById(auctionId).session(session);
+      return result;
     });
     return command.result;
   }

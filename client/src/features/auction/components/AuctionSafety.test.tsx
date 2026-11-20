@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { makePlayer } from '@/test/auctionFixtures';
+import { MemoryRouter } from 'react-router-dom';
+import { RoundList } from './RoundList';
 import { NextLotPicker } from './NextLotPicker';
 import { AuctionUndoPanel } from './AuctionUndoPanel';
 import { auctionApi } from '../api/index.api';
@@ -32,7 +34,8 @@ describe('running-round lot picker', () => {
   it('retains earlier unauctioned players in the queue after a later selection', () => {
     const selectedLater = players.map((player) => player.id === 'player-b' ? { ...player, status: 'current' as const } : player);
     expect(upcomingAuctionPlayers(rounds, selectedLater).map((player) => player.id)).toEqual(['player-a', 'later']);
-    expect(upcomingAuctionPlayers([{ ...rounds[0], type: 'unsold' }], [makePlayer({ status: 'unsold' })]).map((player) => player.id)).toEqual(['player-a']);
+    expect(upcomingAuctionPlayers([{ ...rounds[0], type: 'unsold' }], [makePlayer({ status: 'unsold' })])).toEqual([]);
+    expect(upcomingAuctionPlayers([{ ...rounds[0], type: 'unsold' }], [makePlayer({ status: 'pending' })]).map((player) => player.id)).toEqual(['player-a']);
   });
 
   it('disables selection while a lot is active and explains the restriction', () => {
@@ -44,7 +47,9 @@ describe('running-round lot picker', () => {
   it('mirrors round eligibility for pending and re-listed unsold rounds', () => {
     expect(runningAuctionRound([...rounds].reverse())?.id).toBe('first');
     const unsold = { ...rounds[0], type: 'unsold' as const, status: 'pending' as const, playerIds: ['player-a', 'sold', 'retired'] };
-    expect(eligibleRoundPlayers(unsold, [makePlayer({ status: 'unsold' }), ...players.slice(2)])).toHaveLength(1);
+    expect(eligibleRoundPlayers(unsold, [makePlayer({ status: 'pending', auctionRoundId: unsold.id }), ...players.slice(2)])).toHaveLength(1);
+    expect(eligibleRoundPlayers(unsold, [makePlayer({ status: 'unsold' })])).toHaveLength(0);
+    expect(eligibleRoundPlayers(unsold, [makePlayer({ status: 'pending', auctionRoundId: 'different-pass' })])).toHaveLength(0);
     expect(eligibleRoundPlayers({ ...unsold, status: 'completed' }, players)).toEqual([]);
   });
 });
@@ -114,5 +119,16 @@ describe('confirmed organizer undo', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View recent audit trail' }));
     expect(await screen.findByText('Sell Asha')).toBeTruthy();
     expect(screen.getByText('Reason: Wrong decision')).toBeTruthy();
+  });
+});
+
+describe('engine-managed pass structure', () => {
+  it('never lets an organizer delete a generated pass, even while pending', () => {
+    const remove = vi.fn();
+    render(<MemoryRouter><RoundList rounds={[{ ...rounds[0], type: 'unsold', status: 'pending', unsoldPass: 2 }]} canManage editRoute={() => '/edit'} onDelete={remove} /></MemoryRouter>);
+    const button = screen.getByTitle('Unsold passes are managed by the auction engine') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(remove).not.toHaveBeenCalled();
   });
 });

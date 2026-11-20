@@ -84,6 +84,9 @@ test('unknown or lookalike routes cannot evade the general limiter', async () =>
   expect(auctionTrafficClass({ method: 'POST', path: `${base}/snapshot` })).toBe('general');
   expect(auctionTrafficClass({ method: 'GET', path: `${base}/snapshot/anything` })).toBe('general');
   expect(auctionTrafficClass({ method: 'GET', path: `/api/v1/tournaments/${id}/auction` })).toBe('read');
+  expect(auctionTrafficClass({ method: 'POST', path: `${base}/rounds/${id}/advance` })).toBe('command');
+  expect(auctionTrafficClass({ method: 'GET', path: `${base}/rounds/${id}/advance` })).toBe('general');
+  expect(auctionTrafficClass({ method: 'POST', path: `${base}/rounds/${id}/advance/anything` })).toBe('general');
   const app = appFor({ generalMax: 1 });
   await request(app).get(`${base}/unknown`).expect(200);
   await request(app).get(`${base}/unknown`).expect(429);

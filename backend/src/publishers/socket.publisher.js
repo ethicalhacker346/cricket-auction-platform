@@ -334,11 +334,12 @@ class SocketEventPublisher {
   }
 
   // ---------- Round handlers ----------
-  handleRoundAdded({ auctionId, round, _emittedAt, version }) {
+  handleRoundAdded({ auctionId, round, relistedPlayerIds, liveState, _emittedAt, version }) {
     this.publishToAuction(auctionId, "auction:round:added", {
       auctionId,
       version,
       round,
+      ...(relistedPlayerIds ? { relistedPlayerIds, liveState } : {}),
       timestamp: _emittedAt,
     });
   }
@@ -481,14 +482,19 @@ class SocketEventPublisher {
     roundId,
     markedBy,
     version,
+    liveState,
     _emittedAt,
   }) {
+    // Only retirement of the ACTIVE lot closes its clock. Retiring a waiting
+    // player must leave another player's running timer completely untouched.
+    if (liveState && liveState.lotStatus !== 'BIDDING') this.stopTimer(auctionId, liveState.version ?? version);
     this.publishToAuction(auctionId, "auction:lot:permanent_unsold", {
       auctionId,
       tournamentPlayerId,
       roundId,
       markedBy,
       version,
+      ...(liveState ? { liveState } : {}),
       timestamp: _emittedAt,
     });
     this.publishToAuction(auctionId, "auction:log", {

@@ -1,6 +1,23 @@
 import mongoose from 'mongoose';
 import { ROUND_STATUS, ROUND_TYPE } from '../config/constants.js';
 
+const outcomeSummarySchema = new mongoose.Schema({
+  sold: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
+  unsold: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
+  permanentUnsold: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
+}, { _id: false });
+
+export const UNSOLD_PASS_INDEXES = [
+  [{ auctionId: 1, unsoldPass: 1 }, {
+    name: 'unique_unsold_pass_number', unique: true,
+    partialFilterExpression: { type: ROUND_TYPE.UNSOLD, unsoldPass: { $type: 'number' } },
+  }],
+  [{ auctionId: 1, type: 1 }, {
+    name: 'one_open_unsold_pass_per_auction', unique: true,
+    partialFilterExpression: { type: ROUND_TYPE.UNSOLD, status: { $in: [ROUND_STATUS.PENDING, ROUND_STATUS.ACTIVE] } },
+  }],
+];
+
 const auctionRoundSchema = new mongoose.Schema(
   {
     auctionId: {
@@ -27,6 +44,12 @@ const auctionRoundSchema = new mongoose.Schema(
       enum: Object.values(ROUND_TYPE),
       maxlength: 40,
     },
+    // Engine-owned sequence, independent of display order and editable names.
+    // Optional only for pre-migration history; all newly generated passes set it.
+    unsoldPass: { type: Number, min: 1, validate: Number.isSafeInteger, immutable: true },
+    // Freeze aggregate outcomes when a pass closes. Relisting changes a
+    // player's CURRENT status, never the historical round's result counters.
+    outcomeSummary: { type: outcomeSummarySchema, default: undefined },
     category:{
       type: String,
       
@@ -73,10 +96,9 @@ const auctionRoundSchema = new mongoose.Schema(
 
 auctionRoundSchema.index({ auctionId: 1, order: 1 }, { unique: true });
 
-auctionRoundSchema.index(
-  { auctionId: 1, type: 1 },
-  { unique: true, partialFilterExpression: { type: ROUND_TYPE.UNSOLD } }
-);
+// Replaces the former one-unsold-round-for-the-entire-auction constraint.
+// Existing deployments MUST run migrate-unsold-passes.mjs before enabling this.
+for (const [keys, options] of UNSOLD_PASS_INDEXES) auctionRoundSchema.index(keys, options);
 
 auctionRoundSchema.path('completedAt').validate(function validateCompletedAfterStarted(v) {
   if (!v || !this.startedAt) return true;
@@ -93,8 +115,8 @@ auctionRoundSchema.pre('validate', function requirePlayersWhenActive(next) {
   next();
 });
 
-// NEW: The unsold round must always be the last one in the order.
-// Normal rounds may not be inserted after it.
+// The engine-managed unsold phase follows every normal round.
+// Normal rounds may not be inserted after any unsold pass.
 auctionRoundSchema.pre('validate', async function enforceUnsoldRoundIsLast(next) {
   if (this.type !== ROUND_TYPE.UNSOLD) {
     const unsoldExists = await mongoose.model('AuctionRound').exists({

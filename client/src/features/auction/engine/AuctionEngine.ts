@@ -8,6 +8,7 @@ import type {
   Franchise,
   LiveAuctionSnapshot,
   LotTimeCommandResult,
+  LotDecisionTarget,
   Player,
 } from "../types/index.types";
 import { eligibleRoundPlayers, runningAuctionRound } from "../utils/roundSelection";
@@ -73,6 +74,7 @@ export class AuctionEngine {
 
   private soldEvent: LiveAuctionSnapshot["soldEvent"] = null;
   private unsoldEvent: LiveAuctionSnapshot["unsoldEvent"] = null;
+  private lastUnsoldVerdictKey = "";
   private permanentUnsoldEvent: { playerId: string; seq: number } | null = null;
   private eventSeq = 0;
   private connection: LiveAuctionSnapshot["connection"] = "connecting";
@@ -160,7 +162,7 @@ export class AuctionEngine {
       this.players = []; this.rounds = []; this.franchises = []; this.bidHistory = []; this.logs = [];
       this.currentPlayerId = null; this.currentRoundId = null;
       this.currentBid = { amount: 0, teamId: null };
-      this.soldEvent = null; this.unsoldEvent = null; this.permanentUnsoldEvent = null;
+      this.soldEvent = null; this.unsoldEvent = null; this.permanentUnsoldEvent = null; this.lastUnsoldVerdictKey = "";
       this.undoAction = null; this.undoVersion = 0; this.appliedUndoVersion = 0; this.lastActionVersion = -1; this.lastVersion = -1;
       this.setTimerBaseline(0, 0, false);
     }
@@ -372,6 +374,13 @@ export class AuctionEngine {
         if (!this.rounds.find((r) => r.id === mapped.id)) {
           this.rounds = [...this.rounds, mapped].sort((a, b) => a.order - b.order);
         }
+        if (mapped.type === 'unsold' && Array.isArray(payload.relistedPlayerIds)) {
+          const members = new Set(mapped.playerIds);
+          const relisted = new Set(payload.relistedPlayerIds.filter((id: string) => members.has(id)));
+          this.players = this.players.map((player) => relisted.has(player.id)
+            ? { ...player, status: 'pending', auctionRoundId: mapped.id } : player);
+          if (payload.liveState) this.applyLiveState(payload.liveState);
+        }
       }
       this.pushLog("round", `Round ${payload.round?.name} added`);
       this.emit();
@@ -407,7 +416,7 @@ export class AuctionEngine {
       const roundId = payload.round?._id || payload.round?.id;
       const round = this.rounds.find((r) => r.id === roundId);
       if (round && round.status !== "completed") {
-        round.status = "completed";
+        Object.assign(round, payload.round ? mapRound(payload.round) : {}, { status: 'completed' });
         this.pushLog("round_complete", `Round ${round.name || payload.round?.name} completed`);
         this.emit();
         this.scheduleSnapshot(600, generation);
@@ -437,6 +446,7 @@ export class AuctionEngine {
         const player = this.players.find((p) => p.id === payload.tournamentPlayerId);
         if (player && player.status !== "current") {
           player.status = "current";
+          player.auctionRoundId = payload.roundId;
         }
       }
 
@@ -531,8 +541,12 @@ export class AuctionEngine {
       }
 
       const player = this.players.find((p) => p.id === payload.tournamentPlayerId);
-      if (player && player.status !== "unsold") {
-        player.status = "unsold";
+      const verdictKey = `${payload.tournamentPlayerId}:${payload.roundId}:${payload.version ?? this.lastVersion}`;
+      if (player && verdictKey !== this.lastUnsoldVerdictKey) {
+        this.lastUnsoldVerdictKey = verdictKey;
+        // A successor/relist frame may arrive before its same-revision verdict.
+        // Preserve the new queue assignment while still showing the old result once.
+        if (!player.auctionRoundId || !payload.roundId || player.auctionRoundId === payload.roundId) player.status = 'unsold';
 
         this.eventSeq++;
         this.unsoldEvent = {
@@ -572,6 +586,7 @@ export class AuctionEngine {
     this.socket.on(SOCKET_EVENTS.LOT_PERMANENT_UNSOLD, (payload: any) => {
       if (generation !== this.connectionGeneration || this.destroyed || this.intentionalDisconnect) return;
       if (!this.acceptEvent(payload)) return;
+      if (payload.liveState) this.applyLiveState(payload.liveState);
       const player = this.players.find((p) => p.id === payload.tournamentPlayerId);
       if (player && player.status !== "permanent_unsold") {
         player.status = "permanent_unsold";
@@ -797,6 +812,7 @@ export class AuctionEngine {
     const totalMoneySpent = this.franchises.reduce((sum, f) => sum + f.spent, 0);
 
     return {
+      version: Math.max(0, this.lastVersion),
       auction: this.auction ? { ...this.auction } : ({} as Auction),
       rounds: this.rounds.map((r) => ({ ...r })),
       players: this.players.map((p) => ({ ...p })),
@@ -1166,21 +1182,38 @@ export class AuctionEngine {
   }
 
 
-  forceSold(): Promise<{ success: boolean; error?: string }> {
-    const playerId = this.currentPlayerId;
-    const { teamId, amount } = this.currentBid;
-    if (!playerId || !teamId) return Promise.resolve({ success: false, error: 'No active lot or winning bid to settle' });
-    return this.command((auctionId) => liveAuctionApi.markSold(auctionId, playerId, teamId, amount), 'Force sold failed');
+  private lotTarget(target?: LotDecisionTarget): LotDecisionTarget | null {
+    if (!this.currentPlayerId || !this.currentRoundId) return null;
+    if (target && (target.tournamentPlayerId !== this.currentPlayerId || target.roundId !== this.currentRoundId || target.expectedVersion !== this.lastVersion)) return null;
+    return target ?? { tournamentPlayerId: this.currentPlayerId, roundId: this.currentRoundId, expectedVersion: this.lastVersion };
   }
 
-  forceUnsold(): Promise<{ success: boolean; error?: string }> {
-    const playerId = this.currentPlayerId;
-    if (!playerId) return Promise.resolve({ success: false, error: 'No active lot to settle' });
-    return this.command((auctionId) => liveAuctionApi.markUnsold(auctionId, playerId), 'Force unsold failed');
+  forceSold(reviewed?: LotDecisionTarget): Promise<{ success: boolean; error?: string }> {
+    const target = this.lotTarget(reviewed);
+    if (!target || !this.currentBid.teamId) return Promise.resolve({ success: false, error: 'The reviewed lot changed or has no winning bid. Review it again.' });
+    return this.command((auctionId) => liveAuctionApi.markSold(auctionId, target), 'Force sold failed');
   }
 
-  markPermanentUnsold(tournamentPlayerId: string): Promise<{ success: boolean; error?: string }> {
-    return this.command((auctionId) => liveAuctionApi.markPermanentUnsold(auctionId, tournamentPlayerId), 'Failed to retire player');
+  forceUnsold(reviewed?: LotDecisionTarget): Promise<{ success: boolean; error?: string }> {
+    const target = this.lotTarget(reviewed);
+    if (!target) return Promise.resolve({ success: false, error: 'The reviewed player or pass changed. Review the current lot again.' });
+    return this.command((auctionId) => liveAuctionApi.markUnsold(auctionId, target), 'Force unsold failed');
+  }
+
+  markPermanentUnsold(tournamentPlayerId: string, reviewed?: LotDecisionTarget): Promise<{ success: boolean; error?: string }> {
+    const player = this.players.find((candidate) => candidate.id === tournamentPlayerId);
+    const roundId = player?.auctionRoundId ?? this.currentRoundId;
+    const target = reviewed ?? (roundId ? { tournamentPlayerId, roundId, expectedVersion: this.lastVersion } : null);
+    if (!target || target.tournamentPlayerId !== tournamentPlayerId || target.roundId !== roundId || target.expectedVersion !== this.lastVersion) {
+      return Promise.resolve({ success: false, error: 'The reviewed player or pass changed. Review the current lot again.' });
+    }
+    return this.command((auctionId) => liveAuctionApi.markPermanentUnsold(auctionId, tournamentPlayerId,
+      { roundId: target.roundId, expectedVersion: target.expectedVersion }), 'Failed to retire player');
+  }
+
+  advanceUnsoldPass(roundId: string): Promise<{ success: boolean; error?: string }> {
+    const expectedVersion = this.lastVersion;
+    return this.command((auctionId) => liveAuctionApi.advanceUnsoldPass(auctionId, roundId, expectedVersion), 'Could not continue this unsold pass');
   }
 
 }

@@ -6,7 +6,7 @@ const AUCTION_READ = new RegExp(`^/api/v1/auctions/${ID}(?:/(?:snapshot|live|per
 const TOURNAMENT_READ = new RegExp(`^/api/v1/tournaments/${ID}/(?:auction|players(?:/approved)?)$`, 'i');
 const PRESENCE = new RegExp(`^/api/v1/auctions/${ID}/viewers/(?:heartbeat|leave)$`, 'i');
 const BID = new RegExp(`^/api/v1/auctions/${ID}/bids$`, 'i');
-const COMMAND = new RegExp(`^/api/v1/auctions/${ID}(?:/(?:start|pause|resume|complete|undo|lot/(?:open|sold|unsold|time)|rounds(?:/${ID})?|players/${ID}/permanent-unsold))?$`, 'i');
+const COMMAND = new RegExp(`^/api/v1/auctions/${ID}(?:/(?:start|pause|resume|complete|undo|lot/(?:open|sold|unsold|time)|rounds(?:/${ID}(?:/advance)?)?|players/${ID}/permanent-unsold))?$`, 'i');
 
 /** Exact method/path allowlist: unknown endpoints retain the general budget. */
 export function auctionTrafficClass(req) {

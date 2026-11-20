@@ -15,11 +15,13 @@ import { env } from './config/env.js';
 import { initSocket, closeSocketIO } from './socket/index.js';
 import { logger } from './config/logger.js';
 import { closeRateLimitStores } from './middleware/rateLimitStore.js';
+import { assertUnsoldPassIndexes } from './migrations/unsold-passes.js';
 import { setupGracefulShutdown } from './config/gracefulShutdown.js';
 
 async function bootstrap() {
   try {
-    await connectDatabase();
+    const database = await connectDatabase();
+    if (env.NODE_ENV === 'production') await assertUnsoldPassIndexes(database.db);
     registerDatabaseShutdownHooks();
     logger.info('🗄️  Database connected');
 

@@ -8,9 +8,9 @@
 
 ## Current implementation checkpoint — 2026-11-18
 
-The review below is chronological. **Parts 1–6 preserve findings and verification
-at their original checkpoints**; historical blocked tests and compiler counts
-are not the current result. [Part 7](#part-7--auction-traffic-resilience-per-lot-time-and-adaptive-3d)
+The review below is chronological. **Parts 1–7 preserve findings and verification
+at their original checkpoints**; historical single-pass diagrams, blocked tests
+and compiler counts are not the current contract. [Part 8](#part-8--numbered-unsold-passes-and-explicit-retirement)
 records the latest implementation and remaining limits.
 
 | Requested capability | Current implementation |
@@ -22,14 +22,17 @@ records the latest implementation and remaining limits.
 | Auction traffic | Separate verified-account/NAT-aware read, presence, command and bid budgets; Redis atomic counters with bounded local fallback; Retry-After-aware coalesced reads |
 | Extra time for one lot | Audited, idempotent LIVE/PAUSED extension of the active player, including after expiry; global rules/next-lot duration unchanged |
 | Immersive room | Device/FPS-adaptive rendering, accessible persistent camera/display controls, bounded stage/queue, renderer-only graphics recovery and standard-room fallback |
+| Repeat unsold passes | Force Unsold defers once per pass; Permanent Unsold retires; numbered successors and frozen pass summaries are created transactionally, with full cascade undo |
 
-**Final verification:** 125 client tests / 18 files; 69 backend tests / 5 suites;
+**Current verification:** 145 client tests / 20 files; 90 backend tests / 6 suites;
 hooks lint, 23-event socket contract, syntax checks, diff checks and production
 PWA build pass. The backend exits cleanly with open-handle detection and without
 forced termination. Five real-Redis integration checks pass. The targeted
-follow-up browser harness completes with eight checks and no uncaught exceptions;
-the earlier feature acceptance checklist is retained in the testing guide.
-Typecheck still fails with **228 diagnostics**, unchanged by this follow-up
+traffic/graphics browser regression and new repeat-pass acceptance run each
+complete with eight checks and no uncaught exceptions. The actual migration CLI
+passes disposable dry-run/apply/idempotency smoke checks; the real deployment
+has **not** been migrated. A targeted index/metadata migration is required.
+Typecheck still fails with **228 diagnostics**, unchanged by this release
 (and down from 290 before the earlier features); only equivalent union-order
 wording differs. Large-bundle warnings remain, but the lazy 3D renderer is no
 longer PWA-precached for 2D viewers. See [the repeatable checks](client/TESTING.md)
@@ -1174,3 +1177,127 @@ The Part 6 distributed limits remain: post-commit publication is not a durable
 outbox, timer ownership is not elected across workers, and presence is
 approximate. Shared Redis/MongoDB plus client reconciliation remain required;
 this work does not claim exactly-once distributed delivery.
+
+# Part 8 — Numbered unsold passes and explicit retirement
+
+## R8.1 — A pass result is not the auction's terminal result
+
+The original workflow made the unsold round lifetime-unique, treated UNSOLD as
+eligible again in that same round, and considered only SOLD/PERMANENT_UNSOLD
+terminal for its closure. It could neither advance to another numbered pass nor
+safely distinguish deferral from permanent retirement in every organizer view.
+The single-pass diagrams in the original review are superseded here.
+
+A player opens only while APPROVED + NOT_LISTED, assigned to the **running**
+round. In an unsold pass the player's latest `auctionRoundId` must also match.
+SOLD, UNSOLD and PERMANENT_UNSOLD all finish the current pass; only the first and
+last are terminal for the whole auction. Force Unsold releases the winning
+reservation and defers; Permanent Unsold explicitly excludes the player from
+all later passes. Countdown expiry still never settles a lot automatically.
+
+On the last result, the same `AuctionCommandService` transaction freezes the
+round's aggregate `outcomeSummary`, closes it, resets approved deferred UNSOLD
+players to NOT_LISTED, assigns the successor and creates exactly one
+`Unsold Round-${unsoldPass}`. Names are independent of overall round order and
+legacy names; numbers advance from existing pass metadata/legacy history.
+Normal rounds run first, unused empty templates do not block advancement, and
+normal membership/order/new-round creation lock after the unsold phase starts.
+No empty pass is generated. The global NOT_LISTED/IN_PROGRESS/UNSOLD completion
+guard remains: resetting a new queue is not mistaken for an auction ending.
+
+Completed round summaries are frozen aggregates, not mutable projections of
+what the same players do later. Legacy completed rounds without summaries stay
+completed with totals unavailable. There is no invented per-player attempt
+history. Membership/order/pass number/deletion remain engine-managed; pending
+name/category metadata stays editable.
+
+## R8.2 — One financial settlement and compensation boundary
+
+`lot-settlement.service.js` centralizes sold, unsold and active permanent
+settlement within the command transaction. Active Permanent Unsold releases the
+exact reservation, changes winning bids to OUTBID, stamps retirement metadata
+and clears the lot/clock atomically. It works while LIVE or PAUSED without an
+implicit resume. Queued retirement never consumes another lot's reservation,
+changes its timer anchor, or stops its publisher clock.
+
+Journal scopes include pass number, frozen summary, player assignment/outcome,
+financial state and all automatic consequences. Undo of a successor-generating
+result removes that successor and restores **every** relisted player, earlier
+round counters and the reviewed lot. Undo of active retirement restores the
+winning bid/reservation and pauses recovered bidding. Repeated/stale/concurrent
+commands cannot double-retire, double-spend or create duplicate successors.
+Audit failure rolls the whole transaction back, without leaked publications.
+
+REST sold/unsold now require player + round IDs; permanent requires the running
+pass ID. First-party controls also send the reviewed pre-command
+`expectedVersion`. `assertLotTarget` accounts for the command's incremented
+serialization fence; mismatches return 409 `STALE_LOT_DECISION`. A reviewed
+confirmation cannot settle a new pass just because the same player returns.
+Old empty-body clients must reload after coordinated backend/frontend rollout.
+
+## R8.3 — Immediate, bounded realtime and shared accessible controls
+
+`auction:round:added` carries relisted IDs and final live state at the command
+revision. Round-completed frames carry the frozen summary. The engine applies
+the new pending assignment immediately, including when a same-revision verdict
+arrives after relisting; duplicate unsold verdicts are deduplicated. Active
+permanent retirement carries its cleared live state, while waiting retirement
+omits it so another clock is preserved. Snapshots remain the correctness floor
+for missed/out-of-order cross-worker publications.
+
+Standard/3D views, including the legacy team-console organizer toolbar, use
+shared controls rather than separate unsafe settlement shortcuts. Both unsold
+choices have visible mobile labels, distinct confirmed explanations and captured
+player/pass/version targets. A changed bid/pass/player or unavailable connection
+disables confirmation. Compact 3D drawers place decisions above the explanation
+card so Permanent Unsold is not buried below long guidance. Numbered pass
+progress distinguishes processed/deferred/waiting and uses historical summaries.
+
+A legacy running pass already idle with every player resolved can use the
+explicit, authorized, audited `/rounds/:roundId/advance` command. New passes
+advance automatically on their last result. Reads/polling never perform repair
+writes. Permission policy 6 retains organizer/admin ownership and LIVE/PAUSED
+permanent retirement; guests/unrelated accounts remain read-only. The exact
+advance route uses the live-command traffic budget, not the ordinary API budget.
+
+## R8.4 — Targeted migration, verified behavior and remaining limits
+
+The old lifetime-unique unsold index must be replaced before rollout. Unique
+partial `(auctionId, unsoldPass)` and one unfinished `(auctionId, type)`
+constraints protect numbering and successor creation. The dry-run-first CLI
+validates data/index names, backfills only missing numbers, creates replacements
+before removing the **exact recognized old constraint**, and retains custom
+indexes. It never broadly syncs/drops indexes or edits finances/journals/history.
+Production startup refuses incompatible/missing replacement constraints or the
+old lifetime index. `connectDatabase()` returns the Mongoose Connection, whose
+`.db` is the native database used by that guard.
+
+Follow [the migration runbook](docs/UNSOLD_PASSES_MIGRATION.md): stop every writer,
+back up, dry-run/apply/verify, deploy backend/frontend together and rehearse in
+staging. There is no destructive down-migration and no claim that production
+has already been migrated. Metadata/index application is safely rerunnable, not
+one global transaction. Old names/summaries are not fabricated or renamed.
+
+Current validation: **145 client tests / 20 files; 90 backend tests / 6 suites**,
+five live-Redis checks, hooks lint, 23 room-event contracts, backend syntax,
+diff checks and production PWA build pass. Typecheck retains the same **228
+pre-existing semantic diagnostics** after normalizing only equivalent union
+wording/line shifts. PWA precaches 14 entries / 3612.99 KiB, excluding lazy 3D;
+existing `.env`/large-bundle warnings remain. The 19-case dedicated backend
+suite includes real replica-set races, three passes, cascade undo, stale-target
+protection, constraints, migration/custom-index and preflight failures. Actual
+CLI dry-run/apply/idempotency smoke tests pass on another disposable replica set.
+
+The traffic/extra-time/graphics eight-check browser regression was rerun, and
+another eight-check real-browser acceptance run covers both unsold choices,
+three exact numbered passes, mobile 320px/390px drawers, owner-bid invalidation,
+sold/permanent exclusions, frozen summaries, successor undo, final completion
+and restoration of a winning reservation/paused lot after final permanent undo.
+Both exit successfully with no uncaught exceptions. See `client/TESTING.md`.
+
+These tests do not certify production capacity, infrastructure failover or a
+complete browser/driver matrix. Post-commit publications remain in-process,
+not a durable distributed outbox; clocks/high-watermarks remain worker-local
+and presence approximate. Shared MongoDB/Redis and reconciliation remain
+necessary for horizontal deployments. Temporary binaries, credentials, demo
+fixtures, browsers and screenshots are not shipped.

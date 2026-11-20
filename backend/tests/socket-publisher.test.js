@@ -90,3 +90,22 @@ test('extra time restarts an expired clock with the extended dial total, but nev
   expect(publisher.activeTimers.size).toBe(0);
   const count = frames.length; jest.advanceTimersByTime(60_000); expect(frames).toHaveLength(count);
 });
+
+test('retiring a waiting player preserves another clock, while active permanent retirement closes it immediately', () => {
+  send(AUCTION_EVENTS.LOT_OPENED, { tournamentPlayerId: 'active', liveState: live(2) });
+  const ownedTimer = publisher.activeTimers.get(auctionId);
+  send(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, { version: 3, tournamentPlayerId: 'waiting', roundId: 'pass-1' });
+  expect(publisher.activeTimers.get(auctionId)).toBe(ownedTimer);
+  expect(last('auction:lot:permanent_unsold').liveState).toBeUndefined();
+  send(AUCTION_EVENTS.LOT_PERMANENT_UNSOLD, { version: 4, tournamentPlayerId: 'active', roundId: 'pass-1',
+    liveState: { ...live(4, 0), currentTournamentPlayerId: null, lotStatus: 'PENDING' } });
+  expect(publisher.activeTimers.size).toBe(0);
+  expect(last('auction:lot:permanent_unsold').liveState).toMatchObject({ currentTournamentPlayerId: null, lotStatus: 'PENDING' });
+  const count = frames.length; jest.advanceTimersByTime(60_000); expect(frames).toHaveLength(count);
+});
+
+test('a new unsold pass publishes relisted IDs and the final clock state at the command revision', () => {
+  emitRoundAdded(auctionId, { version: 8, round: { _id: 'pass-3', unsoldPass: 3 },
+    relistedPlayerIds: ['player-a'], liveState: { ...live(8, 0), currentRoundId: 'pass-3', lotStatus: 'PENDING' } });
+  expect(last('auction:round:added')).toMatchObject({ version: 8, round: { unsoldPass: 3 }, relistedPlayerIds: ['player-a'], liveState: { version: 8, currentRoundId: 'pass-3' } });
+});

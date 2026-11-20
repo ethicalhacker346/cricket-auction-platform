@@ -22,7 +22,7 @@ import { PlayerPoolDrawer } from "../components/player-pool/PlayerPoolDrawer";
 // Round TYPE is intentionally NOT offered as a create-form choice here: the
 // backend only recognizes "normal" | "unsold" (AuctionRound.js / ROUND_TYPE),
 // and the "unsold" round is engine-managed — it is auto-created by the
-// auction engine when lots go unsold, is always ordered last, and rejects
+// auction engine after normal rounds finish; numbered passes reject
 // manual playerIds edits (see AuctionRound.js enforceUnsoldRoundPlayerIds /
 // enforceUnsoldRoundIsLast). Every round an organizer creates by hand here is
 // therefore always type "normal"; there's nothing to pick.
@@ -60,6 +60,7 @@ export default function AuctionRoundsPage() {
   const storeAuctionId = auction?.id;
   const { rounds, actions, loading } = useAuctionRounds(storeAuctionId);
 
+  const unsoldPhaseStarted = rounds.some((round) => round.type === "unsold");
   const [name, setName] = useState("");
   const [category, setCategory] = useState<AuctionRoundCategory>("CUSTOM");
   const [showForm, setShowForm] = useState(false);
@@ -78,7 +79,7 @@ export default function AuctionRoundsPage() {
 
   // ── Handlers ─────────────────────────────────────────────────────────
   async function handleAdd() {
-    if (!name.trim()) return;
+    if (!name.trim() || unsoldPhaseStarted) return;
     if (!storeAuctionId) {
       setCreateError("No auction selected");
       return;
@@ -200,7 +201,9 @@ export default function AuctionRoundsPage() {
             </button> */}
             <button
               onClick={() => setShowForm((v) => !v)}
-              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110"
+              disabled={unsoldPhaseStarted}
+              title={unsoldPhaseStarted ? "Numbered unsold passes are created automatically" : "Create a normal round"}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Plus className="h-4 w-4" /> New Round
             </button>
@@ -219,7 +222,9 @@ export default function AuctionRoundsPage() {
           </div>
         )}
 
-        {showForm && (
+        {unsoldPhaseStarted && <p className="rounded-xl border border-amber-300/15 bg-amber-300/5 px-4 py-3 text-xs leading-5 text-amber-100/80">The unsold phase has begun. Force Unsold defers a player to the next numbered pass; Permanent Unsold excludes them from later passes. New passes are created automatically, so no new normal round is needed.</p>}
+
+        {showForm && !unsoldPhaseStarted && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
@@ -247,9 +252,9 @@ export default function AuctionRoundsPage() {
 
             <p className="mt-2.5 flex items-start gap-1.5 text-[11px] text-slate-500">
               <Info className="mt-0.5 h-3 w-3 shrink-0" />
-              New rounds are created as standard rounds. The Unsold Pool round is
-              created automatically by the auction engine when lots go unsold —
-              it doesn&apos;t need to be created here.
+              New rounds are standard rounds. After they finish, the engine creates
+              Unsold Round-1, Unsold Round-2 and later passes as needed —
+              there is no need to create unsold passes here.
             </p>
 
             <button

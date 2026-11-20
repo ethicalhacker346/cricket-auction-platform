@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { auctionApi, AuctionApiError } from './index.api';
+import { auctionApi, AuctionApiError, liveAuctionApi } from './index.api';
 import { normalizeAuctionPermissions, withLiveStateConstraints } from '../utils/index.utils';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -28,6 +28,20 @@ describe('auction HTTP boundary', () => {
     expect(await result).toMatchObject({ status: 408, code: 'REQUEST_TIMEOUT' });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it('serializes reviewed player, pass and revision for every settlement without trusting team IDs', async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ success: true, data: {} }))));
+    vi.stubGlobal('fetch', fetch);
+    const target = { tournamentPlayerId: 'player', roundId: 'pass-3', expectedVersion: 21 };
+    await liveAuctionApi.markSold('auction', target);
+    await liveAuctionApi.markUnsold('auction', target);
+    await liveAuctionApi.markPermanentUnsold('auction', 'player', { roundId: target.roundId, expectedVersion: target.expectedVersion });
+    await liveAuctionApi.advanceUnsoldPass('auction', 'pass-3', 21);
+    expect(fetch.mock.calls.map(([, options]) => JSON.parse(options.body))).toEqual([
+      target, target, { roundId: 'pass-3', expectedVersion: 21 }, { expectedVersion: 21 },
+    ]);
+    expect(fetch.mock.calls[2][0]).toContain('/players/player/permanent-unsold');
+    expect(fetch.mock.calls[3][0]).toContain('/rounds/pass-3/advance');
   });
   it('fails closed for the new permission, and hides it when no player is active', () => {
     expect(normalizeAuctionPermissions({ role: 'ORGANIZER' }).canExtendLotTime).toBe(false);

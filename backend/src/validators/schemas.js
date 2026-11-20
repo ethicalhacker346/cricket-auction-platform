@@ -158,6 +158,16 @@ export const extendLotTimeSchema = z.object({
   requestId: z.string().uuid(),
 }).strict();
 
+export const lotDecisionSchema = z.object({
+  tournamentPlayerId: objectId,
+  roundId: objectId,
+  expectedVersion: z.number().int().nonnegative().safe().optional(),
+}).strict();
+export const permanentUnsoldBodySchema = lotDecisionSchema.omit({ tournamentPlayerId: true });
+export const advanceUnsoldPassSchema = z.object({
+  expectedVersion: z.number().int().nonnegative().safe().optional(),
+}).strict();
+
 export const openLotSchema = z.object({
   tournamentPlayerId: objectId,
   roundId: objectId,

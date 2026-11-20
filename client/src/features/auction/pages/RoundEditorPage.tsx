@@ -23,7 +23,7 @@ import { AuctionSegments } from "../routes/auction.routes";
 //
 // Round TYPE ("normal" | "unsold") is intentionally NOT editable in this
 // form. It's a structural/engine concept (AuctionRound.js / ROUND_TYPE):
-// the unsold round is auto-created by the auction engine, must always be
+// numbered unsold passes are auto-created by the auction engine, must follow
 // last, and rejects manual playerIds edits once it exists
 // (enforceUnsoldRoundPlayerIds). Flipping an existing round's type here
 // would bypass those invariants, so it's shown as a read-only badge instead.
@@ -241,7 +241,7 @@ export default function RoundEditorPage() {
       await actions.update(round.id, {
         name,
         category,
-        ...(isAutoManaged ? {} : { playerIds }),
+        ...(playersEditable ? { playerIds } : {}),
       });
       navigate(roundsRoute);
     } catch (e: any) {
@@ -255,7 +255,8 @@ export default function RoundEditorPage() {
   // once an "unsold" round exists, its playerIds can only be changed by the
   // auction engine (as lots go unsold), never manually.
   const isAutoManaged = round.type === "unsold";
-  const playersEditable = !isLocked && !isAutoManaged;
+  const unsoldPhaseStarted = rounds.some((candidate) => candidate.type === "unsold");
+  const playersEditable = !isLocked && !isAutoManaged && !unsoldPhaseStarted;
 
   return (
     <motion.div
@@ -280,12 +281,15 @@ export default function RoundEditorPage() {
         <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-slate-400">
           <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
           <span>
-            This is the Unsold Pool round. Its player list is populated automatically by the
-            auction engine whenever a lot goes unsold, so it can&apos;t be edited manually here.
-            Name and category can still be updated.
+            This numbered unsold pass is managed by the auction engine. Its membership is
+            fixed when the pass is created; Force Unsold defers a player to the next pass,
+            while Permanent Unsold excludes them from all later passes.
+            Name and category can be updated before the pass starts.
           </span>
         </div>
       )}
+
+      {unsoldPhaseStarted && !isAutoManaged && !isLocked && <p className="rounded-xl border border-amber-300/15 bg-amber-300/5 px-4 py-3 text-xs text-amber-100/80">The unsold phase has begun. Normal-round membership is now locked; remaining inventory advances through numbered unsold passes automatically.</p>}
 
       {saveError && (
         <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-xs text-rose-400">
@@ -339,7 +343,7 @@ export default function RoundEditorPage() {
           </p>
           <p className="mb-3 text-[11px] text-slate-500">
             {isAutoManaged
-              ? "Players are added here automatically as lots go unsold."
+              ? "Membership was fixed automatically when this pass was created. Player cards show their current auction state, not a per-pass result history."
               : "Drag cards to reorder the sequence players will be auctioned in."}
           </p>
           <div className="space-y-2">

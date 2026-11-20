@@ -2,7 +2,7 @@ import { parseRetryAfter } from "../utils/requestBackoff";
 import { useAuthStore } from "@/store/authStore";
 import type {
   Auction, AuctionPermissions, AuctionRound, Bid, Franchise, Player,
-  BidIncrementTier, AuctionSnapshot, PlayerRole, LotTimeResponse,
+  BidIncrementTier, AuctionSnapshot, PlayerRole, LotTimeResponse, LotDecisionTarget,
 } from "@/features/auction/types/index.types";
 import { normalizeAuctionPermissions } from "@/features/auction/utils/index.utils";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
@@ -81,6 +81,7 @@ export function mapPlayer(tp: any): Player {
     soldPrice: tp.soldPrice,
     teamId: stringId(tp.soldToTeamId || tp.teamId) || undefined,
     status: mapLotOutcome(tp.lotOutcome) || tp.status || "pending",
+    auctionRoundId: stringId(tp.auctionRoundId?._id || tp.auctionRoundId) || undefined,
     stats: playerDoc?.stats || tp.stats || { matches: 0, runs: 0, wickets: 0, average: 0, strikeRate: 0 },
     tag: tp.tag,
     avatarSeed: tp.avatarSeed || playerDoc?.fullName || tp.name || stringId(tp._id),
@@ -235,6 +236,8 @@ export function mapRound(r: any): AuctionRound {
     order: r.order,
     status: r.status?.toLowerCase?.() || r.status,
     playerIds: (r.playerIds || []).map(stringId),
+    unsoldPass: r.unsoldPass,
+    outcomeSummary: r.outcomeSummary,
   };
 }
 
@@ -403,14 +406,17 @@ export const liveAuctionApi = {
       method: "POST",
       body: JSON.stringify({ tournamentPlayerId: playerId, roundId }),
     })),
-  markSold: async (auctionId: string, _playerId: string, _teamId: string, _amount: number) =>
-    dataOf(await request<any>(`/auctions/${auctionId}/lot/sold`, { method: "POST" })),
-  markUnsold: async (auctionId: string, _playerId: string) =>
-    dataOf(await request<any>(`/auctions/${auctionId}/lot/unsold`, { method: "POST" })),
-  // NEW: organizer explicitly retires a player from the unsold pool
-  markPermanentUnsold: async (auctionId: string, tournamentPlayerId: string) =>
+  markSold: async (auctionId: string, target: LotDecisionTarget) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/lot/sold`, { method: 'POST', body: JSON.stringify(target) })),
+  markUnsold: async (auctionId: string, target: LotDecisionTarget) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/lot/unsold`, { method: 'POST', body: JSON.stringify(target) })),
+  markPermanentUnsold: async (auctionId: string, tournamentPlayerId: string, context: Pick<LotDecisionTarget, 'roundId' | 'expectedVersion'>) =>
     dataOf(await request<any>(`/auctions/${auctionId}/players/${tournamentPlayerId}/permanent-unsold`, {
-      method: "POST",
+      method: 'POST', body: JSON.stringify(context),
+    })),
+  advanceUnsoldPass: async (auctionId: string, roundId: string, expectedVersion: number) =>
+    dataOf(await request<any>(`/auctions/${auctionId}/rounds/${roundId}/advance`, {
+      method: 'POST', body: JSON.stringify({ expectedVersion }),
     })),
 };
 

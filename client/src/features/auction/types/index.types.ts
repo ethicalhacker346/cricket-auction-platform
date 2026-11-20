@@ -117,6 +117,8 @@ export interface Player {
   soldPrice?: number;
   teamId?: string;
   status: PlayerStatus;
+  /** Latest pass assignment; historical membership remains on each round. */
+  auctionRoundId?: string;
   stats: PlayerStats;
   tag?: "marquee" | "star" | "uncapped";
   avatarSeed: string;
@@ -148,6 +150,8 @@ export interface AuctionRound {
   order: number;
   status: RoundStatus;
   playerIds: string[];
+  unsoldPass?: number;
+  outcomeSummary?: { sold: number; unsold: number; permanentUnsold: number };
 }
 
 export interface Franchise {
@@ -234,6 +238,13 @@ export interface Auction {
   tournamentId?: string;
 }
 
+/** A reviewed decision is fenced to a player, pass, and command revision. */
+export interface LotDecisionTarget {
+  tournamentPlayerId: string;
+  roundId: string;
+  expectedVersion: number;
+}
+
 /** Authoritative result of an idempotent per-lot extension. */
 export interface LotTimeResponse {
   status: string;
@@ -262,6 +273,7 @@ export interface TimerState { remaining: number; total: number; isRunning: boole
 export interface CurrentBidState { amount: number; teamId: string | null; }
 
 export interface LiveAuctionSnapshot {
+  version: number;
   undoAction: UndoableAuctionAction | null;
   undoVersion: number;
   auction: Auction;

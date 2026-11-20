@@ -3,7 +3,7 @@ import { upcomingAuctionPlayers } from "../utils/roundSelection";
 import { getAuctionViewerId } from "../utils/viewerIdentity";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { auctionApi, auctionRoundApi, franchiseApi, liveAuctionApi } from "@/features/auction/api/index.api";
+import { auctionApi, auctionRoundApi, franchiseApi } from "@/features/auction/api/index.api";
 import type { AuctionSavePayload } from "@/features/auction/api/index.api";
 import { API_BASE_URL } from "@/features/auction/constants/index.constants";
 import { getAuctionEngine, useBidUiStore, useLiveAuctionStore, useRoleStore } from "@/features/auction/store/index.store";
@@ -567,7 +567,10 @@ export function useUnsoldRoundActions(auctionId?: string) {
       setMarking(true);
       setError(null);
       try {
-        const result = await liveAuctionApi.markPermanentUnsold(auctionId, tournamentPlayerId);
+        const state = useLiveAuctionStore.getState();
+        if (state.auctionId !== auctionId) throw new Error('Open this auction’s live room before retiring a player');
+        const result = await state.actions.markPermanentUnsold(tournamentPlayerId);
+        if (!result.success) throw new Error(result.error || 'Failed to retire player');
         return result;
       } catch (e: any) {
         setError(e.message || "Failed to mark permanent unsold");
