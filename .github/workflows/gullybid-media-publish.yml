@@ -1,0 +1,108 @@
+name: Publish GullyBid tour downloads (one-time)
+
+on:
+  push:
+    branches:
+      - arena/34d225cc-cricket-auction-platform
+    paths:
+      - .github/workflows/gullybid-media-publish.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gullybid-guided-tour-v1-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'ethicalhacker346/cricket-auction-platform' &&
+      github.event.head_commit.message == 'chore: publish approved GullyBid media downloads'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ethicalhacker346/cricket-auction-platform
+      RELEASE_TAG: gullybid-guided-tour-v1
+    steps:
+      - name: Retrieve only the two approved media files and verify them
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, os, urllib.request
+          from pathlib import Path
+          assert os.environ['GITHUB_REPOSITORY'] == 'ethicalhacker346/cricket-auction-platform'
+          files = [
+              ('GullyBid-Guided-Tour-9x16.mp4', 'c8fc9f9dca1dc2293b906a8eea1b56a50c317390', 15239195, '76318aff6d5989d88c7ef8f2ba4d439ce3b1c2aa89f224824b6250d8fcfc3777'),
+              ('GullyBid-Video-Pack.zip', 'ed3078133e773a7bbfc78368eda2fc1c02d43b9a', 15409686, 'ed3dd397a28e4b9ac7548192fec216507e852a3c4dfd9b6b2299a0aebfc88281'),
+          ]
+          for name, blob, size, expected in files:
+              url = f'https://api.github.com/repos/ethicalhacker346/cricket-auction-platform/git/blobs/{blob}'
+              request = urllib.request.Request(url, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  payload = json.load(response)
+              assert payload['encoding'] == 'base64'
+              data = base64.b64decode(payload['content'])
+              assert len(data) == size, (name, len(data))
+              assert hashlib.sha256(data).hexdigest() == expected, name
+              Path(name).write_bytes(data)
+              print(f'PASS: {name} / {size} bytes / SHA-256 {expected}')
+          PY
+
+      - name: Upload the verified files to the approved draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" GullyBid-Guided-Tour-9x16.mp4 GullyBid-Video-Pack.zip --repo "$GH_REPO"
+          gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir .verification --pattern GullyBid-Guided-Tour-9x16.mp4 --pattern GullyBid-Video-Pack.zip
+          printf '%s\n' \
+            '76318aff6d5989d88c7ef8f2ba4d439ce3b1c2aa89f224824b6250d8fcfc3777  .verification/GullyBid-Guided-Tour-9x16.mp4' \
+            'ed3dd397a28e4b9ac7548192fec216507e852a3c4dfd9b6b2299a0aebfc88281  .verification/GullyBid-Video-Pack.zip' | sha256sum --check --strict
+
+      - name: Publish only after uploaded downloads pass checksum verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest=false
+
+      - name: Verify the public links without authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, os, time, urllib.error, urllib.request
+          files = [
+              ('GullyBid-Guided-Tour-9x16.mp4', 15239195, '76318aff6d5989d88c7ef8f2ba4d439ce3b1c2aa89f224824b6250d8fcfc3777'),
+              ('GullyBid-Video-Pack.zip', 15409686, 'ed3dd397a28e4b9ac7548192fec216507e852a3c4dfd9b6b2299a0aebfc88281'),
+          ]
+          summary = ['## Public GullyBid downloads verified', '']
+          for name, size, expected in files:
+              url = f'https://github.com/ethicalhacker346/cricket-auction-platform/releases/download/gullybid-guided-tour-v1/{name}'
+              for attempt in range(6):
+                  try:
+                      # No Authorization header: exercise the public download itself.
+                      request = urllib.request.Request(url, headers={'User-Agent': 'GullyBid-Download-Verification'})
+                      with urllib.request.urlopen(request, timeout=120) as response:
+                          assert response.status == 200, response.status
+                          data = response.read()
+                      break
+                  except urllib.error.HTTPError as error:
+                      if error.code not in (404, 429, 502, 503) or attempt == 5:
+                          raise
+                      time.sleep(min(2 ** attempt, 15))
+              assert len(data) == size, (name, len(data))
+              assert hashlib.sha256(data).hexdigest() == expected, name
+              print(f'PUBLIC DOWNLOAD PASS: {name} / {size} bytes / SHA-256 {expected}')
+              print(url)
+              summary.append(f'- [{name}]({url}) — {size:,} bytes; SHA-256 verified anonymously.')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('\n'.join(summary) + '\n')
+          PY
