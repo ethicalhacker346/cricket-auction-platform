@@ -27,11 +27,6 @@ export function createTokenPair(user) {
     role: user.role,
     email: user.email,
   };
-  console.log('[JWT] Creating token pair:', {
-    userId: user._id.toString(),
-    payload,
-  });
-
   return {
     accessToken: signAccessToken(payload),
     refreshToken: signRefreshToken({ sub: user._id.toString() }),

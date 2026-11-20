@@ -19,13 +19,11 @@ export const authController = {
 
   login: async (req, res) => {
     const result = await AuthService.login(req.body);
-    console.log('Login result:', result);
     return sendAuthResponse(res, result);
   },
 
   refresh: async (req, res) => {
     const result = await AuthService.refresh(req.body.refreshToken);
-    console.log('Refresh result:', result);
     return sendAuthResponse(res, result);
   },
 
@@ -36,7 +34,6 @@ export const authController = {
 
   me: async (req, res) => {
     const user = await AuthService.getProfile(req.user._id);
-    console.log('User profile:', user);
     return res.json({ success: true, data: user });
   },
 
